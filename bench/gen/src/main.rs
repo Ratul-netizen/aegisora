@@ -26,11 +26,19 @@ use std::io::{self, BufWriter, Write};
 /// (token, period) — the token appears on every Nth row.
 /// Expected matches at 100M rows: 1, 100, 10k, 1M.
 /// Expected matches at 1B rows:  10, 1000, 100k, 10M.
+///
+/// IMPORTANT: needles must be PURELY ALPHANUMERIC. The `splitByNonAlpha` tokenizer
+/// treats `_` as a separator, so a needle like `zzqx_rare` is indexed as two tokens
+/// (`zzqx`, `rare`) and `hasToken()` rejects it outright with
+/// "Needle must not contain whitespace or separator characters".
+/// Each needle also uses a distinct prefix so no token is shared between tiers —
+/// a shared prefix would make every tier's postings list overlap and distort the
+/// selectivity being measured.
 const NEEDLES: &[(&str, u64)] = &[
-    ("zzqx_ultrarare", 100_000_000),
-    ("zzqx_rare", 1_000_000),
-    ("zzqx_mid", 10_000),
-    ("zzqx_common", 100),
+    ("qqxultrarare", 100_000_000),
+    ("wwyrare", 1_000_000),
+    ("vvzmid", 10_000),
+    ("uuwcommon", 100),
 ];
 
 // ---------------------------------------------------------------------------
@@ -298,6 +306,12 @@ struct Args {
     days: u64,
     seed: u64,
     start_ms: i64,
+    /// Row offset into a larger logical stream. Lets a big load run as bounded
+    /// batches while keeping timestamps continuous and needle frequencies exact:
+    /// batch k emits logical rows [skip, skip+rows). `total` sets the time window
+    /// denominator so batches do not each span the full range.
+    skip: u64,
+    total: u64,
 }
 
 fn parse_args() -> Args {
@@ -311,6 +325,8 @@ fn parse_args() -> Args {
         seed: 42,
         // 2026-09-01 00:00:00 UTC
         start_ms: 1_787_270_400_000,
+        skip: 0,
+        total: 0,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.is_empty() {
@@ -333,6 +349,8 @@ fn parse_args() -> Args {
             "--metrics" => a.metrics = (n as usize).clamp(1, METRIC_NAMES.len()),
             "--days" => a.days = n.max(1),
             "--seed" => a.seed = n,
+            "--skip" => a.skip = n,
+            "--total" => a.total = n,
             other => {
                 eprintln!("unknown flag {other}");
                 std::process::exit(2)
@@ -359,15 +377,19 @@ fn main() {
 }
 
 fn gen_logs<W: Write>(a: &Args, w: &mut W) {
-    let mut rng = Rng::new(a.seed);
+    // Seed includes the batch offset so batches produce different data, but each
+    // batch is still exactly reproducible from (seed, skip).
+    let mut rng = Rng::new(a.seed ^ a.skip.wrapping_mul(0x9E37_79B9_7F4A_7C15));
     let mut line = String::with_capacity(1024);
     let mut body = String::with_capacity(256);
     let window_ms = (a.days * 86_400_000) as i64;
-    // Time advances monotonically across the run (real arrival order), with jitter
-    // so rows within a millisecond bucket are not artificially ordered.
-    let step = (window_ms as f64 / a.rows as f64).max(0.001);
+    // Time advances monotonically across the FULL logical stream (real arrival
+    // order), with jitter so rows within a millisecond are not artificially ordered.
+    let total = if a.total > 0 { a.total } else { a.rows };
+    let step = (window_ms as f64 / total as f64).max(0.001);
 
-    for i in 0..a.rows {
+    for row in 0..a.rows {
+        let i = a.skip + row; // logical index into the full stream
         line.clear();
         let t = a.tenants;
         let tenant = i % t;
@@ -447,12 +469,16 @@ fn gen_logs<W: Write>(a: &Args, w: &mut W) {
 }
 
 fn gen_metrics<W: Write>(a: &Args, w: &mut W) {
-    let mut rng = Rng::new(a.seed ^ 0x4D45_5452_4943_5300);
+    let mut rng = Rng::new(
+        a.seed ^ 0x4D45_5452_4943_5300 ^ a.skip.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    );
     let mut line = String::with_capacity(512);
     let window_ms = (a.days * 86_400_000) as i64;
-    let step = (window_ms as f64 / a.rows as f64).max(0.001);
+    let total = if a.total > 0 { a.total } else { a.rows };
+    let step = (window_ms as f64 / total as f64).max(0.001);
 
-    for i in 0..a.rows {
+    for row in 0..a.rows {
+        let i = a.skip + row; // logical index into the full stream
         line.clear();
         let tenant = i % a.tenants;
         let res = rng.below(a.resources);
