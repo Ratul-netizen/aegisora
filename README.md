@@ -52,16 +52,19 @@ React · TypeScript · Vite
 
 ## Current state
 
+**→ [STATUS.md](./STATUS.md) — start here on a new machine.**
+
 - [x] Architecture decisions frozen for M0–M4
 - [x] M0–M4 implementation specification
-- [x] W1 benchmark harness (generator + DDL + query suite)
-- [ ] **W1 benchmark executed** ← the next gate
-- [ ] M0 primitives
+- [x] W1 storage benchmark **executed — architecture validated**
+- [x] M0: workspace, CI, `uops-core`
+- [ ] M0: `uops-secrets` ← next
+- [ ] M0: query AST, migrations, bus
 - [ ] M1 core platform
 
-Nothing proceeds past the W1 result. If ClickHouse does not hold up under the measured
-workload, the storage architecture in SPEC §M0.6 changes before any code is written
-against it.
+The W1 gate passed. The Investigation Workspace query reads **16,380 rows at both 10M
+and 100M rows** — 9 ms either way — so resource-scoped investigation is independent of
+table size. Full numbers in [bench/results/FINDINGS.md](./bench/results/FINDINGS.md).
 
 ## Name
 
