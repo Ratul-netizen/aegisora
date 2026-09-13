@@ -49,6 +49,34 @@ Revised: 2026-09-13
 
 ---
 
+## 0b. Deployment model — on-premise first
+
+**Decision: on-premise single-site deployment is the v0.1 target. Cloud/hosted and
+object-storage tiering come later.**
+
+This is a product decision with real architectural consequences, and it reinforces the
+storage choice: single-node ClickHouse against an Elasticsearch cluster is a large
+operability win exactly where on-prem hurts — no JVM heap tuning, no shard rebalancing,
+no split-brain, no dedicated master nodes. The customer's ops team runs two engines and
+a Compose file.
+
+| Consequence | Change |
+|---|---|
+| Most sites have no object storage | **`storage_policy = 'tiered'` becomes opt-in.** Single-volume must be the default that works; S3/MinIO tiering is configuration, not an assumption |
+| Disk is finite and someone else's | Footprint is a hard constraint. Text index at ~67% of compressed data + the `p_by_time` projection ≈ **3x raw compressed size**. Text-index opt-out per source is **required**, not optional. Retention defaults conservative |
+| Customers upgrade unattended, infrequently, across multiple versions | ClickHouse migrations need a **real versioned runner** — idempotent, ordered, resumable. A folder of hand-applied SQL is not sufficient |
+| Buyers ask during evaluation, not after | **Backup/restore moves into the M1–M4 window** (PostgreSQL dump + ClickHouse `BACKUP`), out of "enterprise" |
+| Restricted or no internet egress | **Air-gapped install path**: GeoIP data, OTel Collector distribution, container images must all have an offline route. Affects M3 and M7 |
+| No server-side metering is possible | **Entitlement hooks** (resource counting) should exist before they are enforced. Cheap now, awkward to retrofit |
+
+**Not affected:** the resource model, identity resolution, telemetry envelope, Query AST,
+and the M0–M4 scope. Everything above is packaging, configuration and licensing.
+
+Cloud/hosted deployment is a **post-v1.0** concern. When it arrives, the same storage
+traits (§3) and the `TelemetryBus` boundary (SPEC §M0.7) are what make it tractable.
+
+---
+
 ## 1. Naming
 
 `aegisora-ai/aegisora` is an active GitHub org doing AI runtime security and governance — adjacent
@@ -317,10 +345,21 @@ month 9.
 ## 11. Open questions — blocking M1
 
 1. **Name.** Blocks crate naming and the GitHub org. Codename `uops` unblocks everything else.
-2. **License.** AGPL (blocks a hosted clone) · Apache 2.0 (max adoption) · BSL with delayed
-   conversion (Elastic/HashiCorp playbook). Decides whether the business is support/hosting or
-   licensing. **Decide before the first public commit** — relicensing after contributors arrive
-   requires their consent.
+2. **License — recommendation: AGPL-3.0 + CLA, enabling commercial dual-licensing.**
+
+   The straight AGPL recommendation was made *before* the on-premise decision (§0b) and is
+   wrong on its own. On-prem enterprise procurement is exactly where AGPL gets blocked —
+   many corporate legal teams maintain AGPL blocklists that apply even to purely internal
+   use, and you would discover that mid-deal.
+
+   Apache 2.0 is not the fix; it gives away the only asset. The fix is **AGPL-3.0 plus a
+   Contributor License Agreement**, so a proprietary license can be sold to anyone whose
+   lawyers object while AGPL covers everyone else (the GitLab / MongoDB play).
+
+   **The time-critical part is the CLA, not the license text.** Without a CLA in place
+   before the first outside contribution, dual-licensing becomes permanently impossible —
+   it would require every contributor's consent. Put the CLA in place before publicising
+   the repository.
 3. **Target buyer.** MSPs in Bangladesh/SEA vs global self-hosters. The `Organization → Tenant`
    hierarchy is in from day one either way, but MSP-first pulls credential scoping, per-tenant data
    isolation guarantees and cross-tenant admin into v0.1. **The only open question that can still
