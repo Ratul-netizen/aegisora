@@ -1,0 +1,6 @@
+# Pinned so that a clippy or rustfmt change in a new release cannot break CI on an
+# unrelated pull request, and so on-prem build reproducibility has a fixed starting
+# point (PLAN 0b: supply chain / SBOM).
+[toolchain]
+channel = "1.98"
+components = ["rustfmt", "clippy"]

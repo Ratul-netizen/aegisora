@@ -1,0 +1,35 @@
+# cargo-deny — supply chain policy.
+#
+# PLAN §0b: buyers include government and defence, where supply-chain review is a
+# standard part of procurement. This file is the machine-checkable half of that.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[licenses]
+version = 2
+# The project is AGPL-3.0-only, which is compatible with permissive dependencies but
+# not with copyleft ones we would have to relicense under. Anything outside this list
+# needs a deliberate decision, not a silent pass.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+]
+confidence-threshold = 0.93
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

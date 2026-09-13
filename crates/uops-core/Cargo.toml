@@ -1,0 +1,20 @@
+[package]
+name = "uops-core"
+description = "Resource identity, telemetry envelope, and shared types. Imported by every other crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+uuid.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

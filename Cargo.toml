@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# The W1 benchmark generator is a standalone throwaway tool with deliberately zero
+# dependencies. It must not join the workspace or it inherits the shared dependency
+# graph and stops being the independent thing it is.
+exclude = ["bench/gen"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.98"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Ratul-netizen/aegisora"
+authors = ["Ratul-netizen"]
+
+[workspace.dependencies]
+# --- core ---
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# --- crypto (M0.4) -------------------------------------------------------------
+# Selected by feature, never at runtime: validation attaches to a binary, not to a
+# code path. See SPEC.md M0.4. `aws-lc-rs` is NOT enabled by default because it
+# needs a C toolchain; the FIPS artifact is a separate build.
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+# --- internal ---
+uops-core = { path = "crates/uops-core" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Enumerating every error variant in a doc comment adds noise without adding safety.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+# Dependencies at opt-level 1: the crypto and uuid crates are pathologically slow
+# when built unoptimised, which makes the test suite feel broken.
+[profile.dev.package."*"]
+opt-level = 1

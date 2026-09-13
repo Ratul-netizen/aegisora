@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Includes the `compile_fail` doctests that enforce the security invariants:
+      # Secret<T> is not Display/Serialize/Clone, TenantScope is not Display/Default.
+      # These only run as doctests on public items — see crates/uops-core/src/secret.rs.
+      - name: Test
+        run: cargo test --workspace --all-targets
+
+      - name: Doctests
+        run: cargo test --workspace --doc
+
+  secrets-hygiene:
+    name: no credential material in logs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # SPEC M0.4: Secret<T> cannot be Display or Serialize, so the remaining way to
+      # leak material is to call .expose() inside a formatting or logging macro. That
+      # is a deliberate act and therefore greppable.
+      - name: No .expose() inside logging or formatting macros
+        run: |
+          if grep -rnE '(println!|eprintln!|format!|write!|writeln!|trace!|debug!|info!|warn!|error!|json!)[^;]*\.expose\(\)' \
+               --include='*.rs' crates/ ; then
+            echo "::error::credential material reachable from a logging or formatting macro"
+            exit 1
+          fi
+          echo "ok"
+
+      # The AeadProvider trait is the only sanctioned path to crypto primitives.
+      - name: No direct AEAD or KDF use outside uops-secrets
+        run: |
+          if grep -rnE '\b(Aes256Gcm|ChaCha20Poly1305|Argon2|aws_lc_rs)\b' \
+               --include='*.rs' crates/ --exclude-dir=uops-secrets ; then
+            echo "::error::crypto primitive used outside uops-secrets; go through AeadProvider"
+            exit 1
+          fi
+          echo "ok"
+
+  supply-chain:
+    name: advisories · licenses · SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # PLAN 0b: supply-chain review is standard in government and enterprise
+      # procurement. Producing this from the first release is cheap; retrofitting it
+      # to a mature dependency tree is archaeology.
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+
+      - name: Generate SBOM
+        run: cargo cyclonedx --all --format json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: "**/*.cdx.json"
+
+  crypto-builds:
+    name: build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: standard (RustCrypto)
+            features: ""
+          # SPEC M0.4: FIPS validation attaches to a BINARY, not to a code path, so the
+          # validated build is a separate artifact rather than a runtime switch. Built
+          # in CI from the start because adding a second build target to a mature
+          # pipeline is materially harder than beginning with two.
+          - name: FIPS (aws-lc-rs)
+            features: "--no-default-features --features crypto-awslc"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace ${{ matrix.features }}
