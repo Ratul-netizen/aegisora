@@ -28,7 +28,10 @@ thiserror = "2"
 # needs a C toolchain; the FIPS artifact is a separate build.
 aes-gcm = "0.10"
 argon2 = "0.5"
-rand_core = { version = "0.6", features = ["getrandom"] }
+# getrandom directly rather than rand_core: the only randomness needed is "fill these
+# bytes from the OS CSPRNG", and going straight to the source avoids being pinned to
+# whichever rand_core major version the AEAD crates happen to depend on.
+getrandom = "0.3"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # --- internal ---

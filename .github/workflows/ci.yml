@@ -100,15 +100,37 @@ jobs:
         include:
           - name: standard (RustCrypto)
             features: ""
-          # SPEC M0.4: FIPS validation attaches to a BINARY, not to a code path, so the
-          # validated build is a separate artifact rather than a runtime switch. Built
-          # in CI from the start because adding a second build target to a mature
-          # pipeline is materially harder than beginning with two.
-          - name: FIPS (aws-lc-rs)
-            features: "--no-default-features --features crypto-awslc"
+          # NOTE: the FIPS artifact is NOT built here yet.
+          #
+          # SPEC §M0.4 requires the crypto backend to be a build-time choice, because
+          # validation attaches to a binary rather than to a code path. The seam for
+          # that exists — `AeadProvider`, the `crypto-awslc` feature, and a CI grep
+          # that keeps primitives out of every other crate — but aws-lc-rs is not
+          # wired behind it, and the feature currently raises a `compile_error!`
+          # saying so.
+          #
+          # Adding a job here that builds a known-failing target would be theatre.
+          # PLAN §0b is explicit: build the seams, pursue no certification until a
+          # buyer funds it. Restore this matrix entry in the same commit that
+          # implements `AwsLcAead`:
+          #
+          #   - name: FIPS (aws-lc-rs)
+          #     features: "--no-default-features --features crypto-awslc"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace ${{ matrix.features }}
+
+      # Guards the seam itself: the feature must keep failing loudly and for the
+      # documented reason, rather than silently falling back to a non-validated
+      # backend while a deployment believes it is running FIPS crypto.
+      - name: FIPS feature fails closed until implemented
+        if: matrix.features == ''
+        run: |
+          if cargo check -p uops-secrets --no-default-features --features crypto-awslc 2>/dev/null; then
+            echo "::error::crypto-awslc compiled without an implementation — it must fail closed"
+            exit 1
+          fi
+          echo "ok: crypto-awslc refuses to build until AwsLcAead exists"

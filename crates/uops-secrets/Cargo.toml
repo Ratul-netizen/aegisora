@@ -1,0 +1,34 @@
+[package]
+name = "uops-secrets"
+description = "Credential sealing. Envelope encryption behind a build-time-selected crypto backend."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# SPEC §M0.4: the crypto backend is selected at COMPILE TIME, never at runtime,
+# because validation attaches to a binary rather than to a code path. One codebase,
+# two artifacts.
+default = ["crypto-rustcrypto"]
+crypto-rustcrypto = ["dep:aes-gcm"]
+# Placeholder for the FIPS 140-3 artifact. The trait seam exists and is exercised by
+# the RustCrypto backend; wiring aws-lc-rs behind it is a contained piece of work that
+# should be done when a buyer actually requires it, not speculatively (PLAN §0b).
+crypto-awslc = []
+
+[dependencies]
+uops-core.workspace = true
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+
+aes-gcm = { workspace = true, optional = true }
+
+[lints]
+workspace = true
