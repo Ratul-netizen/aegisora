@@ -437,6 +437,49 @@ pub struct AccessContext {
 }
 ```
 
+### Crypto backend is a BUILD-TIME feature
+
+Target buyers are unrestricted — any country's government, military or enterprise
+(PLAN §0b). Different jurisdictions mandate different validated cryptography, and
+**validation attaches to a binary, not to an algorithm or a code path**: an AES-256-GCM
+implementation is not "FIPS compliant" as source, only a specific validated module is.
+A runtime toggle therefore cannot deliver it.
+
+So the crypto primitive is selected at compile time, and one codebase ships as multiple
+artifacts:
+
+```toml
+[features]
+default     = ["crypto-rustcrypto"]
+crypto-rustcrypto = ["aes-gcm", "argon2"]   # portable, no C toolchain, default build
+crypto-awslc      = ["aws-lc-rs"]           # FIPS 140-3 build: cargo build --no-default-features --features crypto-awslc
+```
+
+```rust
+/// The only primitive the rest of the codebase may use. Backends are selected by
+/// feature, never at runtime. Adding a jurisdiction-specific backend later means a
+/// new feature and a new build artifact, not a change to SecretStore or its callers.
+pub trait AeadProvider: Send + Sync {
+    fn seal(&self, key: &Key, nonce: &Nonce, aad: &[u8], pt: &[u8]) -> Result<Vec<u8>>;
+    fn open(&self, key: &Key, nonce: &Nonce, aad: &[u8], ct: &[u8]) -> Result<Secret<Vec<u8>>>;
+    /// Reported in the UI, in `/api/v1/health`, and stamped into the audit log, so an
+    /// auditor can confirm which build is actually deployed.
+    fn backend_id(&self) -> &'static str;   // "rustcrypto" | "aws-lc-fips"
+}
+```
+
+**M0 obligations:** no crate outside `uops-secrets` may call an AEAD or KDF directly
+(enforced by a CI grep, the same way `Secret<T>` misuse is caught); `backend_id` is
+recorded on every credential row so a re-key after a backend change is detectable; and
+the release pipeline produces both artifacts from the first tagged build, because adding
+a second build target to a mature CI pipeline is materially harder than starting with two.
+
+> **Do not pursue FIPS validation now.** This is the seam that keeps it *possible*, and
+> that is all it is. See the line-to-hold note in PLAN §0b.
+
+The same reasoning applies to SNMPv3 in M2: `async-snmp` offers a pluggable crypto backend
+with a FIPS 140-3 option, `snmp2` does not. That is the tiebreaker between them.
+
 ### LocalVault (the v0.1 implementation)
 
 Envelope encryption. Per-secret data encryption key (DEK), wrapped by a key encryption key (KEK)
@@ -702,7 +745,10 @@ things.
 | API auth | Session cookie (UI) or bearer token (automation). Tokens are scoped, expiring, revocable |
 | Rate limits | Per-IP on auth endpoints, per-tenant on query endpoints |
 | Input validation | All API input through typed extractors. `limit` ceilings. Query depth cap on `Expr` (default 32) to stop pathological nesting |
-| Audit | Every mutating call → `audit_log` (actor, tenant, action, target, before/after, IP, at) |
+| Audit (write) | Every mutating call → `audit_log` (actor, tenant, action, target, before/after, IP, at) |
+| **Audit (read)** | Every *read* of a credential, a resource detail, or a telemetry query → `access_log` (actor, tenant, target, query fingerprint, row count, at). Defence and law-enforcement buyers audit who **saw** what, not only who changed it (PLAN §0b). Implemented once as Axum middleware over the query and resource routes — trivial now, invasive to retrofit. Sampled for high-volume dashboard polling; never sampled for credential reads |
+| Egress | **None in the `onprem` profile.** No auto-update check, no crash reporting, no license callback, no telemetry. Enforced by a test that asserts no outbound connection is attempted during a full integration run |
+| Supply chain | SBOM (CycloneDX) generated in CI and attached to every release; artifacts signed. Procurement asks for this |
 | Secure defaults | No default credentials. First-run generates an admin password and prints it once. Telemetry ports bind localhost unless configured |
 | Dependencies | `cargo-deny` + `cargo-audit` in CI, failing the build |
 

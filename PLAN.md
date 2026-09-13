@@ -49,31 +49,65 @@ Revised: 2026-09-13
 
 ---
 
-## 0b. Deployment model — on-premise first
+## 0b. Deployment model — both, as a customer choice
 
-**Decision: on-premise single-site deployment is the v0.1 target. Cloud/hosted and
-object-storage tiering come later.**
+**Decision: on-premise and hosted/SaaS are both first-class targets. The customer picks.
+Target buyers are unrestricted — any country's government, military, enterprise or MSP.**
 
-This is a product decision with real architectural consequences, and it reinforces the
-storage choice: single-node ClickHouse against an Elasticsearch cluster is a large
-operability win exactly where on-prem hurts — no JVM heap tuning, no shard rebalancing,
-no split-brain, no dedicated master nodes. The customer's ops team runs two engines and
-a Compose file.
+The on-premise side is not a downgrade of the hosted product; for defence, law
+enforcement and regulated buyers it is the *only* acceptable form, and it is often the
+deal. The hosted side is what makes the product reachable for everyone else.
 
-| Consequence | Change |
+This reinforces the storage choice: single-node ClickHouse against an Elasticsearch
+cluster is a large operability win exactly where on-prem hurts — no JVM heap tuning, no
+shard rebalancing, no split-brain, no dedicated master nodes. The customer's ops team
+runs two engines and a Compose file.
+
+### Deployment profiles, not flags
+
+Two **named profiles**, each selecting a coherent set of implementations. Arbitrary
+mix-and-match config flags produce combinations nobody tests.
+
+| | `onprem` | `hosted` |
+|---|---|---|
+| Secrets | `LocalVault` (KEK from file/keyring) | KMS / HashiCorp Vault |
+| Auth | Local users, optional LDAP/AD | SSO / OIDC / SAML |
+| Bus | In-process → NATS at scale | NATS JetStream |
+| Storage tiering | **Opt-in**, single volume by default | On by default, S3 |
+| Tenancy | Usually one tenant | Many tenants |
+| Egress | **None. Ever.** | Normal |
+
+### What this requires
+
+| Requirement | Change |
 |---|---|
-| Most sites have no object storage | **`storage_policy = 'tiered'` becomes opt-in.** Single-volume must be the default that works; S3/MinIO tiering is configuration, not an assumption |
-| Disk is finite and someone else's | Footprint is a hard constraint. Text index at ~67% of compressed data + the `p_by_time` projection ≈ **3x raw compressed size**. Text-index opt-out per source is **required**, not optional. Retention defaults conservative |
-| Customers upgrade unattended, infrequently, across multiple versions | ClickHouse migrations need a **real versioned runner** — idempotent, ordered, resumable. A folder of hand-applied SQL is not sufficient |
-| Buyers ask during evaluation, not after | **Backup/restore moves into the M1–M4 window** (PostgreSQL dump + ClickHouse `BACKUP`), out of "enterprise" |
-| Restricted or no internet egress | **Air-gapped install path**: GeoIP data, OTel Collector distribution, container images must all have an offline route. Affects M3 and M7 |
-| No server-side metering is possible | **Entitlement hooks** (resource counting) should exist before they are enforced. Cheap now, awkward to retrofit |
+| Validation attaches to a **binary**, not a code path | **Crypto backend is a build-time feature.** Ship a standard build and a FIPS build from one codebase. See SPEC §M0.4 |
+| Defence/LE buyers audit *access*, not just change | **Read auditing**, not only mutation auditing. Schema + middleware change: trivial now, invasive later |
+| Air-gapped and classified networks | **No phone-home, ever.** No auto-update check, no crash reporting, no license callback. Offline path for GeoIP data, OTel Collector distribution, container images |
+| Supply-chain review is standard in procurement | **SBOM (CycloneDX/SPDX) + signed artifacts** in CI from the first release |
+| Most on-prem sites have no object storage | **`storage_policy = 'tiered'` is opt-in.** Single volume must be the default that works |
+| Disk is finite and someone else's | Text index (~67% of compressed) + `p_by_time` projection ≈ **3x raw compressed size**. Per-source text-index opt-out is **required**, not optional |
+| Customers upgrade unattended, across multiple versions | ClickHouse migrations need a **real versioned runner** — idempotent, ordered, resumable |
+| Buyers ask during evaluation, not after | **Backup/restore in the M1–M4 window**, out of "enterprise" |
+| No server-side metering is possible on-prem | **Entitlement hooks** (resource counting) exist before they are enforced |
+| Destructive automation in defence contexts | **Two-person integrity** on runbooks — note for M10, do not build now |
+
+### The line to hold
+
+Pursuing actual certification — FedRAMP, Common Criteria, STIG accreditation — is a
+multi-year, six-to-seven-figure programme requiring dedicated compliance staff. **It is
+not available to a solo developer and must not be attempted now.**
+
+There is a large gap between *pursuing certification* and *not architecting yourself out
+of it*. Everything in the table above is the second thing: cheap if done now, expensive
+or impossible later. Build the seams; pursue no certification until a real buyer funds it.
+
+**The failure mode to avoid** is letting hypothetical defence requirements distort v0.1.
+That is how a monitoring platform becomes a compliance project that never ships a working
+NMS.
 
 **Not affected:** the resource model, identity resolution, telemetry envelope, Query AST,
-and the M0–M4 scope. Everything above is packaging, configuration and licensing.
-
-Cloud/hosted deployment is a **post-v1.0** concern. When it arrives, the same storage
-traits (§3) and the `TelemetryBus` boundary (SPEC §M0.7) are what make it tractable.
+and the M0–M4 scope.
 
 ---
 
