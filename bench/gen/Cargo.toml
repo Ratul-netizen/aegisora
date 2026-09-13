@@ -1,0 +1,14 @@
+[package]
+name = "uops-bench-gen"
+version = "0.1.0"
+edition = "2021"
+
+# Zero dependencies on purpose: builds in seconds, works offline, and nothing about
+# the benchmark's data distribution is hidden inside a crate we did not read.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

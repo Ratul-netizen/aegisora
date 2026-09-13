@@ -1,0 +1,23 @@
+<clickhouse>
+    <!-- Benchmark-only config. Not a production template. -->
+
+    <!-- Keep query_log flushing promptly so the runner can read server-side timings
+         immediately after each query instead of sleeping. -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <flush_interval_milliseconds>1000</flush_interval_milliseconds>
+    </query_log>
+
+    <!-- Record part/merge behaviour during the load phase; ingest rate is a W1 metric. -->
+    <part_log>
+        <database>system</database>
+        <table>part_log</table>
+        <flush_interval_milliseconds>1000</flush_interval_milliseconds>
+    </part_log>
+
+    <!-- NOTE: text-index feature flags are deliberately NOT set here.
+         Flag names changed across the beta→GA transition and an unknown setting in a
+         profile can fail server startup. The runner probes system.settings at boot and
+         applies the correct flag per-session. See scripts/probe.ps1. -->
+</clickhouse>

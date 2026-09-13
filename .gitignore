@@ -1,0 +1,38 @@
+# Rust
+target/
+**/target/
+*.pdb
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Benchmark artifacts — regenerable, and enormous.
+# Generated data is never committed; the generator + seed reproduce it exactly.
+bench/data/
+bench/results/*.raw
+*.tsv
+*.tsv.gz
+
+# Secrets. Nothing in this project should ever hold key material in the tree,
+# but defence in depth costs nothing.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.kek
+secrets/
+
+# Local overrides
+docker-compose.override.yml
+.claude/settings.local.json
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

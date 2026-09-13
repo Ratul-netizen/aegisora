@@ -1,0 +1,27 @@
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: uops-bench-ch
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # native
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    environment:
+      CLICKHOUSE_DB: bench
+      CLICKHOUSE_USER: bench
+      CLICKHOUSE_PASSWORD: bench
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - ch-data:/var/lib/clickhouse
+      - ./ddl:/ddl:ro
+      - ./conf/benchmark.xml:/etc/clickhouse-server/config.d/benchmark.xml:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "bench", "--password", "bench", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  ch-data:
