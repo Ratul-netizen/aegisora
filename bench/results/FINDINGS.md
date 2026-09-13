@@ -166,6 +166,57 @@ and awkward later, because it changes what the Explorer queries.
 
 **Action for SPEC §M0.6:** add `logs_counts_5m` alongside `metrics_5m`.
 
+### Measured: the second ordering fixes the tail, and does NOT fix the histogram
+
+Both tables loaded with the same 100M rows, queried back to back under identical
+conditions:
+
+| query | `logs` (resource-ordered) | `logs_by_time` (time-ordered) | |
+|---|---:|---:|---|
+| Q01 tail | 2 303 ms · 33.78 M rows | **72 ms · 254 K rows** | **32x faster, 133x less read** |
+| Q09 histogram | 3 227 ms · 33.47 M rows | **1 357 ms · 33.39 M rows** | 2.4x faster, **same rows read** |
+
+> The `logs` figures here are slower than the earlier suite run (Q01 403 ms) because both
+> 100M tables now share one machine's cache and I/O. The **comparison within this run is
+> valid** — both were measured under identical contention — but these absolute numbers
+> should not be compared against the single-table run above.
+
+**Q01: settled.** The time ordering turns a full-tenant scan into a 254 K-row read. The
+projection is mandatory.
+
+**Q09: the projection is not the answer.** Rows read barely moved — 33.47 M → 33.39 M.
+The 2.4x gain is better locality, not pruning, because a histogram over the *full
+retention window* has to touch every row whatever the sort order. Only pre-aggregation
+removes the work. This confirms §3 above: **`logs_counts_5m` is required in addition to
+the projection, not instead of it.** Two fixes, two different root causes.
+
+### Storage cost: ~1.9x, not 2x — and the index must not be duplicated
+
+| table | data | text index | total |
+|---|---:|---:|---:|
+| `logs` | 3.03 GiB | 2.15 GiB | 5.18 GiB |
+| `logs_by_time` | **4.79 GiB** | 2.14 GiB | 6.94 GiB |
+
+Two things worth noting.
+
+**Time-ordering compresses ~58% worse** (4.79 vs 3.03 GiB for identical data). Sorting by
+resource groups rows that share `source_vendor`, `source_kind` and `host.name`, so those
+columns compress far better. Sorting by time interleaves all 5 000 resources. This is a
+real cost of the second ordering and was not anticipated.
+
+**But the text index should not be duplicated.** In this benchmark `logs_by_time` is a
+separate table and so carries its own 2.14 GiB index; as a real ClickHouse *projection*
+it would not — text search resolves against the main table, and projections do not carry
+secondary indexes anyway. Realistic cost:
+
+```
+3.03 (data) + 2.15 (index) + 4.79 (projection data) = 9.97 GiB
+versus 5.18 GiB for the main table alone  →  1.9x
+```
+
+**Action for SPEC §M0.6:** state the projection cost as **~1.9x**, and note explicitly
+that the projection must not replicate the text index.
+
 ## 4. The text index is not free: 67% overhead
 
 | | 10M | 100M |

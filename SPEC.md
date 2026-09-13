@@ -653,12 +653,70 @@ TTL toDateTime(observed_at) + INTERVAL 7   DAY TO VOLUME 'warm',
 SETTINGS storage_policy = 'tiered', index_granularity = 8192;
 ```
 
-**Known tradeoff, recorded deliberately.** This sort key is optimal for resource-scoped
-investigation and suboptimal for tenant-wide text search across all resources (the search must touch
-every resource's granules). Mitigation: the `text` skip index does the heavy lifting, and the
-Explorer UI defaults to a resource or site filter. If W1 shows tenant-wide search is unacceptably
-slow, the fallback is a second `logs_by_time` projection ordered `(tenant_id, observed_at)` — **decide
-from the W1 numbers, not now.**
+**W1 CLOSED THIS ITEM — measured, not predicted.** See `bench/results/FINDINGS.md`.
+
+The sort key is **confirmed and must not change**: Q05 ("all signals for one resource in a window")
+ran at **9 ms reading 16 380 rows at both 10M and 100M** — completely independent of table size.
+
+The open question was framed as "tenant-wide *text search* may be slow." That framing was wrong.
+Text search is fine — a selective token read 8 190 rows at both scales. **It is time-ordered queries
+that cannot prune**, and they need two separate fixes:
+
+```sql
+-- FIX 1 — the tail. Measured 32x: 2303ms/33.8M rows → 72ms/254K rows.
+-- MUST NOT carry the text index: search resolves against the base table, and
+-- projections do not support secondary indexes in any case.
+ALTER TABLE logs ADD PROJECTION p_by_time (
+    SELECT * ORDER BY (tenant_id, observed_at)
+);
+```
+
+Cost: **~1.9x total storage** for the logs table. Note that time-ordering compresses ~58% worse than
+resource-ordering (4.79 GiB vs 3.03 GiB for identical data), because sorting by resource groups rows
+sharing `source_vendor`, `source_kind` and `host.name`. Budget for it.
+
+```sql
+-- FIX 2 — the Explorer histogram. The projection does NOT solve this: rows read
+-- barely moved (33.47M → 33.39M) because a histogram over the full retention
+-- window touches every row whatever the sort order. Only pre-aggregation helps.
+-- This query re-renders on EVERY search and filter change.
+CREATE TABLE logs_counts_5m (
+    tenant_id UUID, resource_id UUID, severity LowCardinality(String),
+    bucket DateTime('UTC'), cnt AggregateFunction(count, UInt64)
+) ENGINE = AggregatingMergeTree
+PARTITION BY toYYYYMM(bucket)
+ORDER BY (tenant_id, bucket, severity, resource_id);
+
+CREATE MATERIALIZED VIEW logs_counts_5m_mv TO logs_counts_5m AS
+SELECT tenant_id, resource_id, severity,
+       toStartOfFiveMinute(observed_at) AS bucket, countState() AS cnt
+FROM logs GROUP BY tenant_id, resource_id, severity, bucket;
+```
+
+**Two fixes, two different root causes.** Neither substitutes for the other.
+
+### Also measured in W1, and required
+
+**Materialize the attributes that get grouped on.** The slowest query in the suite was not a text
+search — it was `GROUP BY attributes['host.name']` at **2 252 ms** at 100M, worse than phrase
+proximity. Map columns decompress in full per row.
+
+```sql
+host_name    String                  MATERIALIZED attributes['host.name'],
+service_name LowCardinality(String)  MATERIALIZED attributes['service.name'],
+```
+
+**The text index must be opt-out per source.** It cost **71% of compressed data at 100M** (2.15 GiB
+against 3.03 GiB) and the overhead *grew* with scale (67% → 71%) rather than amortising. Combined
+with the projection, a naive build stores roughly 3x the raw compressed size — unacceptable on an
+on-prem customer's finite disk array (PLAN §0b). Per-source opt-out belongs in the M2 monitoring
+profile schema.
+
+**Do not plan on index-accelerated substring or phrase search.** Measured at 100M: `LIKE` 1 928 ms
+and phrase proximity 2 378 ms, both reading the entire tenant with no pruning. ClickHouse 26.8
+exposes `use_text_index_like_evaluation_by_dictionary_scan`, which suggested `LIKE` might be
+accelerated beyond what the March 2026 GA post describes; it was not. This confirms the boundary in
+PLAN §3 and the `QueryWarning` requirement in §M0.5.
 
 ```sql
 CREATE TABLE metrics
@@ -1147,7 +1205,7 @@ white-label · SSO/SAML/OIDC · HA · distributed collectors · own agent · tex
 | Item | Blocks | Decide by |
 |---|---|---|
 | **[OPEN]** Alias chain: collapse-on-write vs transitive read (recommend collapse-on-write) | M0.2 | W2 |
-| **[OPEN]** Tenant-wide log search performance → second projection or not | M0.6 | W1 results |
+| ~~Tenant-wide log search performance~~ **CLOSED by W1** → `p_by_time` projection + `logs_counts_5m` both required; ~1.9x storage | M0.6 | done |
 | **[OPEN]** License: AGPL / Apache 2.0 / BSL | first public commit | before M1 |
 | **[OPEN]** Target buyer: MSP-first vs self-hoster-first | credential scoping and isolation depth in M1 | before M1 |
 | **[OPEN]** Product name | crate naming, GitHub org | before public release |
