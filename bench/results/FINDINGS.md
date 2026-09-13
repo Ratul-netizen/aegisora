@@ -1,14 +1,69 @@
 # W1 storage benchmark — findings
 
-**Status: interim (10M rows). 100M run in progress.**
+**Status: 10M and 100M complete.** `logs_by_time` comparison and metrics still to run.
 ClickHouse 26.8.2.7, single node, Docker Desktop on Windows, warm cache, 5 iterations.
 
 ---
 
 ## Headline
 
-**The ClickHouse decision holds. The sort-key decision does not — it needs a second
-ordering, and that is a day-one change to SPEC §M0.6, not a later optimisation.**
+**The ClickHouse decision holds, and the core architectural bet is confirmed at scale.
+The sort key needs a second ordering — a day-one change to SPEC §M0.6, not a later
+optimisation.**
+
+---
+
+## 0. Scaling 10M → 100M
+
+| id | query | 10M p50 | 100M p50 | 10M rows read | 100M rows read |
+|---|---|---:|---:|---:|---:|
+| **Q05** | **all signals for one resource** | **9 ms** | **9 ms** | **16.38 K** | **16.38 K** |
+| Q02a | token: 1 hit | 13 ms | 39 ms | 8.19 K | 8.19 K |
+| Q02b | token: 100 hits | 12 ms | 30 ms | 32.8 K | 278 K |
+| Q02c | token: 10 K hits | 32 ms | 141 ms | 1.94 M | 18.9 M |
+| Q02d | token: 1 M hits | 46 ms | 181 ms | 3.39 M | 33.5 M |
+| Q03 | filter + time + severity | 22 ms | 59 ms | 262 K | 2.38 M |
+| Q04 | filter + GROUP BY | 19 ms | 54 ms | 262 K | 2.38 M |
+| Q06 | top-N talkers | 19 ms | 56 ms | 262 K | 2.38 M |
+| Q11 | multi-token AND | 34 ms | 88 ms | 1.94 M | 18.9 M |
+| Q12 | token + GROUP BY | 57 ms | 230 ms | 1.94 M | 18.9 M |
+| Q01 | **tail recent logs** | 93 ms | **403 ms** | 3.70 M | **33.8 M** |
+| Q09 | full-range histogram | 179 ms | **1 066 ms** | 3.39 M | 33.5 M |
+| Q07 | substring LIKE | 314 ms | **1 928 ms** | 3.39 M | 33.5 M |
+| Q08 | GROUP BY map key | 584 ms | **2 252 ms** | 3.39 M | 33.5 M |
+| Q10 | phrase proximity | 469 ms | **2 378 ms** | 3.39 M | 33.5 M |
+
+**Two clean groups.** Queries that can use the sort key or the text index stay
+comfortably under 250 ms at 100M. Queries that read the whole tenant land between
+0.4 s and 2.4 s. There is nothing in between, and the dividing line is exactly
+"can this query prune?"
+
+### Q05 is size-independent — the central bet, confirmed
+
+**9 ms and 16 380 rows read at 10M. 9 ms and 16 380 rows read at 100M.** Ten times the
+data; identical latency, identical work. `ORDER BY (tenant_id, resource_id, observed_at)`
+makes resource-scoped investigation a function of *how much that resource produced*, not
+of how large the table is.
+
+This is the query the Investigation Workspace (PLAN §6) is built on, and it is the single
+result that most justifies the architecture. **Do not change this sort key.**
+
+### Selective token search is also size-independent
+
+Q02a read **8 190 rows at both scales** to find its single hit. The text index prunes to
+a constant absolute cost regardless of table size. Latency rose 13 → 39 ms because the
+dictionary itself grew, but the data read did not move at all.
+
+### Correction to the 10M projection
+
+The 10M findings projected Q01 at **~0.9 s** for 100M by linear extrapolation. The
+measured value is **403 ms** — the estimate was 2x pessimistic, because ClickHouse
+parallelises the scan across cores until they saturate. The 1B projection of ~9 s should
+likewise be treated as an upper bound; ~1.5–4 s is more plausible.
+
+**This does not change the conclusion.** 403 ms for the default view is already poor, it
+reads the entire tenant, and it grows without bound as retention extends. The projection
+in §3 is still required — the urgency was overstated, the need was not.
 
 ---
 
@@ -88,14 +143,40 @@ ALTER TABLE logs ADD PROJECTION p_by_time (
 **Cost: roughly 2x storage for the logs table.** That must go into SPEC §M0.6 as a stated
 cost, not discovered during M3.
 
+### Q09 — the Explorer histogram — has the same root cause and is worse
+
+Only visible at 100M: **Q09 (`GROUP BY toStartOfHour`) costs 1 066 ms**, up from 179 ms
+at 10M, reading the entire tenant.
+
+That query is the **histogram at the top of the Log Explorer** (SPEC §M3, the
+drag-to-zoom time selector). Unlike Q01, which a user triggers once on arrival, the
+histogram re-renders on **every search and every filter change**. A second of latency on
+every interaction is the difference between a tool that feels alive and one that feels
+broken — and it is the first thing any evaluator touches.
+
+Same root cause as Q01: a time-bucketed aggregate cannot use a resource-first sort key.
+The `p_by_time` projection helps, but a histogram over 180 days of retention will still
+scan a lot. The durable answer is a **pre-aggregated counts table** — an
+`AggregatingMergeTree` MV keyed `(tenant_id, bucket, severity)` — which turns the
+histogram into a read of a few thousand rows regardless of retention, exactly as
+`metrics_5m` does for metrics.
+
+That is cheap to add now (it is the same pattern already specified for metric rollups)
+and awkward later, because it changes what the Explorer queries.
+
+**Action for SPEC §M0.6:** add `logs_counts_5m` alongside `metrics_5m`.
+
 ## 4. The text index is not free: 67% overhead
 
-| | |
-|---|---|
-| compressed data | 320 MiB |
-| **text index** | **214 MiB** |
-| uncompressed | 1.86 GiB |
-| compression ratio | 5.93x |
+| | 10M | 100M |
+|---|---|---|
+| compressed data | 320 MiB | **3.03 GiB** |
+| **text index** | **214 MiB (67%)** | **2.15 GiB (71%)** |
+| uncompressed | 1.86 GiB | 18.56 GiB |
+| compression ratio | 5.93x | 6.12x |
+| active parts | 16 | 35 |
+
+The index overhead **grew** with scale, 67% → 71%. It is not amortising.
 
 The index costs two-thirds of the compressed data size. Combined with the projection
 above, a naive implementation stores roughly **3x** what the raw compressed logs need.
