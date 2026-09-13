@@ -13,7 +13,7 @@
 #
 # Usage: scripts/run.sh [iterations] [--cold]
 
-set -euo pipefail
+set -uo pipefail   # NOT -e: a single failing query must not abort the whole suite
 
 ITER="${1:-10}"
 COLD=""
@@ -101,7 +101,10 @@ while IFS=$'\t' read -r ID LABEL SQL; do
 
   P50=$(echo "$STATS" | cut -f1); P95=$(echo "$STATS" | cut -f2); P99=$(echo "$STATS" | cut -f3)
   RR=$(echo "$STATS" | cut -f4);  RB=$(echo "$STATS" | cut -f5)
-  RES=$(echo "$SQL" | q | head -1 | cut -c1-40 | tr -d '\r\n')
+  # awk, not `head -1`: head closes the pipe as soon as it has its line, which sends
+  # SIGPIPE to curl ("Failure writing output to destination") and, under
+  # `set -o pipefail`, aborts the whole run. awk consumes all input.
+  RES=$(echo "$SQL" | q | awk 'NR==1{print substr($0,1,40)}' | tr -d '\r\n' || true)
 
   printf 'p50=%-7s p95=%-7s read=%s\n' "${P50}ms" "${P95}ms" "$RR"
   echo "| $ID | $LABEL | $P50 | $P95 | $P99 | $RR | $RB | \`$RES\` |" >> "$OUT"
