@@ -13,6 +13,7 @@ uops-core.workspace = true
 uops-identity.workspace = true
 uops-query.workspace = true
 uops-secrets.workspace = true
+uops-store-ch.workspace = true
 uops-store-pg.workspace = true
 
 axum.workspace = true
@@ -25,8 +26,9 @@ tower.workspace = true
 tower-http.workspace = true
 
 [dev-dependencies]
-# The integration tests seed organizations and tenants directly, because those are
-# fixtures rather than anything the API is responsible for creating.
+# The integration tests seed organizations, tenants and telemetry directly, because
+# those are fixtures rather than anything the API is responsible for creating.
+chrono.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tower = { workspace = true, features = ["util"] }

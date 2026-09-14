@@ -3,12 +3,12 @@
 //! Assembled in one place so the surface reads as a list rather than being discovered by
 //! grepping for attributes. SPEC §M1 has the full intended surface; this is what exists.
 //!
-//! `POST /api/v1/query` is deliberately absent. Compiling a `Query` to `ClickHouse`
-//! SQL works and is golden-tested, but nothing executes it yet — that needs the
-//! `ClickHouse` client, which is its own piece of work. An endpoint that compiled a
-//! query and returned nothing would be worse than no endpoint.
+//! `POST /api/v1/query` takes the AST from SPEC §M0.5 directly — the same type the UI
+//! builds, saved alerts are instances of, and the M6 text language will parse onto.
+//! There is one path to telemetry, and this is it.
 
 pub mod auth;
+pub mod query;
 pub mod resources;
 
 use axum::routing::{delete, get, patch, post};
@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/resources/{id}/status",
             patch(resources::set_status),
         )
+        .route("/api/v1/query", post(query::run))
         // Wrapped around everything rather than a chosen list of routes: a request that
         // never establishes a scope leaves nothing to record and is skipped, so this
         // cannot be forgotten when a route is added. See crate::audit.

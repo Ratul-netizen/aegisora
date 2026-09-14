@@ -10,13 +10,13 @@ env:
   RUSTFLAGS: -D warnings
   # uops-store-pg's queries are checked against the schema at COMPILE time. Offline
   # mode uses the checked-in .sqlx/ metadata so that every job — and every clone —
-  # builds without a database. The postgres-schema job turns this off and checks the
+  # builds without a database. The integration job turns this off and checks the
   # metadata against a real server.
   SQLX_OFFLINE: "true"
 
 jobs:
   check:
-    name: fmt · clippy · test
+    name: fmt · clippy · doctests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,15 +28,20 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      # --all-targets compiles every test as well, so a test that no longer builds
+      # still fails here even though none of them run in this job.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Includes the `compile_fail` doctests that enforce the security invariants:
-      # Secret<T> is not Display/Serialize/Clone, TenantScope is not Display/Default.
-      # These only run as doctests on public items — see crates/uops-core/src/secret.rs.
-      - name: Test
-        run: cargo test --workspace --all-targets
-
+      # The workspace test suite deliberately does NOT run here. Much of it needs
+      # PostgreSQL and ClickHouse, and a job without them fails on the integration
+      # targets rather than skipping them — this project does not keep tests that
+      # quietly pass when the thing they test is absent. The suite runs once, in
+      # `integration`, which has both engines.
+      #
+      # Doctests do run here: they include the `compile_fail` ones that enforce the
+      # security invariants — Secret<T> is not Display/Serialize/Clone, TenantScope is
+      # not Display/Default — and none of them touch a database.
       - name: Doctests
         run: cargo test --workspace --doc
 
@@ -89,12 +94,14 @@ jobs:
           fi
           echo "ok"
 
-  postgres-schema:
-    name: migrations · schema invariants
+  integration:
+    name: schemas · repositories · api
     runs-on: ubuntu-latest
 
-    # A service container rather than docker compose: the runner wires it to localhost
-    # and waits on the health check before any step runs.
+    # Both engines in one job, because the things under test span them: POST /query
+    # resolves a selector against PostgreSQL and answers it from ClickHouse. Split
+    # across two jobs, every test that crosses that seam has no home — which is the
+    # mistake this file previously made.
     services:
       postgres:
         image: postgres:17-alpine
@@ -109,68 +116,6 @@ jobs:
           --health-interval 3s
           --health-timeout 3s
           --health-retries 20
-
-    env:
-      DATABASE_URL: postgres://uops:uops@localhost:5432/uops
-      PGPASSWORD: uops
-      # This job has a server, so queries are verified against it rather than against
-      # the recorded metadata.
-      SQLX_OFFLINE: "false"
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      # The same tool deployments use. Applying with psql would leave
-      # _sqlx_migrations empty, so CI would not be exercising the real upgrade path.
-      - name: Install sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features postgres,rustls --locked
-
-      - name: Apply migrations
-        run: sqlx migrate run
-
-      # Re-running must apply nothing. If the migration state were not recorded, this
-      # second run would fail on "type already exists" — and an on-premise customer
-      # upgrading unattended would hit that instead of CI.
-      - name: Re-running applies nothing
-        run: sqlx migrate run
-
-      - name: Schema invariants
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/tests/invariants.sql
-
-      # The repository layer, compiled against this schema and run against this server.
-      # Compiling it IS a test: a renamed column fails the build rather than a request.
-      - name: Repository tests
-        run: cargo test -p uops-store-pg
-
-      # The recorded query metadata must match the queries in the tree, or an offline
-      # build verifies something that is no longer there.
-      - name: Query metadata is current
-        run: |
-          cargo sqlx prepare --workspace --check -- --all-targets || {
-            echo "::error::.sqlx is stale — run: cargo sqlx prepare --workspace -- --all-targets"
-            exit 1
-          }
-
-      # Guards the suite itself. A test that passes whether or not the property holds is
-      # worse than no test, because it reads as covered — this repo has already been
-      # caught by that once, with the compile_fail doctests in uops-core.
-      - name: The invariant suite fails when an invariant is removed
-        run: |
-          DROP="ALTER TABLE resource DROP CONSTRAINT resource_parent_id_tenant_id_fkey;"
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "$DROP"
-          if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/tests/invariants.sql > /dev/null 2>&1; then
-            echo "::error::the schema invariant suite passed with tenant isolation removed"
-            exit 1
-          fi
-          echo "ok: removing the constraint fails the suite"
-
-  clickhouse-schema:
-    name: ch-migrations · runner · codegen agreement
-    runs-on: ubuntu-latest
-
-    services:
       clickhouse:
         # Pinned to the version W1 was measured on. The text index reached GA in 26.x
         # and its function names moved during the beta — see the searchAll() note in
@@ -189,22 +134,55 @@ jobs:
           --health-retries 20
 
     env:
+      DATABASE_URL: postgres://uops:uops@localhost:5432/uops
+      PGPASSWORD: uops
       CLICKHOUSE_URL: http://localhost:8123
       CLICKHOUSE_DB: uops
       CLICKHOUSE_USER: uops
       CLICKHOUSE_PASSWORD: uops
+      # This job has servers, so queries are verified against them rather than against
+      # the recorded metadata.
+      SQLX_OFFLINE: "false"
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Apply migrations
+      # ---- PostgreSQL -------------------------------------------------------------
+
+      # The same tool deployments use. Applying with psql would leave _sqlx_migrations
+      # empty, so CI would not be exercising the real upgrade path.
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres,rustls --locked
+
+      - name: Apply PostgreSQL migrations
+        run: sqlx migrate run
+
+      # Re-running must apply nothing. If the migration state were not recorded, this
+      # second run would fail on "type already exists" — and an on-premise customer
+      # upgrading unattended would hit that instead of CI.
+      - name: Re-running PostgreSQL migrations applies nothing
+        run: sqlx migrate run
+
+      - name: Schema invariants
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/tests/invariants.sql
+
+      # The recorded query metadata must match the queries in the tree, or an offline
+      # build verifies something that is no longer there.
+      - name: Query metadata is current
+        run: |
+          cargo sqlx prepare --workspace --check -- --all-targets || {
+            echo "::error::.sqlx is stale — run: cargo sqlx prepare --workspace -- --all-targets"
+            exit 1
+          }
+
+      # ---- ClickHouse -------------------------------------------------------------
+
+      - name: Apply ClickHouse migrations
         run: bash scripts/ch.sh apply
 
-      # On-premise customers upgrade unattended and restart often. A second run must
-      # apply nothing at all.
-      - name: Re-running applies nothing
+      - name: Re-running ClickHouse migrations applies nothing
         run: |
           OUT="$(bash scripts/ch.sh apply)"
           echo "$OUT"
@@ -214,7 +192,8 @@ jobs:
           }
 
       # The check nothing else performs: uops-query's golden SQL against the schema
-      # ch-migrations actually creates. Unit tests on both sides pass while they drift.
+      # ch-migrations actually creates. Unit tests on both sides pass while they drift,
+      # which is how searchAll() — a function that does not exist — survived for weeks.
       - name: Query codegen matches the schema
         run: bash scripts/ch.sh verify
 
@@ -223,19 +202,33 @@ jobs:
       - name: Schema behaviour
         run: bash scripts/ch.sh smoke
 
-      # The telemetry store: compiled SQL executed against the schema it was compiled
-      # for. Both sides' unit tests passed for weeks while they disagreed about whether
-      # searchAll() exists, so this is the job that catches the next one.
-      - name: Telemetry store
-        run: cargo test -p uops-store-ch
+      # ---- Everything -------------------------------------------------------------
 
-      # The API's isolation tests, and the guard on them. A valid session naming
-      # another customer's tenant must get a 404 — and the suite that says so must
-      # fail if the role check is removed, or it is decoration.
-      - name: API tests
-        run: cargo test -p uops-api
+      # The whole suite, in the one job that has what it needs. Unit and integration
+      # together: which is which is not a distinction worth maintaining in a list
+      # somebody has to remember to update.
+      - name: Workspace tests
+        run: cargo test --workspace --all-targets
 
-      - name: The isolation tests fail when the role check is removed
+      # ---- Guards on the tests themselves -----------------------------------------
+      #
+      # Each of these breaks something on purpose and requires the suite to FAIL. A
+      # test that passes whether or not the property holds is worse than no test,
+      # because it reads as covered — and this repository has been caught by that
+      # twice: the compile_fail doctests in uops-core, and a login-timing assertion
+      # that measured everything except the thing it was protecting.
+
+      - name: The schema invariants fail when an invariant is removed
+        run: |
+          DROP="ALTER TABLE resource DROP CONSTRAINT resource_parent_id_tenant_id_fkey;"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "$DROP"
+          if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/tests/invariants.sql > /dev/null 2>&1; then
+            echo "::error::the schema invariant suite passed with tenant isolation removed"
+            exit 1
+          fi
+          echo "ok: removing the constraint fails the suite"
+
+      - name: The API isolation tests fail when the role check is removed
         run: |
           F=crates/uops-api/src/extract.rs
           cp "$F" "$RUNNER_TEMP/extract.bak"
@@ -252,42 +245,6 @@ jobs:
           cp "$RUNNER_TEMP/extract.bak" "$F"
           echo "ok: defaulting an absent role fails the suite"
 
-      # Login must cost the same whether or not the address exists. Short-circuiting
-      # the absent-user path skips Argon2 and turns the response time into an
-      # account-enumeration oracle. The first version of that test used a fixed
-      # threshold and passed with the short-circuit in place; it compares the two paths
-      # now, and this proves it.
-      - name: The login timing test fails when the absent-user path short-circuits
-        run: |
-          F=crates/uops-api/src/routes/auth.rs
-          cp "$F" "$RUNNER_TEMP/auth.bak"
-          python3 - "$F" <<'PY'
-          import sys
-          path = sys.argv[1]
-          src = open(path, encoding="utf-8").read()
-          marker = "    let found = state.store.user_credentials_by_email(email).await?;"
-          assert marker in src, "the mutation target moved"
-          src = src.replace(
-              marker,
-              marker + "
-    if found.is_none() {
-        return Err(ApiError::Unauthenticated);
-    }",
-              1,
-          )
-          open(path, "w", encoding="utf-8").write(src)
-          PY
-          if cargo test -p uops-api --test auth_routes > /dev/null 2>&1; then
-            cp "$RUNNER_TEMP/auth.bak" "$F"
-            echo "::error::the login timing test passed with the absent-user path short-circuited"
-            exit 1
-          fi
-          cp "$RUNNER_TEMP/auth.bak" "$F"
-          echo "ok: short-circuiting the absent-user path fails the suite"
-
-      # The audit trail is attached to the scope extractor rather than to a list of
-      # routes, so that a new route cannot be added without it. This proves the trail
-      # actually depends on that registration.
       - name: The audit tests fail when the scope stops registering
         run: |
           F=crates/uops-api/src/extract.rs
@@ -305,8 +262,36 @@ jobs:
           cp "$RUNNER_TEMP/extract-audit.bak" "$F"
           echo "ok: an unregistered scope fails the audit suite"
 
-      # Guards the refusal that protects an unattended upgrade: an applied migration
-      # that has been edited must stop the run rather than be silently skipped.
+      # Login must cost the same whether or not the address exists. Short-circuiting
+      # the absent-user path skips Argon2 and turns the response time into an
+      # account-enumeration oracle.
+      - name: The login timing test fails when the absent-user path short-circuits
+        run: |
+          F=crates/uops-api/src/routes/auth.rs
+          cp "$F" "$RUNNER_TEMP/auth.bak"
+          python3 - "$F" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path, encoding="utf-8").read()
+          marker = "    let found = state.store.user_credentials_by_email(email).await?;"
+          assert marker in src, "the mutation target moved"
+          src = src.replace(
+              marker,
+              marker + "\n    if found.is_none() {\n        return Err(ApiError::Unauthenticated);\n    }",
+              1,
+          )
+          open(path, "w", encoding="utf-8").write(src)
+          PY
+          if cargo test -p uops-api --test auth_routes > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/auth.bak" "$F"
+            echo "::error::the login timing test passed with the absent-user path short-circuited"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/auth.bak" "$F"
+          echo "ok: short-circuiting the absent-user path fails the suite"
+
+      # Left last: it edits a migration file, and the runner must refuse to continue
+      # afterwards, so nothing else in this job can run behind it.
       - name: An edited applied migration is refused
         run: |
           echo "-- appended by CI to simulate an edit" >> ch-migrations/0003_logs_counts_5m.sql

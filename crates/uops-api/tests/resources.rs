@@ -72,8 +72,20 @@ async fn fixture(slug: &str, role: Role) -> Fixture {
     }
 }
 
+/// A telemetry store for tests that never query one.
+///
+/// Constructing it opens no connection — the HTTP client is lazy — so a test that only
+/// exercises the control plane costs nothing for holding it. Required rather than
+/// optional in `AppState` because an API that cannot answer a query is a different
+/// product, not a degraded one.
+fn telemetry() -> uops_store_ch::ChStore {
+    uops_store_ch::ChStore::new(uops_store_ch::ChClient::new(
+        uops_store_ch::ChConfig::from_env(),
+    ))
+}
+
 fn app(store: &PgStore) -> Router {
-    uops_api::router(AppState::new(store.clone()))
+    uops_api::router(AppState::new(store.clone(), telemetry()))
 }
 
 async fn sign_in(store: &PgStore, email: &str) -> (String, String) {

@@ -1908,6 +1908,7 @@ dependencies = [
  "uops-identity",
  "uops-query",
  "uops-secrets",
+ "uops-store-ch",
  "uops-store-pg",
  "uuid",
 ]

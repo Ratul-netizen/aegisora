@@ -45,7 +45,8 @@ PostgreSQL.
 | **M1 · auth routes** | ✅ Done — login/logout/me, CSRF, 22 tests |
 | **M1 · resource routes + audit trail** | ✅ Done — 14 tests |
 | **M1 · `uops-store-ch`** | ✅ Done — 24 tests, 11 against real ClickHouse |
-| M1 · `POST /query` | ⬜ **Next** |
+| **M1 · `POST /query`** | ✅ Done — 8 tests, the full stack over HTTP |
+| M1 · first-run admin | ⬜ **Next** |
 | M1 · first-run admin, web shell | ⬜ |
 | M1 · web shell | ⬜ |
 | M2–M4 | ⬜ |
@@ -54,7 +55,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 343 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 351 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -245,19 +246,12 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **`POST /api/v1/query`** — small, and it closes the loop the architecture was built
-   around: a `Query` arrives as JSON, the selector resolves against PostgreSQL through
-   `PgCatalog`, `compile` writes the SQL with the tenant predicate from the scope,
-   `ChStore` executes it, and the access log records the query's *shape* and row count.
-   Every piece exists and is tested. Two decisions to make: `ChStore` joins `AppState`
-   (which ripples into the existing test fixtures), and a query needs `Viewer` per the
-   RBAC table in SPEC §M1.
-2. **First-run admin credential** — generated, printed once, never stored in plaintext.
+1. **First-run admin credential** — generated, printed once, never stored in plaintext.
    Small, and an M1 acceptance criterion.
-3. **The web shell** — React + Vite, TanStack Query and Router, the tenant switcher, and
+2. **The web shell** — React + Vite, TanStack Query and Router, the tenant switcher, and
    the global time-range picker that is shared state across every view. The largest
    remaining piece and the only one with no Rust in it.
-4. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
+3. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
    against tenant B, "verified by an integration test, not by inspection". Writable once
    the surface is complete; the per-endpoint halves of it already exist.
 
@@ -291,6 +285,15 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**CI was red and nothing said so.** The `check` job ran `cargo test --workspace
+--all-targets` with no databases, so every integration test added since `uops-store-pg`
+failed there — five commits' worth. The workspace suite now runs once, in the job that
+has both engines; `check` keeps fmt, clippy (which still *compiles* every target) and
+the doctests. The API tests had also drifted into the ClickHouse-only job, where the
+PostgreSQL half of them could not have worked. One integration job now owns both
+engines, because `POST /query` spans them and a test that crosses that seam otherwise
+has no home.
 
 **A pre-aggregated query floors its window to the bucket.** Found by running a real
 histogram against a real `logs_counts_5m`: it returned nothing, because every bucket in

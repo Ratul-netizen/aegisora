@@ -39,11 +39,23 @@ async fn operators_only(caller: Caller) -> Result<String, uops_api::ApiError> {
     Ok("ok".to_owned())
 }
 
+/// A telemetry store for tests that never query one.
+///
+/// Constructing it opens no connection — the HTTP client is lazy — so a test that only
+/// exercises the control plane costs nothing for holding it. Required rather than
+/// optional in `AppState` because an API that cannot answer a query is a different
+/// product, not a degraded one.
+fn telemetry() -> uops_store_ch::ChStore {
+    uops_store_ch::ChStore::new(uops_store_ch::ChClient::new(
+        uops_store_ch::ChConfig::from_env(),
+    ))
+}
+
 fn router(store: PgStore) -> Router {
     Router::new()
         .route("/whoami", get(whoami))
         .route("/operators-only", get(operators_only))
-        .with_state(AppState::new(store))
+        .with_state(AppState::new(store, telemetry()))
 }
 
 struct Fixture {
