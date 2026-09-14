@@ -63,6 +63,66 @@ jobs:
           fi
           echo "ok"
 
+  postgres-schema:
+    name: migrations · schema invariants
+    runs-on: ubuntu-latest
+
+    # A service container rather than docker compose: the runner wires it to localhost
+    # and waits on the health check before any step runs.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: uops
+          POSTGRES_PASSWORD: uops
+          POSTGRES_DB: uops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U uops -d uops"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://uops:uops@localhost:5432/uops
+      PGPASSWORD: uops
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The same tool deployments use. Applying with psql would leave
+      # _sqlx_migrations empty, so CI would not be exercising the real upgrade path.
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres,rustls --locked
+
+      - name: Apply migrations
+        run: sqlx migrate run
+
+      # Re-running must apply nothing. If the migration state were not recorded, this
+      # second run would fail on "type already exists" — and an on-premise customer
+      # upgrading unattended would hit that instead of CI.
+      - name: Re-running applies nothing
+        run: sqlx migrate run
+
+      - name: Schema invariants
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/tests/invariants.sql
+
+      # Guards the suite itself. A test that passes whether or not the property holds is
+      # worse than no test, because it reads as covered — this repo has already been
+      # caught by that once, with the compile_fail doctests in uops-core.
+      - name: The invariant suite fails when an invariant is removed
+        run: |
+          DROP="ALTER TABLE resource DROP CONSTRAINT resource_parent_id_tenant_id_fkey;"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "$DROP"
+          if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/tests/invariants.sql > /dev/null 2>&1; then
+            echo "::error::the schema invariant suite passed with tenant isolation removed"
+            exit 1
+          fi
+          echo "ok: removing the constraint fails the suite"
+
   supply-chain:
     name: advisories · licenses · SBOM
     runs-on: ubuntu-latest

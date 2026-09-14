@@ -16,7 +16,7 @@ control plane and ClickHouse for telemetry, OpenTelemetry Collector instead of a
 agent. Both on-premise and hosted are first-class; buyers are unrestricted, including
 government and defence, which is why on-prem is not a downgrade. The W1 storage
 benchmark is **complete and validated the architecture**. M0 is under way: the workspace,
-CI, `uops-core`, `uops-secrets` and `uops-query` are done and pushed.
+CI, `uops-core`, `uops-secrets`, `uops-query` and the PostgreSQL schema are done.
 
 ---
 
@@ -31,7 +31,7 @@ CI, `uops-core`, `uops-secrets` and `uops-query` are done and pushed.
 | **M0 · `uops-core`** | ✅ Done — 34 tests, 3 doctests, 5 compile_fail |
 | **M0 · `uops-secrets`** | ✅ Done — 33 tests |
 | **M0 · `uops-query`** | ✅ Done — 48 tests, 12 golden fixtures |
-| M0 · PostgreSQL migrations | ⬜ |
+| **M0 · PostgreSQL migrations** | ✅ Done — 5 migrations, 22 asserted invariants |
 | M0 · ClickHouse migration runner | ⬜ |
 | M0 · `uops-bus` | ⬜ |
 | M1–M4 | ⬜ |
@@ -142,6 +142,14 @@ crates/uops-query/
 ├── sql.rs        parameterised text — the crate has no escaping function
 ├── warning.rs    QueryWarning: correct-but-slow is reported, not hidden
 └── tests/golden/ 12 Query JSON → expected SQL fixtures
+
+migrations/                       PostgreSQL control plane — SPEC M0.1/M0.2/M0.4
+├── 0001_foundation.sql   organization → tenant → site, updated_at trigger
+├── 0002_resource.sql     the resource model; composite FKs carry tenant_id
+├── 0003_relationships.sql edges + resource_dependents(tenant, root, depth)
+├── 0004_identity.sql     identifiers, decisions, aliases that collapse on write
+├── 0005_credentials.sql  sealed credentials + access log that outlives them
+└── tests/invariants.sql  the properties the schema exists for, asserted in SQL
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -161,13 +169,12 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **PostgreSQL migrations** — the DDL in SPEC §M0.1/M0.2/M0.4.
-2. **ClickHouse migration runner** — versioned, idempotent, resumable. On-prem customers
+1. **ClickHouse migration runner** — versioned, idempotent, resumable. On-prem customers
    upgrade unattended across multiple versions; a folder of hand-applied SQL will not survive.
-3. **`uops-bus`** — `TelemetryBus` trait + `InProcess` impl + a conformance suite that both
+2. **`uops-bus`** — `TelemetryBus` trait + `InProcess` impl + a conformance suite that both
    implementations run.
 
-Then M1. Three of six M0 crates are done; realistic M0 completion is 2–4 weeks from here.
+Then M1. Four of six M0 items are done; realistic M0 completion is 1–3 weeks from here.
 
 **Do not start yet:** the frontend, or any collector. Both are more fun than schema work
 and both need rewriting if the resource model shifts.
@@ -178,14 +185,28 @@ and both need rewriting if the resource model shifts.
 
 | Item | Blocks | Note |
 |---|---|---|
+| **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |
-| Alias chain depth | M0.2 | Collapse-on-write recommended |
 | Metrics + rollup ingest cost | M4, not M0 | The one W1 measurement not run |
 | `metrics_1h` is emitted but not in the DDL | ClickHouse migration runner | `uops-query` plans onto it for windows past 30 days, per the raw→5m→1h rollup rule in SPEC §M0.6. The table itself still has to be created — a golden fixture already names it |
 
+## Decided since the last update
+
+**Alias chain depth (was open in SPEC §M0.2): collapse on write.** A trigger in
+`0004_identity.sql` rewrites A→B to A→C when B→C is created. Merges are rare and reads
+are constant, so transitive resolution would put a recursive lookup on the hot path of
+every telemetry query. The collapse buys one flat invariant — no `historical_id` is ever
+also a `current_id` — which is what lets alias expansion be a single lookup. It lives in
+the database because that is only true if *every* writer collapses, including a DBA
+fixing something by hand.
+
 ## Housekeeping
+
+The PostgreSQL dev database lives in a Docker volume:
+`docker compose -f deploy/docker-compose.yml up -d`, then `bash scripts/db.sh migrate`
+and `bash scripts/db.sh test`. `bash scripts/db.sh reset` re-applies from empty.
 
 The benchmark ClickHouse container holds ~200M rows in a Docker volume (~12 GiB). It is
 stopped, not deleted — `docker compose -f bench/docker-compose.yml up -d` brings it back

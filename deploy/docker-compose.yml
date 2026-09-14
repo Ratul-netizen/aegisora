@@ -1,0 +1,36 @@
+
+# Development stack. M0 needs PostgreSQL only — ClickHouse arrives with the migration
+# runner, and the server itself once there is a binary to run.
+#
+#     docker compose -f deploy/docker-compose.yml up -d
+#     bash scripts/db.sh migrate
+#     bash scripts/db.sh test
+#
+# Credentials here are development defaults and are meant to be obvious. A deployment
+# that reaches production with these is a deployment that never read this file.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: uops-dev-pg
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: uops
+      POSTGRES_PASSWORD: uops
+      POSTGRES_DB: uops
+      # C collation with UTF-8 encoding: deterministic sort order that does not change
+      # under the operator's ICU version. On-premise customers run whatever base image
+      # their platform team standardised on, and a locale-dependent index is a
+      # corruption waiting for an upgrade.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uops -d uops"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pg-data:
