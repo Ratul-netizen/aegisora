@@ -1,0 +1,42 @@
+{
+  "signal": "log",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-02T00:00:00Z"
+  },
+  "resources": {
+    "type": "all"
+  },
+  "filter": {
+    "op": "compare",
+    "field": {
+      "field": "attr",
+      "key": "service.name"
+    },
+    "cmp": "eq",
+    "value": "bgpd"
+  },
+  "aggregations": [
+    {
+      "func": "count",
+      "field": null,
+      "alias": "events"
+    }
+  ],
+  "group_by": [
+    {
+      "field": "attr",
+      "key": "host.name"
+    }
+  ],
+  "order_by": [
+    {
+      "key": {
+        "by": "alias",
+        "alias": "events"
+      },
+      "desc": true
+    }
+  ],
+  "limit": 50
+}

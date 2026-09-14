@@ -1,0 +1,27 @@
+{
+  "signal": "log",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-02T00:00:00Z"
+  },
+  "resources": {
+    "type": "all"
+  },
+  "aggregations": [
+    {
+      "func": "count",
+      "field": null,
+      "alias": "c"
+    }
+  ],
+  "group_by": [
+    {
+      "field": "time_bucket",
+      "seconds": 300
+    },
+    {
+      "field": "severity"
+    }
+  ],
+  "limit": 500
+}

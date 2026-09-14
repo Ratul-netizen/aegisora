@@ -1,0 +1,22 @@
+[package]
+name = "uops-query"
+description = "The one query AST, and its ClickHouse codegen. SQL cannot be produced without a TenantScope."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 # Status — pick up from here
 
-Last updated: 2026-09-13 · repo: `github.com/Ratul-netizen/aegisora`
+Last updated: 2026-09-14 · repo: `github.com/Ratul-netizen/aegisora`
 
 > Read this first on a new machine. [PLAN.md](./PLAN.md) is strategy,
 > [SPEC.md](./SPEC.md) is the M0–M4 implementation spec, this is *where we are*.
@@ -15,8 +15,8 @@ model**, rather than an NMS bolted to a log stack. Rust/Axum + React, PostgreSQL
 control plane and ClickHouse for telemetry, OpenTelemetry Collector instead of a bespoke
 agent. Both on-premise and hosted are first-class; buyers are unrestricted, including
 government and defence, which is why on-prem is not a downgrade. The W1 storage
-benchmark is **complete and validated the architecture**. M0 has started: the workspace,
-`uops-core` and CI are done and pushed.
+benchmark is **complete and validated the architecture**. M0 is under way: the workspace,
+CI, `uops-core`, `uops-secrets` and `uops-query` are done and pushed.
 
 ---
 
@@ -29,8 +29,8 @@ benchmark is **complete and validated the architecture**. M0 has started: the wo
 | **W1 storage benchmark** | ✅ **Complete — architecture validated** |
 | **M0 · workspace + CI** | ✅ Done |
 | **M0 · `uops-core`** | ✅ Done — 34 tests, 3 doctests, 5 compile_fail |
-| M0 · `uops-secrets` | ⬜ **Next** |
-| M0 · `uops-query` | ⬜ |
+| **M0 · `uops-secrets`** | ✅ Done — 33 tests |
+| **M0 · `uops-query`** | ✅ Done — 48 tests, 12 golden fixtures |
 | M0 · PostgreSQL migrations | ⬜ |
 | M0 · ClickHouse migration runner | ⬜ |
 | M0 · `uops-bus` | ⬜ |
@@ -40,7 +40,7 @@ benchmark is **complete and validated the architecture**. M0 has started: the wo
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 115 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -124,6 +124,24 @@ crates/uops-core/
 ├── envelope.rs   the one telemetry shape all signals arrive in
 ├── attr.rs       OTel semconv attributes, BTreeMap for deterministic bytes
 └── error.rs      TenantMismatch → 404, indistinguishable from NotFound
+
+crates/uops-secrets/
+├── aead.rs       AeadProvider trait — crypto backend chosen at BUILD time
+├── kek.rs        KekRing — the KEK never enters the database
+├── record.rs     SealedCredential + AAD binding tenant‖credential‖version
+├── vault.rs      LocalVault — envelope encryption, rotation, revocation
+├── audit.rs      AccessLog — records grants AND denials
+├── serialize.rs  length-prefixed framing for credential material
+└── memory.rs     in-memory SealedStore, for tests and the dev profile
+
+crates/uops-query/
+├── ast.rs        the ONE Query AST — UI, API, alerts and M6 text search share it
+├── resolve.rs    ResourceSelector → ResolvedResources, through resource_alias
+├── plan.rs       which table answers this — where the W1 fixes take effect
+├── compile.rs    codegen; tenant_id is written HERE, never by the caller
+├── sql.rs        parameterised text — the crate has no escaping function
+├── warning.rs    QueryWarning: correct-but-slow is reported, not hidden
+└── tests/golden/ 12 Query JSON → expected SQL fixtures
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -143,18 +161,13 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **`uops-secrets`** — `AeadProvider` trait + both build features, `LocalVault` with
-   envelope encryption (per-secret DEK wrapped by a KEK held outside the DB), AAD binding
-   ciphertext to `tenant||credential||version`, access log on every decrypt. SPEC §M0.4.
-2. **`uops-query`** — Query AST + ClickHouse codegen + golden-file tests. `compile()` takes
-   a `&TenantScope`, so SQL cannot be produced without one.
-3. **PostgreSQL migrations** — the DDL in SPEC §M0.1/M0.2/M0.4.
-4. **ClickHouse migration runner** — versioned, idempotent, resumable. On-prem customers
+1. **PostgreSQL migrations** — the DDL in SPEC §M0.1/M0.2/M0.4.
+2. **ClickHouse migration runner** — versioned, idempotent, resumable. On-prem customers
    upgrade unattended across multiple versions; a folder of hand-applied SQL will not survive.
-5. **`uops-bus`** — `TelemetryBus` trait + `InProcess` impl + a conformance suite that both
+3. **`uops-bus`** — `TelemetryBus` trait + `InProcess` impl + a conformance suite that both
    implementations run.
 
-Then M1. Realistic M0 completion: 3–5 weeks at a steady pace.
+Then M1. Three of six M0 crates are done; realistic M0 completion is 2–4 weeks from here.
 
 **Do not start yet:** the frontend, or any collector. Both are more fun than schema work
 and both need rewriting if the resource model shifts.
@@ -170,6 +183,7 @@ and both need rewriting if the resource model shifts.
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |
 | Alias chain depth | M0.2 | Collapse-on-write recommended |
 | Metrics + rollup ingest cost | M4, not M0 | The one W1 measurement not run |
+| `metrics_1h` is emitted but not in the DDL | ClickHouse migration runner | `uops-query` plans onto it for windows past 30 days, per the raw→5m→1h rollup rule in SPEC §M0.6. The table itself still has to be created — a golden fixture already names it |
 
 ## Housekeeping
 

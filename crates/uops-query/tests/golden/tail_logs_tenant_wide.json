@@ -1,0 +1,19 @@
+{
+  "signal": "log",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-01T01:00:00Z"
+  },
+  "resources": {
+    "type": "all"
+  },
+  "filter": {
+    "op": "compare",
+    "field": {
+      "field": "severity"
+    },
+    "cmp": "gte",
+    "value": "warn"
+  },
+  "limit": 5000
+}

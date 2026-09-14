@@ -505,6 +505,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-query"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uops-core",
+ "uuid",
+]
+
+[[package]]
 name = "uops-secrets"
 version = "0.0.1"
 dependencies = [

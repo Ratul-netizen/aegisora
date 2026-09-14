@@ -1,0 +1,32 @@
+{
+  "signal": "event",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-02T00:00:00Z"
+  },
+  "resources": {
+    "type": "all"
+  },
+  "aggregations": [
+    {
+      "func": "count",
+      "field": null,
+      "alias": "n"
+    }
+  ],
+  "group_by": [
+    {
+      "field": "event_category"
+    }
+  ],
+  "order_by": [
+    {
+      "key": {
+        "by": "alias",
+        "alias": "n"
+      },
+      "desc": true
+    }
+  ],
+  "limit": 25
+}

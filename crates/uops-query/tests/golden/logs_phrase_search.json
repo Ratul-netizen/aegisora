@@ -1,0 +1,21 @@
+{
+  "signal": "log",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-02T00:00:00Z"
+  },
+  "resources": {
+    "type": "all"
+  },
+  "filter": {
+    "op": "text",
+    "field": {
+      "field": "body"
+    },
+    "mode": "phrase",
+    "terms": [
+      "changed state to down"
+    ]
+  },
+  "limit": 100
+}

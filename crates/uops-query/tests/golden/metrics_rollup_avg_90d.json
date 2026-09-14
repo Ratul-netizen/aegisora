@@ -1,0 +1,44 @@
+{
+  "signal": "metric",
+  "time": {
+    "start": "2026-06-01T00:00:00Z",
+    "end": "2026-08-30T00:00:00Z"
+  },
+  "resources": {
+    "type": "ids",
+    "ids": [
+      "018f0000-0000-7000-8000-0000000000aa"
+    ]
+  },
+  "filter": {
+    "op": "compare",
+    "field": {
+      "field": "metric"
+    },
+    "cmp": "eq",
+    "value": "system.cpu.utilization"
+  },
+  "aggregations": [
+    {
+      "func": "avg",
+      "field": {
+        "field": "value"
+      },
+      "alias": "avg_cpu"
+    },
+    {
+      "func": "max",
+      "field": {
+        "field": "value"
+      },
+      "alias": "peak_cpu"
+    }
+  ],
+  "group_by": [
+    {
+      "field": "time_bucket",
+      "seconds": 3600
+    }
+  ],
+  "limit": 2000
+}

@@ -36,6 +36,7 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
+uops-query = { path = "crates/uops-query" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

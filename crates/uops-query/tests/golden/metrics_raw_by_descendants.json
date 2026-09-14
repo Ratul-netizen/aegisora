@@ -1,0 +1,21 @@
+{
+  "signal": "metric",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-01T01:00:00Z"
+  },
+  "resources": {
+    "type": "descendants",
+    "root": "018f0000-0000-7000-8000-0000000000aa",
+    "max_depth": 2
+  },
+  "filter": {
+    "op": "compare",
+    "field": {
+      "field": "metric"
+    },
+    "cmp": "eq",
+    "value": "network.io.bytes"
+  },
+  "limit": 1000
+}

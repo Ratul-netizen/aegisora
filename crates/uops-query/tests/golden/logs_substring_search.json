@@ -1,0 +1,35 @@
+{
+  "signal": "log",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-01T01:00:00Z"
+  },
+  "resources": {
+    "type": "site",
+    "site": "018f0000-0000-7000-8000-000000000055"
+  },
+  "filter": {
+    "op": "and",
+    "of": [
+      {
+        "op": "compare",
+        "field": {
+          "field": "severity"
+        },
+        "cmp": "gte",
+        "value": "error"
+      },
+      {
+        "op": "text",
+        "field": {
+          "field": "body"
+        },
+        "mode": "substring",
+        "terms": [
+          "updown"
+        ]
+      }
+    ]
+  },
+  "limit": 100
+}

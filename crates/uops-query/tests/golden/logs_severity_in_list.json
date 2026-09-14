@@ -1,0 +1,38 @@
+{
+  "signal": "log",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-01T01:00:00Z"
+  },
+  "resources": {
+    "type": "kind",
+    "kind": "device"
+  },
+  "filter": {
+    "op": "and",
+    "of": [
+      {
+        "op": "compare",
+        "field": {
+          "field": "severity"
+        },
+        "cmp": "in",
+        "value": [
+          "critical",
+          "alert",
+          "emergency"
+        ]
+      },
+      {
+        "op": "not",
+        "of": {
+          "op": "exists",
+          "field": {
+            "field": "trace_id"
+          }
+        }
+      }
+    ]
+  },
+  "limit": 100
+}
