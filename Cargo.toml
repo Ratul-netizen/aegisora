@@ -100,6 +100,7 @@ uops-secrets = { path = "crates/uops-secrets" }
 uops-identity = { path = "crates/uops-identity" }
 uops-store-pg = { path = "crates/uops-store-pg" }
 uops-api = { path = "crates/uops-api" }
+uops-server = { path = "crates/uops-server" }
 uops-store-ch = { path = "crates/uops-store-ch" }
 
 [workspace.lints.rust]

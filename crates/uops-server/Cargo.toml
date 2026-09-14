@@ -1,0 +1,32 @@
+[package]
+name = "uops-server"
+description = "The binary. Wires the stores to the router, runs the first boot, and serves."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-api.workspace = true
+uops-core.workspace = true
+uops-secrets.workspace = true
+uops-store-ch.workspace = true
+uops-store-pg.workspace = true
+
+axum.workspace = true
+# "net" for the listener, "signal" for graceful shutdown, "rt-multi-thread" because a
+# server that answers one request at a time is not a server.
+tokio = { workspace = true, features = ["net", "signal", "rt-multi-thread"] }
+
+[dev-dependencies]
+# The boot test needs a database of its own (sqlx migrate), a JSON body to post, and
+# tokio's io traits for the hand-rolled HTTP client.
+serde_json.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

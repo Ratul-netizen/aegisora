@@ -76,20 +76,37 @@ jobs:
       # leak material is to call .expose() inside a formatting or logging macro. That
       # is a deliberate act and therefore greppable.
       #
-      # The second grep drops comment lines, for the same reason as the crypto guard
-      # below: prose about the rule is not a violation of it, and a guard that also
-      # forbids writing down the reasoning teaches people to delete the reasoning.
+      # Comment lines are dropped, for the same reason as the crypto guard below: prose
+      # about the rule is not a violation of it, and a guard that also forbids writing
+      # down the reasoning teaches people to delete the reasoning.
+      #
+      # `credential-print:` exempts one line. The first-run administrator password is
+      # printed on a terminal on purpose — that is the whole design, see
+      # uops-server/src/firstrun.rs — and there is no way to write it that a grep for
+      # "secret reaching a macro" would not find. The exemption is a marker on the line
+      # itself rather than in the comment above it, so it cannot be borrowed by the next
+      # line down; and the count is asserted below, so adding a second one is a change
+      # someone has to make deliberately and defend in review.
       - name: No .expose() inside logging or formatting macros
         run: |
-          hits=$(grep -rnE '(println!|eprintln!|format!|write!|writeln!|trace!|debug!|info!|warn!|error!|json!)[^;]*\.expose\(\)' \
-                   --include='*.rs' crates/ \
+          MACROS='(println!|eprintln!|format!|write!|writeln!|trace!|debug!|info!|warn!|error!|json!)[^;]*\.expose\(\)'
+          code=$(grep -rnE "$MACROS" --include='*.rs' crates/ \
                  | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+
+          hits=$(printf '%s' "$code" | grep -v 'credential-print:' || true)
           if [ -n "$hits" ]; then
             echo "$hits"
             echo "::error::credential material reachable from a logging or formatting macro"
             exit 1
           fi
-          echo "ok"
+
+          exempt=$(printf '%s' "$code" | grep -c 'credential-print:' || true)
+          if [ "$exempt" -ne 1 ]; then
+            printf '%s\n' "$code"
+            echo "::error::expected exactly 1 credential-print exemption, found $exempt"
+            exit 1
+          fi
+          echo "ok: 1 deliberate credential print, 0 accidental"
 
       # The AeadProvider trait is the only sanctioned path to crypto primitives.
       #
@@ -264,6 +281,28 @@ jobs:
           fi
           cp "$RUNNER_TEMP/bootstrap.bak" "$F"
           echo "ok: a shared bootstrap lock fails the suite"
+
+      # The single most user-visible way this product can fail on day one: the password
+      # on the terminal is not the password in the database. Nothing crashes, nothing
+      # logs, and the installation simply cannot be entered. The mutation stores a hash
+      # of a second generated password — still a real Argon2 hash of a real password,
+      # so nothing downstream looks wrong.
+      - name: The boot test fails when the announced password is not the stored one
+        run: |
+          F=crates/uops-server/src/firstrun.rs
+          cp "$F" "$RUNNER_TEMP/firstrun.bak"
+          sed -i 's/^    let hash = password::hash(&plaintext)?;$/    let hash = password::hash(\&generate::password()?)?;/' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-server --test boot > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/firstrun.bak" "$F"
+            echo "::error::the boot tests passed with a password nobody could log in with"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/firstrun.bak" "$F"
+          echo "ok: announcing the wrong password fails the suite"
 
       - name: The API isolation tests fail when the role check is removed
         run: |

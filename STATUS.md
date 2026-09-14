@@ -46,16 +46,16 @@ PostgreSQL.
 | **M1 · resource routes + audit trail** | ✅ Done — 14 tests |
 | **M1 · `uops-store-ch`** | ✅ Done — 24 tests, 11 against real ClickHouse |
 | **M1 · `POST /query`** | ✅ Done — 8 tests, the full stack over HTTP |
-| **M1 · first-run bootstrap** | 🟡 store side done — 5 tests on a real empty database, mutation-guarded |
-| M1 · `uops-server` binary | ⬜ **Next** |
-| M1 · web shell | ⬜ |
+| **M1 · first-run bootstrap** | ✅ Done — 5 store tests, 3 boot tests, 2 mutation guards |
+| **M1 · `uops-server`** | ✅ Done — it runs, and you can log into it |
+| M1 · web shell | ⬜ **Next** |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 360 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 371 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -246,16 +246,11 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **`uops-server`** — the binary. There is a router, a store, a telemetry client and a
-   bootstrap transaction, and nothing that binds a port. It hosts the first-run path:
-   generate a password, hash it, call `bootstrap_first_run`, and print the credential
-   once if it returned `Some`. After that the platform can actually be run.
-   `uops_secrets::generate` and `PgStore::bootstrap_first_run` are both done and
-   tested; this is the twenty lines that join them to a socket.
-2. **The web shell** — React + Vite, TanStack Query and Router, the tenant switcher, and
+1. **The web shell** — React + Vite, TanStack Query and Router, the tenant switcher, and
    the global time-range picker that is shared state across every view. The largest
-   remaining piece and the only one with no Rust in it.
-3. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
+   remaining piece, the only one with no Rust in it, and now the only thing between M1
+   and something a person can use without curl.
+2. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
    against tenant B, "verified by an integration test, not by inspection". Writable once
    the surface is complete; the per-endpoint halves of it already exist.
 
@@ -265,7 +260,8 @@ because it reads as covered.
 docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhouse
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 360, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 371, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace

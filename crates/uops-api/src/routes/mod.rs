@@ -8,6 +8,7 @@
 //! There is one path to telemetry, and this is it.
 
 pub mod auth;
+pub mod health;
 pub mod query;
 pub mod resources;
 
@@ -34,6 +35,12 @@ pub fn router(state: AppState) -> Router {
             patch(resources::set_status),
         )
         .route("/api/v1/query", post(query::run))
+        // Deliberately above the audit layer as well as outside authentication: an
+        // orchestrator polling every five seconds would otherwise write an audit row
+        // every five seconds, and an audit log that is mostly health checks is one
+        // nobody reads. It establishes no scope, so the layer skips it anyway — this
+        // route is simply where that stops being an accident.
+        .route("/api/v1/health", get(health::health))
         // Wrapped around everything rather than a chosen list of routes: a request that
         // never establishes a scope leaves nothing to record and is skipped, so this
         // cannot be forgotten when a route is added. See crate::audit.

@@ -141,18 +141,36 @@ impl Audit {
 
 /// The client address, as reported.
 ///
-/// Read from `X-Forwarded-For`, because every deployment shape puts a reverse proxy in
-/// front — TLS is terminated there, see the workspace manifest. The value is therefore
-/// only as trustworthy as that proxy. A deployment that exposes this server directly
-/// should treat the column as a hint rather than as evidence, and the column records an
-/// address rather than a claim about one.
+/// `X-Forwarded-For` first, because every deployment shape puts a reverse proxy in front
+/// — TLS is terminated there, see the workspace manifest. The value is therefore only as
+/// trustworthy as that proxy, and the column records an address rather than a claim
+/// about one.
+///
+/// The socket's own peer address is the fallback, for a server exposed directly. It is
+/// the *more* trustworthy of the two — nobody can forge it by setting a header — but it
+/// is second, because behind a proxy every request would otherwise be attributed to the
+/// proxy and the column would be uniformly useless. Header first is right where there is
+/// a proxy, and the fallback is right where there is not.
+///
+/// It is `None` only when there is neither: a request synthesised in a test, or a
+/// transport with no peer.
 fn reported_ip(request: &Request) -> Option<IpAddr> {
-    request
+    // The first *parseable* hop, not simply the first. A client that sends
+    // `X-Forwarded-For: garbage` before a proxy that appends would otherwise erase its
+    // own address from the audit log — the header is attacker-controlled and the socket
+    // is not, so junk in the header must never be able to suppress the fallback.
+    let forwarded = request
         .headers()
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .and_then(|v| v.trim().parse().ok())
+        .and_then(|v| v.split(',').find_map(|hop| hop.trim().parse().ok()));
+
+    forwarded.or_else(|| {
+        request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|peer| peer.0.ip())
+    })
 }
 
 /// Write the row once the response is known.
@@ -294,5 +312,64 @@ mod tests {
         // there is nothing to attribute and the middleware writes nothing.
         let recorder = Recorder::default();
         assert!(recorder.lock().context.is_none());
+    }
+
+    /// A request carrying the given header and peer address, if any.
+    fn request(forwarded: Option<&str>, peer: Option<&str>) -> Request {
+        let mut b = Request::builder().uri("/");
+        if let Some(v) = forwarded {
+            b = b.header("x-forwarded-for", v);
+        }
+        let mut r = b.body(axum::body::Body::empty()).unwrap();
+        if let Some(p) = peer {
+            r.extensions_mut().insert(axum::extract::ConnectInfo(
+                p.parse::<std::net::SocketAddr>().unwrap(),
+            ));
+        }
+        r
+    }
+
+    #[test]
+    fn the_proxy_header_wins_over_the_socket() {
+        // Behind a proxy the peer address is the proxy, every time, for every user.
+        let r = request(Some("203.0.113.7"), Some("10.0.0.9:443"));
+        assert_eq!(reported_ip(&r).unwrap().to_string(), "203.0.113.7");
+    }
+
+    #[test]
+    fn the_socket_is_used_when_there_is_no_proxy() {
+        // A directly exposed server. Without this the column is empty for every
+        // request, which is how an audit log quietly stops being evidence.
+        let r = request(None, Some("198.51.100.42:51234"));
+        assert_eq!(reported_ip(&r).unwrap().to_string(), "198.51.100.42");
+    }
+
+    #[test]
+    fn the_first_hop_of_a_chain_is_the_client() {
+        // X-Forwarded-For accumulates left to right: client, then each proxy.
+        let r = request(Some("203.0.113.7, 10.0.0.1, 10.0.0.2"), None);
+        assert_eq!(reported_ip(&r).unwrap().to_string(), "203.0.113.7");
+    }
+
+    #[test]
+    fn a_client_cannot_erase_its_address_with_a_junk_header() {
+        // The header is attacker-controlled; the socket is not. If junk in the header
+        // suppressed the fallback, anyone could keep themselves out of the audit log by
+        // sending one word.
+        let r = request(Some("not-an-address"), Some("10.0.0.9:443"));
+        assert_eq!(reported_ip(&r).unwrap().to_string(), "10.0.0.9");
+    }
+
+    #[test]
+    fn a_junk_hop_before_a_real_one_is_skipped() {
+        // What a client sending a forged header looks like once a proxy appends the
+        // address it actually saw.
+        let r = request(Some("junk, 203.0.113.7"), Some("10.0.0.9:443"));
+        assert_eq!(reported_ip(&r).unwrap().to_string(), "203.0.113.7");
+    }
+
+    #[test]
+    fn neither_source_is_none_rather_than_a_guess() {
+        assert_eq!(reported_ip(&request(None, None)), None);
     }
 }
