@@ -37,6 +37,16 @@ pub struct UserCredentials {
     pub disabled: bool,
 }
 
+/// Who a user is. No password material of any kind.
+#[derive(Clone, Debug)]
+pub struct UserProfile {
+    pub user_id: ActorId,
+    pub org_id: OrgId,
+    pub email: String,
+    pub display_name: String,
+    pub disabled: bool,
+}
+
 /// A session that was live at the moment it was looked up.
 #[derive(Clone, Debug)]
 pub struct AuthenticatedSession {
@@ -103,6 +113,69 @@ impl PgStore {
         Ok(row.map(|r| UserCredentials {
             user_id: r.id,
             password_hash: PasswordHashString::from_stored(r.password_hash),
+            disabled: r.disabled_at.is_some(),
+        }))
+    }
+
+    /// Find a user by email address alone, across the whole deployment.
+    ///
+    /// Login has no organization to work with: the user types an address into a form.
+    /// A deployment with one organization — the common case, and every single-company
+    /// install — resolves unambiguously.
+    ///
+    /// Two accounts sharing an address across organizations returns `None`, which the
+    /// caller reports as a failed login. Silently picking one would let whoever
+    /// registered second intercept the first account's logins. Distinguishing the case
+    /// in the response would confirm an address exists. When a deployment genuinely
+    /// needs both, login gains an organization selector from the subdomain — M2, and a
+    /// deliberate decision rather than a default that happened to be convenient.
+    pub async fn user_credentials_by_email(&self, email: &str) -> Result<Option<UserCredentials>> {
+        // tenant-exempt: authentication precedes knowing a tenant.
+        let rows = sqlx::query!(
+            r#"
+            SELECT id AS "id: ActorId", password_hash, disabled_at
+              FROM app_user
+             WHERE lower(email) = lower($1)
+             LIMIT 2
+            "#,
+            email,
+        )
+        .fetch_all(self.pool())
+        .await
+        .map_err(|e| map("user", email.to_owned(), e))?;
+
+        if rows.len() != 1 {
+            return Ok(None);
+        }
+        let r = &rows[0];
+        Ok(Some(UserCredentials {
+            user_id: r.id,
+            password_hash: PasswordHashString::from_stored(r.password_hash.clone()),
+            disabled: r.disabled_at.is_some(),
+        }))
+    }
+
+    /// Who a user is, for `GET /me`.
+    pub async fn user_profile(&self, user: ActorId) -> Result<Option<UserProfile>> {
+        // tenant-exempt: a user is an organization-level record.
+        let row = sqlx::query!(
+            r#"
+            SELECT id AS "id: ActorId", org_id AS "org_id: OrgId", email, display_name,
+                   disabled_at
+              FROM app_user
+             WHERE id = $1
+            "#,
+            user as ActorId,
+        )
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| map("user", user.to_string(), e))?;
+
+        Ok(row.map(|r| UserProfile {
+            user_id: r.id,
+            org_id: r.org_id,
+            email: r.email,
+            display_name: r.display_name,
             disabled: r.disabled_at.is_some(),
         }))
     }

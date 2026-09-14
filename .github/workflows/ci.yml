@@ -246,6 +246,39 @@ jobs:
           cp "$RUNNER_TEMP/extract.bak" "$F"
           echo "ok: defaulting an absent role fails the suite"
 
+      # Login must cost the same whether or not the address exists. Short-circuiting
+      # the absent-user path skips Argon2 and turns the response time into an
+      # account-enumeration oracle. The first version of that test used a fixed
+      # threshold and passed with the short-circuit in place; it compares the two paths
+      # now, and this proves it.
+      - name: The login timing test fails when the absent-user path short-circuits
+        run: |
+          F=crates/uops-api/src/routes/auth.rs
+          cp "$F" "$RUNNER_TEMP/auth.bak"
+          python3 - "$F" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path, encoding="utf-8").read()
+          marker = "    let found = state.store.user_credentials_by_email(email).await?;"
+          assert marker in src, "the mutation target moved"
+          src = src.replace(
+              marker,
+              marker + "
+    if found.is_none() {
+        return Err(ApiError::Unauthenticated);
+    }",
+              1,
+          )
+          open(path, "w", encoding="utf-8").write(src)
+          PY
+          if cargo test -p uops-api --test auth_routes > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/auth.bak" "$F"
+            echo "::error::the login timing test passed with the absent-user path short-circuited"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/auth.bak" "$F"
+          echo "ok: short-circuiting the absent-user path fails the suite"
+
       # Guards the refusal that protects an unattended upgrade: an applied migration
       # that has been edited must stop the run rather than be silently skipped.
       - name: An edited applied migration is refused

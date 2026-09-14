@@ -32,11 +32,10 @@ use axum::http::request::Parts;
 use uops_core::{ActorId, Role, SessionId, TenantId, TenantScope};
 use uops_secrets::session;
 
+use crate::cookie::{self, SESSION_COOKIE};
 use crate::error::ApiError;
 use crate::state::AppState;
 
-/// The cookie the browser sends back.
-pub const SESSION_COOKIE: &str = "uops_session";
 /// Which tenant this request is about.
 pub const TENANT_HEADER: &str = "x-uops-tenant";
 
@@ -109,7 +108,7 @@ impl FromRequestParts<AppState> for Caller {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let token = session_cookie(parts).ok_or(ApiError::Unauthenticated)?;
+        let token = cookie::read(parts, SESSION_COOKIE).ok_or(ApiError::Unauthenticated)?;
 
         // Expiry, revocation, the absolute cap and the account being disabled are all
         // decided here, in one statement, which also slides the idle window.
@@ -159,7 +158,7 @@ impl FromRequestParts<AppState> for Authenticated {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let token = session_cookie(parts).ok_or(ApiError::Unauthenticated)?;
+        let token = cookie::read(parts, SESSION_COOKIE).ok_or(ApiError::Unauthenticated)?;
         let live = state
             .store
             .touch_session(&session::hash_of(&token))
@@ -172,25 +171,6 @@ impl FromRequestParts<AppState> for Authenticated {
             org_id: live.org_id,
         })
     }
-}
-
-/// Pull one cookie out of the `Cookie` header.
-///
-/// Hand-written rather than pulling in a cookie crate: this reads one value from a
-/// header whose grammar is `name=value; name=value`, and the parsing that a library
-/// would add — attributes, encoding, jars — is for *setting* cookies, which the login
-/// handler does with a single formatted string.
-fn session_cookie(parts: &Parts) -> Option<String> {
-    let header = parts
-        .headers
-        .get(axum::http::header::COOKIE)?
-        .to_str()
-        .ok()?;
-
-    header.split(';').find_map(|pair| {
-        let (name, value) = pair.split_once('=')?;
-        (name.trim() == SESSION_COOKIE).then(|| value.trim().to_owned())
-    })
 }
 
 fn tenant_header(parts: &Parts) -> Result<TenantId, ApiError> {
@@ -223,28 +203,6 @@ mod tests {
             builder = builder.header(TENANT_HEADER, HeaderValue::from_str(t).unwrap());
         }
         builder.body(()).unwrap().into_parts().0
-    }
-
-    #[test]
-    fn the_session_cookie_is_found_among_others() {
-        // Browsers send everything for the origin, in any order, with inconsistent
-        // spacing. Matching on a prefix or taking the first pair would break on all of
-        // it — and break as "not logged in", which is a confusing way to fail.
-        let parts = parts_with(Some("theme=dark; uops_session=abc123 ; other=x"), None);
-        assert_eq!(session_cookie(&parts).as_deref(), Some("abc123"));
-    }
-
-    #[test]
-    fn a_similarly_named_cookie_is_not_the_session() {
-        let parts = parts_with(Some("uops_session_backup=abc; not_uops_session=def"), None);
-        assert_eq!(session_cookie(&parts), None);
-    }
-
-    #[test]
-    fn no_cookie_header_is_simply_absent() {
-        assert_eq!(session_cookie(&parts_with(None, None)), None);
-        assert_eq!(session_cookie(&parts_with(Some(""), None)), None);
-        assert_eq!(session_cookie(&parts_with(Some("garbage"), None)), None);
     }
 
     #[test]

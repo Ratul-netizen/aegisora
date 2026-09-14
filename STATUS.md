@@ -42,7 +42,8 @@ PostgreSQL.
 | **M1 · `uops-identity`** | ✅ Done — 24 tests on the rules, 11 more against PostgreSQL |
 | **M1 · auth foundations** | ✅ Done — passwords, session tokens, roles, 18 tests |
 | **M1 · `uops-api` scope extractor** | ✅ Done — 24 tests, mutation-guarded in CI |
-| M1 · auth routes, resource routes, audit middleware | ⬜ **Next** |
+| **M1 · auth routes** | ✅ Done — login/logout/me, CSRF, 22 tests |
+| M1 · resource + query routes, audit middleware | ⬜ **Next** |
 | M1 · web shell | ⬜ |
 | M2–M4 | ⬜ |
 
@@ -50,7 +51,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 280 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 302 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -207,6 +208,9 @@ crates/uops-store-pg/src/auth.rs     users, roles, sessions; one statement per r
 crates/uops-api/
 ├── extract.rs    THE file: the only caller of TenantScope::from_authenticated
 ├── error.rs      RFC 7807. A tenant you cannot see is 404, never 403
+├── cookie.rs     session cookie HttpOnly, CSRF cookie deliberately not
+├── csrf.rs       double-submit; the header an attacker's page cannot produce
+├── routes/auth.rs  login must cost the same whether or not the address exists
 └── state.rs      what every handler is given
 
 crates/uops-store-pg/src/identity.rs

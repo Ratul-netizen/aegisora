@@ -49,7 +49,9 @@ pub mod page;
 pub mod resource;
 pub mod store;
 
-pub use auth::{ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, UserCredentials};
+pub use auth::{
+    ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, UserCredentials, UserProfile,
+};
 pub use catalog::PgCatalog;
 pub use page::{Cursor, DEFAULT_PAGE, MAX_PAGE, Page};
 pub use resource::{NewResource, ResourceFilter};
