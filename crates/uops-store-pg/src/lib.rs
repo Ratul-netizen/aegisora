@@ -40,6 +40,7 @@
 //! # }
 //! ```
 
+pub mod audit;
 pub mod auth;
 pub mod catalog;
 mod enforced;
@@ -49,6 +50,7 @@ pub mod page;
 pub mod resource;
 pub mod store;
 
+pub use audit::{AccessEntry, AuditEntry};
 pub use auth::{
     ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, UserCredentials, UserProfile,
 };

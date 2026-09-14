@@ -43,7 +43,9 @@ PostgreSQL.
 | **M1 · auth foundations** | ✅ Done — passwords, session tokens, roles, 18 tests |
 | **M1 · `uops-api` scope extractor** | ✅ Done — 24 tests, mutation-guarded in CI |
 | **M1 · auth routes** | ✅ Done — login/logout/me, CSRF, 22 tests |
-| M1 · resource + query routes, audit middleware | ⬜ **Next** |
+| **M1 · resource routes + audit trail** | ✅ Done — 14 tests |
+| M1 · `uops-store-ch`, then `POST /query` | ⬜ **Next** |
+| M1 · first-run admin, web shell | ⬜ |
 | M1 · web shell | ⬜ |
 | M2–M4 | ⬜ |
 
@@ -51,7 +53,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 302 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 318 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -210,7 +212,9 @@ crates/uops-api/
 ├── error.rs      RFC 7807. A tenant you cannot see is 404, never 403
 ├── cookie.rs     session cookie HttpOnly, CSRF cookie deliberately not
 ├── csrf.rs       double-submit; the header an attacker's page cannot produce
+├── audit.rs      the trail hangs off the SCOPE extractor, not a list of routes
 ├── routes/auth.rs  login must cost the same whether or not the address exists
+├── routes/resources.rs  thin: roles in, repository out, audit recorded
 └── state.rs      what every handler is given
 
 crates/uops-store-pg/src/identity.rs
@@ -262,6 +266,18 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The audit hook hangs off the scope extractor, not a list of routes.** SPEC says
+"middleware over the query and resource routes", and a layer wrapped around a chosen list
+has one failure mode: someone adds a twenty-first route and forgets it. Attaching the
+hook to `Caller` — the only way to obtain a `TenantScope`, and therefore the only way to
+reach tenant data — means authorisation and auditing share a chokepoint. A handler cannot
+read a customer's data without having already been attributed.
+
+**`POST /query` is deliberately not built yet.** Compiling a `Query` to ClickHouse SQL
+works and is golden-tested, but nothing executes it: that needs the ClickHouse client,
+which is its own piece of work. An endpoint that compiled a query and returned nothing
+would be worse than no endpoint.
 
 **The tenant is a request header, not a path segment.** `/api/v1/resources` with
 `X-Uops-Tenant`, rather than `/api/v1/tenants/{id}/resources`. An MSP engineer's session

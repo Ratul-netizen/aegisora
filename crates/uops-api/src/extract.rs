@@ -32,6 +32,7 @@ use axum::http::request::Parts;
 use uops_core::{ActorId, Role, SessionId, TenantId, TenantScope};
 use uops_secrets::session;
 
+use crate::audit::{Audit, Recorder};
 use crate::cookie::{self, SESSION_COOKIE};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -49,6 +50,10 @@ pub struct Caller {
     role: Role,
     user_id: ActorId,
     session_id: SessionId,
+    /// Where this request records what it read or changed. Handed out by the extractor
+    /// rather than extracted separately, so a handler holding a scope always has
+    /// somewhere to record — see [`crate::audit`].
+    audit: Audit,
 }
 
 impl Caller {
@@ -76,6 +81,12 @@ impl Caller {
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    /// Where to record what this request read or changed.
+    #[must_use]
+    pub const fn audit(&self) -> &Audit {
+        &self.audit
     }
 
     /// For the audit and access logs: `user:<uuid>`.
@@ -129,11 +140,24 @@ impl FromRequestParts<AppState> for Caller {
             .await?
             .ok_or(ApiError::NotFound)?;
 
+        let scope = TenantScope::from_authenticated(tenant, live.user_id);
+
+        // Registering here is what makes auditing unavoidable: this is the only way to
+        // obtain a scope, so every handler that can read tenant data has already been
+        // attributed by the time it runs. See crate::audit.
+        let recorder = parts
+            .extensions
+            .get::<Recorder>()
+            .cloned()
+            .unwrap_or_default();
+        recorder.set_context(tenant, scope.actor().as_audit_str());
+
         Ok(Self {
-            scope: TenantScope::from_authenticated(tenant, live.user_id),
+            scope,
             role,
             user_id: live.user_id,
             session_id: live.session_id,
+            audit: Audit::new(recorder),
         })
     }
 }
@@ -237,6 +261,7 @@ mod tests {
             role,
             user_id: ActorId::new(),
             session_id: SessionId::new(),
+            audit: Audit::default(),
         };
 
         assert!(caller(Role::Admin).require(Role::Operator).is_ok());
@@ -254,6 +279,7 @@ mod tests {
             role: Role::Viewer,
             user_id: ActorId::new(),
             session_id: SessionId::new(),
+            audit: Audit::default(),
         };
         let err = viewer.require(Role::Admin).unwrap_err();
         assert!(err.to_string().contains("admin"), "{err}");

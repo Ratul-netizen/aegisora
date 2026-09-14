@@ -279,6 +279,26 @@ jobs:
           cp "$RUNNER_TEMP/auth.bak" "$F"
           echo "ok: short-circuiting the absent-user path fails the suite"
 
+      # The audit trail is attached to the scope extractor rather than to a list of
+      # routes, so that a new route cannot be added without it. This proves the trail
+      # actually depends on that registration.
+      - name: The audit tests fail when the scope stops registering
+        run: |
+          F=crates/uops-api/src/extract.rs
+          cp "$F" "$RUNNER_TEMP/extract-audit.bak"
+          sed -i 's/^        recorder.set_context(tenant, scope.actor().as_audit_str());$//' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-api --test resources > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/extract-audit.bak" "$F"
+            echo "::error::the audit tests passed with the registration removed"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/extract-audit.bak" "$F"
+          echo "ok: an unregistered scope fails the audit suite"
+
       # Guards the refusal that protects an unattended upgrade: an applied migration
       # that has been edited must stop the run rather than be silently skipped.
       - name: An edited applied migration is refused

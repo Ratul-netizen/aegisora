@@ -1,20 +1,41 @@
 //! The route table.
+//!
+//! Assembled in one place so the surface reads as a list rather than being discovered by
+//! grepping for attributes. SPEC §M1 has the full intended surface; this is what exists.
+//!
+//! `POST /api/v1/query` is deliberately absent. Compiling a `Query` to `ClickHouse`
+//! SQL works and is golden-tested, but nothing executes it yet — that needs the
+//! `ClickHouse` client, which is its own piece of work. An endpoint that compiled a
+//! query and returned nothing would be worse than no endpoint.
 
 pub mod auth;
+pub mod resources;
 
-use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post};
+use axum::{Router, middleware};
 
+use crate::audit;
 use crate::state::AppState;
 
 /// Everything under `/api/v1`.
-///
-/// Assembled in one place so the surface is readable as a list rather than discovered by
-/// grepping for `#[route]`. SPEC §M1 has the full intended surface; this is what exists.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/auth/login", post(auth::login))
         .route("/api/v1/auth/logout", post(auth::logout))
         .route("/api/v1/me", get(auth::me))
+        .route(
+            "/api/v1/resources",
+            get(resources::list).post(resources::create),
+        )
+        .route("/api/v1/resources/{id}", get(resources::get))
+        .route("/api/v1/resources/{id}", delete(resources::decommission))
+        .route(
+            "/api/v1/resources/{id}/status",
+            patch(resources::set_status),
+        )
+        // Wrapped around everything rather than a chosen list of routes: a request that
+        // never establishes a scope leaves nothing to record and is skipped, so this
+        // cannot be forgotten when a route is added. See crate::audit.
+        .layer(middleware::from_fn_with_state(state.clone(), audit::layer))
         .with_state(state)
 }

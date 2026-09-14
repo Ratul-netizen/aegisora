@@ -13,6 +13,7 @@
 //! schema makes a row referencing another tenant impossible; this decides that a scope
 //! may exist at all.
 
+pub mod audit;
 pub mod cookie;
 pub mod csrf;
 pub mod error;
@@ -20,6 +21,7 @@ pub mod extract;
 pub mod routes;
 pub mod state;
 
+pub use audit::Audit;
 pub use cookie::{CSRF_COOKIE, SESSION_COOKIE, Secure};
 pub use csrf::{CSRF_HEADER, CsrfChecked};
 pub use error::{ApiError, ApiResult};
