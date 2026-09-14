@@ -40,14 +40,15 @@ PostgreSQL.
 | **M0 acceptance criteria** | ✅ **All met** |
 | **M1 · `uops-store-pg`** | 🟡 resources + catalog done — 19 tests, 8 against a real server |
 | **M1 · `uops-identity`** | ✅ Done — 24 tests on the rules, 11 more against PostgreSQL |
-| M1 · `uops-api` / web | ⬜ |
+| **M1 · auth foundations** | ✅ Done — passwords, session tokens, roles, 18 tests |
+| M1 · `uops-api` HTTP layer / web | ⬜ **Next** |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 234 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 256 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -194,6 +195,12 @@ crates/uops-identity/             M1 — one resource_id per device, whatever it
 ├── cache.rs      (tenant, kind, value) → resource_id. Answers only unambiguous cases
 ├── store.rs      the narrow persistence interface
 └── memory.rs     in-memory store that enforces UNIQUE the way the schema does
+
+migrations/0006_auth.sql           users, roles, sessions, audit_log, access_log
+
+crates/uops-secrets/src/password.rs  argon2id, m=19456 t=2 p=1 — SPEC M0.8
+crates/uops-secrets/src/session.rs   opaque tokens; only the HASH is stored
+crates/uops-store-pg/src/auth.rs     users, roles, sessions; one statement per request
 
 crates/uops-store-pg/src/identity.rs
    IdentityStore over PostgreSQL. Merge and split are one transaction each:

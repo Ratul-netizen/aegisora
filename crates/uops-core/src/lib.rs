@@ -38,7 +38,7 @@ pub use identity::{
     ObservedIdentity, Outcome, OutcomeReason, REVIEW_FLOOR, Resolution, classify,
     combine_confidence,
 };
-pub use ids::{ActorId, CredentialRef, DecisionId, OrgId, ResourceId, SiteId, TenantId};
+pub use ids::{ActorId, CredentialRef, DecisionId, OrgId, ResourceId, SessionId, SiteId, TenantId};
 pub use resource::{Relationship, RelationshipKind, Resource, ResourceKind, ResourceStatus};
-pub use scope::TenantScope;
+pub use scope::{Role, TenantScope};
 pub use secret::{CredentialMaterial, Secret};

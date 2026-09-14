@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE session s\n               SET last_seen_at = now(),\n                   expires_at   = LEAST(now() + $2::interval, s.created_at + $3::interval)\n              FROM app_user u\n             WHERE s.token_hash = $1\n               AND s.user_id = u.id\n               AND s.revoked_at IS NULL\n               AND s.expires_at > now()\n               AND u.disabled_at IS NULL\n            RETURNING s.id      AS \"session_id: SessionId\",\n                      s.user_id AS \"user_id: ActorId\",\n                      u.org_id  AS \"org_id: OrgId\",\n                      s.expires_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_id: SessionId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "org_id: OrgId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Interval",
+        "Interval"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d42ecfba24c658415e41eb668b71f4f724dcdb2d9111d526ae79930659acfce4"
+}

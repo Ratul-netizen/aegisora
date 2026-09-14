@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT r.role AS \"role: Role\"\n              FROM user_tenant_role r\n              JOIN app_user u ON u.id = r.user_id\n             WHERE r.user_id = $1\n               AND r.tenant_id = $2\n               -- A disabled account keeps its rows so the audit log can name it, and\n               -- loses its access immediately. Checked here rather than only at login,\n               -- because a live session must stop working the moment the account does.\n               AND u.disabled_at IS NULL\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role: Role",
+        "type_info": {
+          "Custom": {
+            "name": "tenant_role",
+            "kind": {
+              "Enum": [
+                "viewer",
+                "operator",
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e4fd4982a8e2c7aa089dc71b450e9253908539bf6f6b72feff08b92b75ce4d3c"
+}

@@ -16,7 +16,57 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{ActorId, TenantId};
+
+/// What a user may do within one tenant — SPEC §M1 RBAC.
+///
+/// Three, and resist adding more until a customer asks. The role is per
+/// `(user, tenant)`, so one MSP engineer is admin on one customer and viewer on another
+/// with a single account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "tenant_role", rename_all = "snake_case")
+)]
+pub enum Role {
+    /// Read resources, telemetry and dashboards.
+    Viewer,
+    /// Also acknowledge alerts, resolve identity review, edit resources and rules.
+    Operator,
+    /// Also manage credentials, users, roles and tenants, and read the audit log.
+    Admin,
+}
+
+impl Role {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Viewer => "viewer",
+            Self::Operator => "operator",
+            Self::Admin => "admin",
+        }
+    }
+
+    /// Whether this role includes everything `needed` allows.
+    ///
+    /// The roles are ordered, which is why this is a comparison rather than a matrix.
+    /// If a future role stops being a superset of the one below it, this becomes a
+    /// lookup table and the `Ord` derive comes off.
+    #[must_use]
+    pub fn allows(self, needed: Self) -> bool {
+        self >= needed
+    }
+
+    /// Managing credentials, users and roles, and reading the audit log.
+    #[must_use]
+    pub fn is_admin(self) -> bool {
+        self == Self::Admin
+    }
+}
 
 /// Who is acting. Recorded on every audit and access-log row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

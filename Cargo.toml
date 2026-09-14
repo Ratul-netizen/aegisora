@@ -72,6 +72,7 @@ lru = "0.12"
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }
+uops-secrets = { path = "crates/uops-secrets" }
 uops-identity = { path = "crates/uops-identity" }
 uops-store-pg = { path = "crates/uops-store-pg" }
 

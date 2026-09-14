@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 uops-core = { workspace = true, features = ["sqlx"] }
 uops-identity.workspace = true
+uops-secrets.workspace = true
 uops-query.workspace = true
 async-trait.workspace = true
 chrono.workspace = true

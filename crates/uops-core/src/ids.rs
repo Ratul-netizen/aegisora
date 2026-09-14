@@ -130,6 +130,10 @@ id_type!(
     /// A human or service account.
     ActorId
 );
+id_type!(
+    /// One login session. Distinct from the token, which is never stored.
+    SessionId
+);
 
 #[cfg(test)]
 mod tests {

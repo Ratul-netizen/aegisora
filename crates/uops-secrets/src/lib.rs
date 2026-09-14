@@ -55,8 +55,10 @@ pub mod audit;
 pub mod error;
 pub mod kek;
 pub mod memory;
+pub mod password;
 pub mod record;
 pub mod serialize;
+pub mod session;
 pub mod vault;
 
 pub use aead::{AeadProvider, KEY_LEN, Key, NONCE_LEN, Nonce, default_provider};
@@ -64,7 +66,9 @@ pub use audit::{AccessContext, AccessLog, AccessOutcome, AccessRecord, MemoryAcc
 pub use error::{Error, Result};
 pub use kek::KekRing;
 pub use memory::MemorySealedStore;
+pub use password::PasswordHashString;
 pub use record::{CredentialMeta, KeyId, RotationReport, SealedCredential};
+pub use session::{SessionToken, SessionTokenHash};
 pub use vault::{LocalVault, SealedStore};
 
 #[cfg(feature = "crypto-rustcrypto")]

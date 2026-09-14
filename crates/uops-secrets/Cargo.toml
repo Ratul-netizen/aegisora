@@ -29,6 +29,12 @@ zeroize.workspace = true
 getrandom.workspace = true
 
 aes-gcm = { workspace = true, optional = true }
+# Password hashing lives in this crate because CI forbids a KDF outside it. That guard
+# exists so the crypto a deployment actually runs is auditable in one place.
+argon2.workspace = true
+# SHA-256 for session-token hashing. Not a KDF: the token is 256 bits of CSPRNG
+# output, so there is no low-entropy secret to make expensive — see session.rs.
+sha2.workspace = true
 
 [lints]
 workspace = true
