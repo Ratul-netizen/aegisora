@@ -75,10 +75,17 @@ jobs:
       # SPEC M0.4: Secret<T> cannot be Display or Serialize, so the remaining way to
       # leak material is to call .expose() inside a formatting or logging macro. That
       # is a deliberate act and therefore greppable.
+      #
+      # The second grep drops comment lines, for the same reason as the crypto guard
+      # below: prose about the rule is not a violation of it, and a guard that also
+      # forbids writing down the reasoning teaches people to delete the reasoning.
       - name: No .expose() inside logging or formatting macros
         run: |
-          if grep -rnE '(println!|eprintln!|format!|write!|writeln!|trace!|debug!|info!|warn!|error!|json!)[^;]*\.expose\(\)' \
-               --include='*.rs' crates/ ; then
+          hits=$(grep -rnE '(println!|eprintln!|format!|write!|writeln!|trace!|debug!|info!|warn!|error!|json!)[^;]*\.expose\(\)' \
+                   --include='*.rs' crates/ \
+                 | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
             echo "::error::credential material reachable from a logging or formatting macro"
             exit 1
           fi

@@ -102,7 +102,14 @@ mod tests {
     fn a_password_cannot_be_printed_by_accident() {
         // It is shown once, deliberately, by the first-run path. Everywhere else it is
         // a credential, and Secret<T> is not Display or Serialize.
+        //
+        // The debug output is bound before it is compared rather than formatted and
+        // searched in one expression. The CI guard that forbids exposing a secret
+        // inside a formatting macro reads a line at a time and cannot tell a secret
+        // being printed from one being compared against — and between rearranging one
+        // test and blunting a guard that covers every crate, the test gives way.
         let p = password().unwrap();
-        assert!(!format!("{p:?}").contains(p.expose()));
+        let debug = format!("{p:?}");
+        assert!(!debug.contains(p.expose()));
     }
 }
