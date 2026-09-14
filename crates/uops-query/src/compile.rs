@@ -434,10 +434,16 @@ impl Cx {
 
         match mode {
             TextMode::AnyToken | TextMode::AllToken => {
+                // VERIFIED against the running server, not against documentation.
+                // `searchAny`/`searchAll` — the names this compiler emitted first, and
+                // the ones the beta announcements used — do not exist in 26.8:
+                // "Function with name `searchAll` does not exist (UNKNOWN_FUNCTION)".
+                // Caught by running the golden files against a real schema; every unit
+                // test on both sides passed the whole time.
                 let f = if mode == TextMode::AnyToken {
-                    "searchAny(body, ["
+                    "hasAnyTokens(body, ["
                 } else {
-                    "searchAll(body, ["
+                    "hasAllTokens(body, ["
                 };
                 self.b.push(f);
                 self.terms(terms);
@@ -463,7 +469,7 @@ impl Cx {
                 let tokens = tokenize(&phrase);
                 self.b.push("(");
                 if !tokens.is_empty() {
-                    self.b.push("searchAll(body, [");
+                    self.b.push("hasAllTokens(body, [");
                     self.terms(&tokens);
                     self.b.push("]) AND ");
                 }

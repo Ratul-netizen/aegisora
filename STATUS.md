@@ -16,7 +16,8 @@ control plane and ClickHouse for telemetry, OpenTelemetry Collector instead of a
 agent. Both on-premise and hosted are first-class; buyers are unrestricted, including
 government and defence, which is why on-prem is not a downgrade. The W1 storage
 benchmark is **complete and validated the architecture**. M0 is under way: the workspace,
-CI, `uops-core`, `uops-secrets`, `uops-query` and the PostgreSQL schema are done.
+CI, `uops-core`, `uops-secrets`, `uops-query` and both database schemas are done.
+`uops-bus` is the last M0 item.
 
 ---
 
@@ -32,7 +33,7 @@ CI, `uops-core`, `uops-secrets`, `uops-query` and the PostgreSQL schema are done
 | **M0 · `uops-secrets`** | ✅ Done — 33 tests |
 | **M0 · `uops-query`** | ✅ Done — 48 tests, 12 golden fixtures |
 | **M0 · PostgreSQL migrations** | ✅ Done — 5 migrations, 22 asserted invariants |
-| M0 · ClickHouse migration runner | ⬜ |
+| **M0 · ClickHouse migration runner** | ✅ Done — 34 tests, applied against 26.8 |
 | M0 · `uops-bus` | ⬜ |
 | M1–M4 | ⬜ |
 
@@ -40,7 +41,7 @@ CI, `uops-core`, `uops-secrets`, `uops-query` and the PostgreSQL schema are done
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 115 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 149 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -150,6 +151,23 @@ migrations/                       PostgreSQL control plane — SPEC M0.1/M0.2/M0
 ├── 0004_identity.sql     identifiers, decisions, aliases that collapse on write
 ├── 0005_credentials.sql  sealed credentials + access log that outlives them
 └── tests/invariants.sql  the properties the schema exists for, asserted in SQL
+
+ch-migrations/                    ClickHouse telemetry schema — SPEC M0.6 + W1
+├── 0001_logs.sql          logs, text index, materialised semconv columns
+├── 0002_..._projection    p_by_time — W1 FIX 1, the tail (2 303 ms → 72 ms)
+├── 0003_logs_counts_5m    the Explorer histogram — W1 FIX 2
+├── 0004_metrics.sql       metrics + the 5m rollup
+├── 0005_metrics_1h.sql    the hourly rollup uops-query already plans onto
+├── 0006_events_states     events, state transitions
+└── deferred/              traces and flows: declared, created in M7/M8
+
+crates/uops-ch-migrate/           versioned · idempotent · resumable
+├── statement.rs  splits files properly — ClickHouse takes ONE statement per request
+├── migration.rs  load + checksum; deferred/ is not part of the applied set
+├── plan.rs       pure: resume point, and four refusals decided before anything is sent
+├── ledger.rs     ReplacingMergeTree + FINAL — ClickHouse has no unique constraint
+├── runner.rs     applies, recording EVERY statement as it lands
+└── http.rs       the whole protocol: one POST per statement
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -169,12 +187,10 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **ClickHouse migration runner** — versioned, idempotent, resumable. On-prem customers
-   upgrade unattended across multiple versions; a folder of hand-applied SQL will not survive.
-2. **`uops-bus`** — `TelemetryBus` trait + `InProcess` impl + a conformance suite that both
+1. **`uops-bus`** — `TelemetryBus` trait + `InProcess` impl + a conformance suite that both
    implementations run.
 
-Then M1. Four of six M0 items are done; realistic M0 completion is 1–3 weeks from here.
+Then M1. Five of six M0 items are done; `uops-bus` is the last, and it is the smallest.
 
 **Do not start yet:** the frontend, or any collector. Both are more fun than schema work
 and both need rewriting if the resource model shifts.
@@ -190,9 +206,17 @@ and both need rewriting if the resource model shifts.
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |
 | Metrics + rollup ingest cost | M4, not M0 | The one W1 measurement not run |
-| `metrics_1h` is emitted but not in the DDL | ClickHouse migration runner | `uops-query` plans onto it for windows past 30 days, per the raw→5m→1h rollup rule in SPEC §M0.6. The table itself still has to be created — a golden fixture already names it |
+| **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**`searchAll()` and `searchAny()` do not exist.** `uops-query` was emitting them for
+token search — the names the text-index beta announcements used. ClickHouse 26.8 answers
+`Function with name 'searchAll' does not exist (UNKNOWN_FUNCTION)`. The real functions
+are **`hasAllTokens()`** and **`hasAnyTokens()`**, now emitted and verified against a
+running server. Every unit test on both sides passed the whole time this was wrong;
+`scripts/ch.sh verify` — which runs uops-query's golden SQL against the live schema — is
+what caught it, and is now a CI job.
 
 **Alias chain depth (was open in SPEC §M0.2): collapse on write.** A trigger in
 `0004_identity.sql` rewrites A→B to A→C when B→C is created. Merges are rare and reads
@@ -203,6 +227,9 @@ the database because that is only true if *every* writer collapses, including a 
 fixing something by hand.
 
 ## Housekeeping
+
+ClickHouse is pinned to **26.8** in `deploy/docker-compose.yml` and in CI, matching the
+version W1 was measured on. `bash scripts/ch.sh apply|verify|smoke|reset`.
 
 The PostgreSQL dev database lives in a Docker volume:
 `docker compose -f deploy/docker-compose.yml up -d`, then `bash scripts/db.sh migrate`

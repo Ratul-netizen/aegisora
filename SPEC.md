@@ -564,8 +564,8 @@ pub enum Expr {
 }
 
 pub enum TextMode {
-    AnyToken,      // index-accelerated  → searchAny()
-    AllToken,      // index-accelerated  → searchAll()
+    AnyToken,      // index-accelerated  → hasAnyTokens()
+    AllToken,      // index-accelerated  → hasAllTokens()
     Substring,     // n-gram index if declared, else scan
     Phrase,        // NOT index-accelerated — narrows granules then scans. Warn in UI.
 }

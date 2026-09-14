@@ -34,6 +34,14 @@ argon2 = "0.5"
 getrandom = "0.3"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 
+# --- schema migrations (M0.6) ---------------------------------------------------
+# SHA-256 here is integrity, not secrecy: it detects an edited migration that has
+# already been applied. It is deliberately not routed through uops-secrets, which owns
+# the primitives whose misuse would leak credentials.
+sha2 = "0.10"
+# default-features off: no TLS. See crates/uops-ch-migrate/Cargo.toml for why.
+ureq = { version = "3", default-features = false }
+
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }

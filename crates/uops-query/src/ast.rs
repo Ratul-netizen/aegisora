@@ -223,9 +223,9 @@ pub enum Value {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextMode {
-    /// `searchAny()` — index-accelerated.
+    /// `hasAnyTokens()` — index-accelerated.
     AnyToken,
-    /// `searchAll()` — index-accelerated.
+    /// `hasAllTokens()` — index-accelerated.
     AllToken,
     /// Scan. Not index-accelerated, whatever the setting names suggest.
     Substring,

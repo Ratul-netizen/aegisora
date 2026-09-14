@@ -43,7 +43,7 @@
 //!
 //! assert!(out.sql.text().starts_with("SELECT tenant_id, resource_id"));
 //! assert!(out.sql.text().contains("WHERE tenant_id = {p0:UUID}"));
-//! assert!(out.sql.text().contains("searchAll(body, [{p3:String}, {p4:String}])"));
+//! assert!(out.sql.text().contains("hasAllTokens(body, [{p3:String}, {p4:String}])"));
 //! ```
 
 pub mod ast;
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn phrase_search_prunes_with_the_same_tokenizer_the_index_uses() {
         // The DDL says `tokenizer = 'splitByNonAlpha'`. If these tokens are produced
-        // any other way, searchAll() prunes granules that do contain the phrase and
+        // any other way, hasAllTokens() prunes granules that do contain the phrase and
         // the search silently misses rows — the worst kind of bug this crate can ship.
         let s = scope();
         let q = Query::new(SignalType::Log, window()).with_filter(Expr::Text {
@@ -348,7 +348,7 @@ mod tests {
         for token in ["LINK", "3", "UPDOWN", "changed", "state"] {
             assert!(bound.contains(&token), "missing token {token}: {bound:?}");
         }
-        assert!(out.sql.text().contains("searchAll(body, ["));
+        assert!(out.sql.text().contains("hasAllTokens(body, ["));
         assert!(out.sql.text().contains("positionCaseInsensitive(body, "));
     }
 

@@ -123,6 +123,74 @@ jobs:
           fi
           echo "ok: removing the constraint fails the suite"
 
+  clickhouse-schema:
+    name: ch-migrations · runner · codegen agreement
+    runs-on: ubuntu-latest
+
+    services:
+      clickhouse:
+        # Pinned to the version W1 was measured on. The text index reached GA in 26.x
+        # and its function names moved during the beta — see the searchAll() note in
+        # uops-query's compile.rs.
+        image: clickhouse/clickhouse-server:26.8-alpine
+        env:
+          CLICKHOUSE_DB: uops
+          CLICKHOUSE_USER: uops
+          CLICKHOUSE_PASSWORD: uops
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "clickhouse-client --user uops --password uops --query 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      CLICKHOUSE_URL: http://localhost:8123
+      CLICKHOUSE_DB: uops
+      CLICKHOUSE_USER: uops
+      CLICKHOUSE_PASSWORD: uops
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Apply migrations
+        run: bash scripts/ch.sh apply
+
+      # On-premise customers upgrade unattended and restart often. A second run must
+      # apply nothing at all.
+      - name: Re-running applies nothing
+        run: |
+          OUT="$(bash scripts/ch.sh apply)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "schema is up to date" || {
+            echo "::error::the runner did not recognise an up-to-date schema"
+            exit 1
+          }
+
+      # The check nothing else performs: uops-query's golden SQL against the schema
+      # ch-migrations actually creates. Unit tests on both sides pass while they drift.
+      - name: Query codegen matches the schema
+        run: bash scripts/ch.sh verify
+
+      # Materialised views, materialised columns and the text index, asserted on real
+      # rows rather than on the DDL text.
+      - name: Schema behaviour
+        run: bash scripts/ch.sh smoke
+
+      # Guards the refusal that protects an unattended upgrade: an applied migration
+      # that has been edited must stop the run rather than be silently skipped.
+      - name: An edited applied migration is refused
+        run: |
+          echo "-- appended by CI to simulate an edit" >> ch-migrations/0003_logs_counts_5m.sql
+          if bash scripts/ch.sh apply; then
+            echo "::error::the runner accepted an edited migration that was already applied"
+            exit 1
+          fi
+          echo "ok: editing an applied migration stops the run"
+
   supply-chain:
     name: advisories · licenses · SBOM
     runs-on: ubuntu-latest

@@ -1,10 +1,10 @@
 
-# Development stack. M0 needs PostgreSQL only — ClickHouse arrives with the migration
-# runner, and the server itself once there is a binary to run.
+# Development stack: the two storage engines. The server itself joins once there is a
+# binary to run.
 #
 #     docker compose -f deploy/docker-compose.yml up -d
-#     bash scripts/db.sh migrate
-#     bash scripts/db.sh test
+#     bash scripts/db.sh migrate && bash scripts/db.sh test
+#     cargo run -p uops-ch-migrate -- apply
 #
 # Credentials here are development defaults and are meant to be obvious. A deployment
 # that reaches production with these is a deployment that never read this file.
@@ -32,5 +32,31 @@ services:
       timeout: 3s
       retries: 20
 
+  clickhouse:
+    # Pinned to the version W1 was measured on. The text index reached GA in 26.x and
+    # its syntax moved during the beta, so "whatever is latest" is not a safe default
+    # for a schema that depends on it.
+    image: clickhouse/clickhouse-server:26.8-alpine
+    container_name: uops-dev-ch
+    ports:
+      - "8123:8123"   # HTTP — what the migration runner speaks
+      - "9000:9000"   # native
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    environment:
+      CLICKHOUSE_DB: uops
+      CLICKHOUSE_USER: uops
+      CLICKHOUSE_PASSWORD: uops
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "uops", "--password", "uops",
+             "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
   pg-data:
+  ch-data:

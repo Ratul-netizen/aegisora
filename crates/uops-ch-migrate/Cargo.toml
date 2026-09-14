@@ -1,0 +1,37 @@
+[package]
+name = "uops-ch-migrate"
+description = "Versioned, idempotent, resumable ClickHouse schema migrations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# The planner is pure and needs no I/O. The HTTP executor is what talks to a server,
+# and it is a feature so that a consumer embedding the planner does not inherit an
+# HTTP client it will not use.
+default = ["http"]
+http = ["dep:ureq"]
+
+[dependencies]
+uops-core.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+
+# No TLS features. ClickHouse is reached over a private network in every deployment
+# shape M0 supports, and the TLS-enabled dependency trees for this crate pull licences
+# outside the cargo-deny allow-list (ring/aws-lc: "ISC AND MIT AND OpenSSL"). TLS
+# belongs with the deployment profiles that also configure storage policies and
+# certificates; `Executor` is the seam it plugs into.
+ureq = { workspace = true, optional = true }
+
+[[bin]]
+name = "uops-ch-migrate"
+path = "src/bin/uops-ch-migrate.rs"
+required-features = ["http"]
+
+[lints]
+workspace = true
