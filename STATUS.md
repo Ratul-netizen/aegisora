@@ -39,14 +39,15 @@ PostgreSQL.
 | **M0 · `uops-bus`** | ✅ Done — 18 tests + an 11-case conformance suite |
 | **M0 acceptance criteria** | ✅ **All met** |
 | **M1 · `uops-store-pg`** | 🟡 resources + catalog done — 19 tests, 8 against a real server |
-| M1 · `uops-identity` / `uops-api` / web | ⬜ |
+| **M1 · `uops-identity`** | 🟡 rules + cache + merge/split done — 24 tests. `PgIdentityStore` next |
+| M1 · `uops-api` / web | ⬜ |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 197 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 221 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -187,6 +188,12 @@ crates/uops-store-pg/             M1 — the control plane over PostgreSQL
 ├── catalog.rs    ResourceCatalog over Postgres — alias collapse, topology walk
 ├── page.rs       keyset pagination on UUIDv7 ids. Never OFFSET
 └── enforced.rs   reads this crate's OWN source: no query without a tenant predicate
+
+crates/uops-identity/             M1 — one resource_id per device, whatever it is called
+├── resolver.rs   the service around uops-core's rules: ordering, writes, merge/split
+├── cache.rs      (tenant, kind, value) → resource_id. Answers only unambiguous cases
+├── store.rs      the narrow persistence interface
+└── memory.rs     in-memory store that enforces UNIQUE the way the schema does
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -233,6 +240,20 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**A repeated review reuses its provisional resource.** SPEC §M0.2 gives the outcome bands
+but does not say what happens on the *second* identical observation — and a device sends
+thousands of messages an hour. The first implementation minted a provisional resource and
+a queue item per message. Reviews are now deduplicated by observed identifier set, so one
+unanswered question is one queue item, and telemetry keeps landing somewhere stable.
+
+**Two sources discovering the same device usually produce one review item.** Worth
+knowing before it surprises someone in a demo. A hostname match alone is 0.65, and
+hostname + mgmt_ip is 0.93 — both below the 0.95 auto-merge bar, which SPEC chose
+deliberately. Automatic joining needs a shared tier-1 identifier (serial, chassis ID,
+SNMP engine ID, OTel host ID) or enough weaker ones to clear 0.95. That is the
+conservative side to err on: a wrong merge silently corrupts every correlation
+downstream, a queue item costs ten seconds.
 
 **`ResourceCatalog` is async now.** It was synchronous in M0 because compilation is pure
 and nothing implemented it yet. Every real implementation is a database — the PostgreSQL

@@ -63,9 +63,16 @@ sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio", "postgres", "uuid", "chrono", "json", "macros", "migrate",
 ] }
 
+# --- identity (M1) --------------------------------------------------------------
+# A syslog receiver at 50k msg/s cannot hit PostgreSQL per message (SPEC M0.2), so
+# resolution is cache-first. Hand-rolling an LRU is eighty lines of pointer surgery
+# for a solved problem.
+lru = "0.12"
+
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }
+uops-identity = { path = "crates/uops-identity" }
 uops-store-pg = { path = "crates/uops-store-pg" }
 
 [workspace.lints.rust]
