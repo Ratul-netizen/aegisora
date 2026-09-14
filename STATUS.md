@@ -245,14 +245,33 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **M1 — core platform.** PostgreSQL + ClickHouse wired behind an Axum API, React
-   shell, authentication, RBAC, resource inventory, and the identity resolution service
-   running against the rules `uops-core` already implements and tests.
+1. **`POST /api/v1/query`** — small, and it closes the loop the architecture was built
+   around: a `Query` arrives as JSON, the selector resolves against PostgreSQL through
+   `PgCatalog`, `compile` writes the SQL with the tenant predicate from the scope,
+   `ChStore` executes it, and the access log records the query's *shape* and row count.
+   Every piece exists and is tested. Two decisions to make: `ChStore` joins `AppState`
+   (which ripples into the existing test fixtures), and a query needs `Viewer` per the
+   RBAC table in SPEC §M1.
+2. **First-run admin credential** — generated, printed once, never stored in plaintext.
+   Small, and an M1 acceptance criterion.
+3. **The web shell** — React + Vite, TanStack Query and Router, the tenant switcher, and
+   the global time-range picker that is shared state across every view. The largest
+   remaining piece and the only one with no Rust in it.
+4. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
+   against tenant B, "verified by an integration test, not by inspection". Writable once
+   the surface is complete; the per-endpoint halves of it already exist.
 
-The M0 foundation is what M1 gets to assume: a resource model the database itself keeps
-tenant-clean, a query compiler that cannot emit SQL without a tenant, credentials that
-are sealed before they are stored, two schemas with runners that survive an unattended
-upgrade, and a bus boundary that makes NATS a wiring change.
+## How to pick this up
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhouse
+bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
+bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 343, all green
+```
+
+The integration tests need both containers. The unit tests do not, and the workspace
+builds with no database at all — `.sqlx/` holds the recorded query metadata.
 
 **The resource model is now settled** — it is in PostgreSQL, in `uops-core`, and in the
 ClickHouse sort key. The frontend and the collectors were held back until it was, and
