@@ -13,6 +13,11 @@ rust-version = "1.98"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Ratul-netizen/aegisora"
 authors = ["Ratul-netizen"]
+# These crates are the inside of one server, not a library anyone installs. They depend
+# on each other by path, which crates.io does not accept, so publishing one could only
+# ever produce a broken package. Saying so here makes `cargo publish` refuse, and lets
+# cargo-deny tell a path dependency apart from an unpinned crates.io "*".
+publish = false
 
 [workspace.dependencies]
 # --- core ---
@@ -67,7 +72,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 # A syslog receiver at 50k msg/s cannot hit PostgreSQL per message (SPEC M0.2), so
 # resolution is cache-first. Hand-rolling an LRU is eighty lines of pointer surgery
 # for a solved problem.
-lru = "0.12"
+lru = "0.18"
 
 # --- HTTP (M1) ------------------------------------------------------------------
 # No TLS in the server: terminate at a reverse proxy. Same licence reasoning as the

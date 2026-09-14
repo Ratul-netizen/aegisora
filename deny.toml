@@ -9,7 +9,12 @@ yanked = "deny"
 
 [bans]
 multiple-versions = "warn"
+# A "*" version on a crates.io dependency means "whatever shipped today", which is the
+# opposite of a reproducible build. A "*" on a path dependency inside this workspace
+# means something else entirely: these crates are unpublished and always built from the
+# tree next to them, so there is no version to pin and nothing to drift.
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [licenses]
 version = 2
@@ -17,6 +22,9 @@ version = 2
 # not with copyleft ones we would have to relicense under. Anything outside this list
 # needs a deliberate decision, not a silent pass.
 allow = [
+    # The project's own licence. Our crates are dependencies of each other, so they are
+    # license-checked alongside everything from crates.io and need to be named here.
+    "AGPL-3.0-only",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",

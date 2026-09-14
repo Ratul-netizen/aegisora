@@ -85,10 +85,18 @@ jobs:
           echo "ok"
 
       # The AeadProvider trait is the only sanctioned path to crypto primitives.
+      #
+      # The second grep drops comment lines. Naming Argon2 in prose is how the login
+      # handler explains why it verifies a decoy hash for a user that does not exist —
+      # the guard is against *calling* the primitive, and a guard that also forbids
+      # writing down the reasoning teaches people to delete the reasoning.
       - name: No direct AEAD or KDF use outside uops-secrets
         run: |
-          if grep -rnE '\b(Aes256Gcm|ChaCha20Poly1305|Argon2|aws_lc_rs)\b' \
-               --include='*.rs' crates/ --exclude-dir=uops-secrets ; then
+          hits=$(grep -rnE '\b(Aes256Gcm|ChaCha20Poly1305|Argon2|aws_lc_rs)\b' \
+                   --include='*.rs' crates/ --exclude-dir=uops-secrets \
+                 | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
             echo "::error::crypto primitive used outside uops-secrets; go through AeadProvider"
             exit 1
           fi
