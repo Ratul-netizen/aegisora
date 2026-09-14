@@ -104,7 +104,7 @@ impl IdentityStore for MemoryIdentityStore {
             .collect())
     }
 
-    async fn create_resource(
+    async fn create_provisional(
         &self,
         tenant: TenantId,
         kind: ResourceKind,
@@ -349,11 +349,11 @@ mod tests {
         let store = MemoryIdentityStore::default();
         let tenant = TenantId::new();
         let first = store
-            .create_resource(tenant, ResourceKind::Device, "a")
+            .create_provisional(tenant, ResourceKind::Device, "a")
             .await
             .unwrap();
         let second = store
-            .create_resource(tenant, ResourceKind::Device, "b")
+            .create_provisional(tenant, ResourceKind::Device, "b")
             .await
             .unwrap();
         let ids = vec![Identifier::new(IdentifierKind::Hostname, "rtr-01")];
@@ -376,11 +376,11 @@ mod tests {
         let store = MemoryIdentityStore::default();
         let tenant = TenantId::new();
         let old = store
-            .create_resource(tenant, ResourceKind::Device, "old")
+            .create_provisional(tenant, ResourceKind::Device, "old")
             .await
             .unwrap();
         let new = store
-            .create_resource(tenant, ResourceKind::Device, "new")
+            .create_provisional(tenant, ResourceKind::Device, "new")
             .await
             .unwrap();
         let ids = vec![Identifier::new(IdentifierKind::MgmtIp, "10.0.0.1")];
@@ -406,7 +406,7 @@ mod tests {
         let ids = vec![Identifier::new(IdentifierKind::Hostname, "rtr-01")];
 
         let r = store
-            .create_resource(mine, ResourceKind::Device, "rtr-01")
+            .create_provisional(mine, ResourceKind::Device, "rtr-01")
             .await
             .unwrap();
         store

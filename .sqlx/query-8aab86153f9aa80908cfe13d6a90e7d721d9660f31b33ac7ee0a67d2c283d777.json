@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT kind AS \"kind: IdentifierKind\", value\n              FROM resource_identifier\n             WHERE tenant_id = $1 AND resource_id = $2\n             ORDER BY kind, value\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind: IdentifierKind",
+        "type_info": {
+          "Custom": {
+            "name": "identifier_kind",
+            "kind": {
+              "Enum": [
+                "chassis_id",
+                "serial",
+                "snmp_engine_id",
+                "otel_host_id",
+                "mac",
+                "mgmt_ip",
+                "flow_exporter",
+                "hostname",
+                "service_name"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "value",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8aab86153f9aa80908cfe13d6a90e7d721d9660f31b33ac7ee0a67d2c283d777"
+}

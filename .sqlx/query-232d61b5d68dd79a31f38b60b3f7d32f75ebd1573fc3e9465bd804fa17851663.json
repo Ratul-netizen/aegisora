@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE resource_identifier ri\n               SET resource_id = $3, last_seen = now()\n              FROM unnest($4::identifier_kind[], $5::text[]) AS given(kind, value)\n             WHERE ri.tenant_id = $1\n               AND ri.resource_id = $2\n               AND ri.kind = given.kind\n               AND ri.value = given.value\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "identifier_kind[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "identifier_kind",
+                  "kind": {
+                    "Enum": [
+                      "chassis_id",
+                      "serial",
+                      "snmp_engine_id",
+                      "otel_host_id",
+                      "mac",
+                      "mgmt_ip",
+                      "flow_exporter",
+                      "hostname",
+                      "service_name"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "232d61b5d68dd79a31f38b60b3f7d32f75ebd1573fc3e9465bd804fa17851663"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE resource_identifier\n               SET resource_id = $3, last_seen = now()\n             WHERE tenant_id = $1 AND resource_id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8cf084bd421ed4e5dd1a5998635421ea5a6ba026c67fc3dcc2fcef753a3590a5"
+}

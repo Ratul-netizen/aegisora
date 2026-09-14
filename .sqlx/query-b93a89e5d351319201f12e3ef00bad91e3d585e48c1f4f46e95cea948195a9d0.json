@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO resource_identifier\n                (id, tenant_id, resource_id, kind, value, confidence, source)\n            SELECT gen_random_uuid(), $1, $2, given.kind, given.value, given.confidence, $6\n              FROM unnest($3::identifier_kind[], $4::text[], $5::real[])\n                     AS given(kind, value, confidence)\n            ON CONFLICT (tenant_id, kind, value)\n            DO UPDATE SET last_seen = now()\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "identifier_kind[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "identifier_kind",
+                  "kind": {
+                    "Enum": [
+                      "chassis_id",
+                      "serial",
+                      "snmp_engine_id",
+                      "otel_host_id",
+                      "mac",
+                      "mgmt_ip",
+                      "flow_exporter",
+                      "hostname",
+                      "service_name"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "TextArray",
+        "Float4Array",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b93a89e5d351319201f12e3ef00bad91e3d585e48c1f4f46e95cea948195a9d0"
+}

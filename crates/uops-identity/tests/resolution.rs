@@ -387,7 +387,7 @@ async fn a_merge_invalidates_the_cache() {
 
     let surviving = resolver
         .store()
-        .create_resource(tenant, ResourceKind::Device, "survivor")
+        .create_provisional(tenant, ResourceKind::Device, "survivor")
         .await
         .unwrap();
     resolver

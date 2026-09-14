@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO identity_decision\n            (id, tenant_id, resource_id, outcome, confidence,\n             matched_by, observed, source, actor_id, decided_at)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Float4",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "935184355584f1d957e8ff5c07807024253e209ad220b319372ac585e89ac023"
+}

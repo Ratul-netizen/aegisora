@@ -20,6 +20,14 @@ use crate::ids::{ResourceId, SiteId};
 /// A kind of observed identifier, ordered by how much it can be trusted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+// Maps onto the `identifier_kind` PostgreSQL enum. The variant names and the enum
+// labels are one list in two places; a mismatch fails at the first insert, on the
+// ingestion path.
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "identifier_kind", rename_all = "snake_case")
+)]
 pub enum IdentifierKind {
     // --- Tier 1: globally unique by specification ---
     /// `entPhysicalSerialNum`.

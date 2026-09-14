@@ -99,7 +99,12 @@ pub trait IdentityStore: Send + Sync {
     ) -> Result<Vec<Identifier>>;
 
     /// Create a resource for telemetry that did not resolve to an existing one.
-    async fn create_resource(
+    ///
+    /// Named apart from the repository's `create_resource` on purpose: that one is a
+    /// deliberate act by an operator with a name and a site, this one is the resolver
+    /// saying "something is sending telemetry and I cannot yet say what it is". A
+    /// single name for both invites calling the wrong one.
+    async fn create_provisional(
         &self,
         tenant: TenantId,
         kind: ResourceKind,

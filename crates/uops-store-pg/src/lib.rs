@@ -43,6 +43,7 @@
 pub mod catalog;
 mod enforced;
 pub mod error;
+pub mod identity;
 pub mod page;
 pub mod resource;
 pub mod store;

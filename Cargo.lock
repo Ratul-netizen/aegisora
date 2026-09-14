@@ -1733,6 +1733,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "uops-core",
+ "uops-identity",
  "uops-query",
  "uuid",
 ]

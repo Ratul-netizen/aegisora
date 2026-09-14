@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO resource (id, tenant_id, kind, name)\n            VALUES ($1, $2, $3, $4)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "resource_kind",
+            "kind": {
+              "Enum": [
+                "device",
+                "interface",
+                "host",
+                "vm",
+                "container",
+                "service",
+                "application",
+                "database",
+                "cloud_resource",
+                "site"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8fd2120ea1732f9b9f2107230260c7f224c091590feba21b3d5570b1fa4b0ba2"
+}

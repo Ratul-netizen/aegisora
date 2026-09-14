@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM resource_alias\n             WHERE tenant_id = $1 AND current_id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5da0c4c380b0fadea2fe3b9f506e824035481289a283b4a84ca5691d6c7d6bd5"
+}

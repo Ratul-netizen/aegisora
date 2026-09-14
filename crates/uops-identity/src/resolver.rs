@@ -231,7 +231,7 @@ impl<S: IdentityStore> Resolver<S> {
 
         let provisional = self
             .store
-            .create_resource(tenant, guess_kind(observed), &guess_name(observed))
+            .create_provisional(tenant, guess_kind(observed), &guess_name(observed))
             .await?;
 
         // ONLY the identifiers that matched nothing. The ones that matched belong to the
@@ -272,7 +272,7 @@ impl<S: IdentityStore> Resolver<S> {
     ) -> Result<Resolution> {
         let resource_id = self
             .store
-            .create_resource(tenant, guess_kind(observed), &guess_name(observed))
+            .create_provisional(tenant, guess_kind(observed), &guess_name(observed))
             .await?;
 
         if reason == OutcomeReason::TierOneContradiction {

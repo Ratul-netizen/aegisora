@@ -39,7 +39,7 @@ PostgreSQL.
 | **M0 · `uops-bus`** | ✅ Done — 18 tests + an 11-case conformance suite |
 | **M0 acceptance criteria** | ✅ **All met** |
 | **M1 · `uops-store-pg`** | 🟡 resources + catalog done — 19 tests, 8 against a real server |
-| **M1 · `uops-identity`** | 🟡 rules + cache + merge/split done — 24 tests. `PgIdentityStore` next |
+| **M1 · `uops-identity`** | ✅ Done — 24 tests on the rules, 11 more against PostgreSQL |
 | M1 · `uops-api` / web | ⬜ |
 | M2–M4 | ⬜ |
 
@@ -47,7 +47,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 221 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 234 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -194,6 +194,10 @@ crates/uops-identity/             M1 — one resource_id per device, whatever it
 ├── cache.rs      (tenant, kind, value) → resource_id. Answers only unambiguous cases
 ├── store.rs      the narrow persistence interface
 └── memory.rs     in-memory store that enforces UNIQUE the way the schema does
+
+crates/uops-store-pg/src/identity.rs
+   IdentityStore over PostgreSQL. Merge and split are one transaction each:
+   half a merge orphans every row of telemetry under the old resource_id.
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -240,6 +244,12 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**`create_resource` was two different operations with one name.** The repository's is an
+operator deliberately adding a device with a name and a site; the resolver's is "something
+is sending telemetry and I cannot yet say what it is". On `PgStore` they collided, and the
+inherent method silently won. The resolver's is now `create_provisional`, which is what it
+always meant.
 
 **A repeated review reuses its provisional resource.** SPEC §M0.2 gives the outcome bands
 but does not say what happens on the *second* identical observation — and a device sends

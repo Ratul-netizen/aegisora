@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT d.id          AS \"id: DecisionId\",\n                   d.resource_id AS \"resource_id!: ResourceId\",\n                   d.confidence,\n                   d.matched_by  AS \"matched_by: Json<Vec<Match>>\",\n                   d.observed    AS \"observed: Json<Vec<Identifier>>\",\n                   d.source,\n                   d.actor_id    AS \"actor_id: ActorId\",\n                   d.decided_at\n              FROM identity_decision d\n             WHERE d.tenant_id = $1\n               AND d.outcome = 'review'\n               AND d.resource_id IS NOT NULL\n               AND d.observed @> $2::jsonb\n               AND $2::jsonb @> d.observed\n               AND NOT EXISTS (\n                     SELECT 1 FROM identity_decision answered\n                      WHERE answered.tenant_id = d.tenant_id\n                        AND answered.resource_id = d.resource_id\n                        AND answered.outcome IN ('manual_merge', 'manual_split')\n                        AND answered.decided_at >= d.decided_at)\n             ORDER BY d.decided_at DESC\n             LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: DecisionId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "resource_id!: ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "confidence",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 3,
+        "name": "matched_by: Json<Vec<Match>>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "observed: Json<Vec<Identifier>>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "actor_id: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "b777d4d1803ba4d18f8ba547276e2e61338743ed9c0d1bb01ef06d2441b7d9d7"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO resource (id, tenant_id, kind, name)\n            VALUES ($1, $2, 'device', $3)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "84f8ae0ee6a855296a0052a79118b874c59fc1a94f287edbcece486ea8835e22"
+}
