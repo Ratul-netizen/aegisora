@@ -8,6 +8,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # uops-store-pg's queries are checked against the schema at COMPILE time. Offline
+  # mode uses the checked-in .sqlx/ metadata so that every job — and every clone —
+  # builds without a database. The postgres-schema job turns this off and checks the
+  # metadata against a real server.
+  SQLX_OFFLINE: "true"
 
 jobs:
   check:
@@ -108,6 +113,9 @@ jobs:
     env:
       DATABASE_URL: postgres://uops:uops@localhost:5432/uops
       PGPASSWORD: uops
+      # This job has a server, so queries are verified against it rather than against
+      # the recorded metadata.
+      SQLX_OFFLINE: "false"
 
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +138,20 @@ jobs:
 
       - name: Schema invariants
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/tests/invariants.sql
+
+      # The repository layer, compiled against this schema and run against this server.
+      # Compiling it IS a test: a renamed column fails the build rather than a request.
+      - name: Repository tests
+        run: cargo test -p uops-store-pg
+
+      # The recorded query metadata must match the queries in the tree, or an offline
+      # build verifies something that is no longer there.
+      - name: Query metadata is current
+        run: |
+          cargo sqlx prepare --workspace --check -- --all-targets || {
+            echo "::error::.sqlx is stale — run: cargo sqlx prepare --workspace -- --all-targets"
+            exit 1
+          }
 
       # Guards the suite itself. A test that passes whether or not the property holds is
       # worse than no test, because it reads as covered — this repo has already been

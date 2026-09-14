@@ -22,6 +22,12 @@ macro_rules! id_type {
         $(#[$meta])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
+        // `transparent` means the newtype is bound and decoded as the bare UUID it
+        // wraps, so a repository can write `WHERE tenant_id = $1` with a `TenantId`
+        // and get a compile error rather than a silent coercion if it passes the
+        // wrong ID type. That is the whole point of the newtypes reaching this far.
+        #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+        #[cfg_attr(feature = "sqlx", sqlx(transparent))]
         pub struct $name(Uuid);
 
         impl $name {

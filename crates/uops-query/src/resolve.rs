@@ -6,9 +6,10 @@
 //!   1. Alias collapse is a `PostgreSQL` question, and the telemetry query is a
 //!      `ClickHouse` one. Resolving inside codegen would put a control-plane round trip
 //!      in the middle of building a string.
-//!   2. Compilation stays **pure and synchronous**. The golden tests compile real
-//!      queries with no database and no async runtime, which is what makes them cheap
-//!      enough to run on every commit.
+//!   2. Compilation stays **pure and synchronous**. Resolution is a database round trip
+//!      and [`ResourceCatalog`] is therefore async, but [`crate::compile`] takes the
+//!      *result* — so the golden tests compile real queries with no database, which is
+//!      what makes them cheap enough to run on every commit.
 //!
 //! So [`ResolvedResources`] is the currency: it can only be produced by resolving a
 //! selector under a scope, it remembers which tenant it was resolved for, and
@@ -16,6 +17,7 @@
 
 use std::collections::BTreeSet;
 
+use async_trait::async_trait;
 use uops_core::{ResourceId, ResourceKind, SiteId, TenantId, TenantScope};
 
 use crate::ast::ResourceSelector;
@@ -28,18 +30,24 @@ use crate::error::{Error, Result};
 /// the boundary where type-level tenant safety hands over to SQL that a human wrote, so
 /// it is worth stating plainly: **these five queries are where a missing `tenant_id`
 /// would actually hurt.**
-pub trait ResourceCatalog {
+///
+/// Async because every implementation is a database: the `PostgreSQL` one in
+/// `uops-store-pg` is four `sqlx` queries. A synchronous trait would force that
+/// implementation to block a runtime thread on I/O, which at ingest rates is how a
+/// collector stalls.
+#[async_trait]
+pub trait ResourceCatalog: Sync {
     /// Collapse aliases to canonical resource IDs, dropping any ID that does not belong
     /// to this tenant. Dropping rather than erroring is deliberate — see
     /// `unknown_ids_are_dropped_not_reported` in the tests.
-    fn canonical(&self, tenant: TenantId, ids: &[ResourceId]) -> Result<Vec<ResourceId>>;
+    async fn canonical(&self, tenant: TenantId, ids: &[ResourceId]) -> Result<Vec<ResourceId>>;
 
-    fn of_kind(&self, tenant: TenantId, kind: ResourceKind) -> Result<Vec<ResourceId>>;
+    async fn of_kind(&self, tenant: TenantId, kind: ResourceKind) -> Result<Vec<ResourceId>>;
 
-    fn at_site(&self, tenant: TenantId, site: SiteId) -> Result<Vec<ResourceId>>;
+    async fn at_site(&self, tenant: TenantId, site: SiteId) -> Result<Vec<ResourceId>>;
 
     /// `resource_dependents()`, bounded by `max_depth`.
-    fn descendants(
+    async fn descendants(
         &self,
         tenant: TenantId,
         root: ResourceId,
@@ -101,7 +109,7 @@ impl ResolvedResources {
 }
 
 /// Expand a selector into concrete resource IDs, within one tenant.
-pub fn resolve(
+pub async fn resolve(
     selector: &ResourceSelector,
     scope: &TenantScope,
     catalog: &impl ResourceCatalog,
@@ -110,9 +118,9 @@ pub fn resolve(
 
     let raw = match selector {
         ResourceSelector::All => return Ok(ResolvedResources { tenant, ids: None }),
-        ResourceSelector::Ids { ids } => catalog.canonical(tenant, ids)?,
-        ResourceSelector::Kind { kind } => catalog.of_kind(tenant, *kind)?,
-        ResourceSelector::Site { site } => catalog.at_site(tenant, *site)?,
+        ResourceSelector::Ids { ids } => catalog.canonical(tenant, ids).await?,
+        ResourceSelector::Kind { kind } => catalog.of_kind(tenant, *kind).await?,
+        ResourceSelector::Site { site } => catalog.at_site(tenant, *site).await?,
         ResourceSelector::Descendants { root, max_depth } => {
             if *max_depth == 0 {
                 return Err(Error::Invalid(
@@ -121,7 +129,7 @@ pub fn resolve(
                         .into(),
                 ));
             }
-            catalog.descendants(tenant, *root, *max_depth)?
+            catalog.descendants(tenant, *root, *max_depth).await?
         }
     };
 
@@ -143,6 +151,8 @@ pub fn resolve(
 #[cfg(test)]
 pub(crate) mod testing {
     use std::collections::HashMap;
+
+    use async_trait::async_trait;
 
     use super::{ResourceCatalog, ResourceId, ResourceKind, Result, SiteId, TenantId};
 
@@ -169,8 +179,9 @@ pub(crate) mod testing {
         }
     }
 
+    #[async_trait]
     impl ResourceCatalog for FakeCatalog {
-        fn canonical(&self, tenant: TenantId, ids: &[ResourceId]) -> Result<Vec<ResourceId>> {
+        async fn canonical(&self, tenant: TenantId, ids: &[ResourceId]) -> Result<Vec<ResourceId>> {
             if !self.mine(tenant) {
                 return Ok(Vec::new());
             }
@@ -183,7 +194,7 @@ pub(crate) mod testing {
                 .collect())
         }
 
-        fn of_kind(&self, tenant: TenantId, _kind: ResourceKind) -> Result<Vec<ResourceId>> {
+        async fn of_kind(&self, tenant: TenantId, _kind: ResourceKind) -> Result<Vec<ResourceId>> {
             Ok(if self.mine(tenant) {
                 self.members.clone()
             } else {
@@ -191,11 +202,11 @@ pub(crate) mod testing {
             })
         }
 
-        fn at_site(&self, tenant: TenantId, _site: SiteId) -> Result<Vec<ResourceId>> {
-            self.of_kind(tenant, ResourceKind::Device)
+        async fn at_site(&self, tenant: TenantId, _site: SiteId) -> Result<Vec<ResourceId>> {
+            self.of_kind(tenant, ResourceKind::Device).await
         }
 
-        fn descendants(
+        async fn descendants(
             &self,
             tenant: TenantId,
             root: ResourceId,
@@ -236,8 +247,8 @@ mod tests {
         (TenantScope::system(tenant), cat, ids)
     }
 
-    #[test]
-    fn aliases_collapse_before_any_sql_exists() {
+    #[tokio::test]
+    async fn aliases_collapse_before_any_sql_exists() {
         let (scope, mut cat, ids) = setup();
         let alias = ResourceId::new();
         cat.aliases.insert(alias, ids[1]);
@@ -249,6 +260,7 @@ mod tests {
             &scope,
             &cat,
         )
+        .await
         .unwrap();
 
         // The alias and its canonical target are the same device. Asking for both must
@@ -256,8 +268,8 @@ mod tests {
         assert_eq!(r.ids().unwrap(), &[ids[1]]);
     }
 
-    #[test]
-    fn unknown_ids_are_dropped_not_reported() {
+    #[tokio::test]
+    async fn unknown_ids_are_dropped_not_reported() {
         // A resource ID from another tenant must not produce a distinguishable error:
         // "that ID exists but is not yours" confirms the resource exists, which for an
         // MSP is one customer learning about another's inventory. Same reasoning as
@@ -271,12 +283,13 @@ mod tests {
             &scope,
             &cat,
         )
+        .await
         .unwrap();
         assert_eq!(r.ids().unwrap(), &[ids[0]]);
     }
 
-    #[test]
-    fn an_empty_match_is_not_the_same_as_no_filter() {
+    #[tokio::test]
+    async fn an_empty_match_is_not_the_same_as_no_filter() {
         // The whole point of the Option: if "matched nothing" degraded into "no
         // resource predicate", a selector that matched nothing would read the entire
         // tenant. That is the most expensive possible answer to the narrowest possible
@@ -289,32 +302,35 @@ mod tests {
             &scope,
             &cat,
         )
+        .await
         .unwrap();
         assert!(none.is_empty_set() && !none.is_whole_tenant());
 
-        let all = resolve(&ResourceSelector::All, &scope, &cat).unwrap();
+        let all = resolve(&ResourceSelector::All, &scope, &cat).await.unwrap();
         assert!(all.is_whole_tenant() && !all.is_empty_set());
     }
 
-    #[test]
-    fn resolution_is_bound_to_the_tenant_it_ran_under() {
+    #[tokio::test]
+    async fn resolution_is_bound_to_the_tenant_it_ran_under() {
         let (scope, cat, _) = setup();
-        let r = resolve(&ResourceSelector::All, &scope, &cat).unwrap();
+        let r = resolve(&ResourceSelector::All, &scope, &cat).await.unwrap();
         assert_eq!(r.tenant(), scope.tenant_id());
     }
 
-    #[test]
-    fn ids_come_back_sorted_so_the_in_list_reads_contiguous_ranges() {
+    #[tokio::test]
+    async fn ids_come_back_sorted_so_the_in_list_reads_contiguous_ranges() {
         let (scope, cat, ids) = setup();
         let mut reversed = ids.clone();
         reversed.reverse();
-        let r = resolve(&ResourceSelector::Ids { ids: reversed }, &scope, &cat).unwrap();
+        let r = resolve(&ResourceSelector::Ids { ids: reversed }, &scope, &cat)
+            .await
+            .unwrap();
         let got = r.ids().unwrap();
         assert!(got.windows(2).all(|w| w[0] < w[1]), "{got:?}");
     }
 
-    #[test]
-    fn a_cyclic_topology_terminates() {
+    #[tokio::test]
+    async fn a_cyclic_topology_terminates() {
         let (scope, mut cat, ids) = setup();
         cat.tree.insert(ids[0], vec![ids[1]]);
         cat.tree.insert(ids[1], vec![ids[2], ids[0]]); // back-edge
@@ -328,12 +344,13 @@ mod tests {
             &scope,
             &cat,
         )
+        .await
         .unwrap();
         assert_eq!(r.ids().unwrap().len(), 3);
     }
 
-    #[test]
-    fn depth_zero_is_rejected_rather_than_meaning_unbounded() {
+    #[tokio::test]
+    async fn depth_zero_is_rejected_rather_than_meaning_unbounded() {
         let (scope, cat, ids) = setup();
         let err = resolve(
             &ResourceSelector::Descendants {
@@ -343,6 +360,7 @@ mod tests {
             &scope,
             &cat,
         )
+        .await
         .unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{err}");
     }

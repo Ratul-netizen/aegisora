@@ -17,7 +17,9 @@ agent. Both on-premise and hosted are first-class; buyers are unrestricted, incl
 government and defence, which is why on-prem is not a downgrade. The W1 storage
 benchmark is **complete and validated the architecture**. M0 is under way: the workspace,
 **M0 is complete** — every component built, and the W1 go/no-go written up at
-[`docs/benchmarks/w1.md`](./docs/benchmarks/w1.md). M1 is next.
+[`docs/benchmarks/w1.md`](./docs/benchmarks/w1.md). M1 has started: `uops-store-pg`
+puts the resource repository and the query layer's `ResourceCatalog` over real
+PostgreSQL.
 
 ---
 
@@ -36,13 +38,15 @@ benchmark is **complete and validated the architecture**. M0 is under way: the w
 | **M0 · ClickHouse migration runner** | ✅ Done — 34 tests, applied against 26.8 |
 | **M0 · `uops-bus`** | ✅ Done — 18 tests + an 11-case conformance suite |
 | **M0 acceptance criteria** | ✅ **All met** |
-| M1–M4 | ⬜ |
+| **M1 · `uops-store-pg`** | 🟡 resources + catalog done — 19 tests, 8 against a real server |
+| M1 · `uops-identity` / `uops-api` / web | ⬜ |
+| M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 178 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 197 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -176,6 +180,13 @@ crates/uops-bus/                  keep the boundary, defer the daemon
 ├── bus.rs        TelemetryBus + Delivery + AckHandle (a no-op that must exist)
 ├── inprocess.rs  bounded tokio channel per subscriber; a full channel BLOCKS
 └── conformance.rs the contract, executable — shipped so NatsBus runs these same cases
+
+crates/uops-store-pg/             M1 — the control plane over PostgreSQL
+├── store.rs      pool, statement timeout, a Debug that cannot print the password
+├── resource.rs   the repository; every method takes &TenantScope
+├── catalog.rs    ResourceCatalog over Postgres — alias collapse, topology walk
+├── page.rs       keyset pagination on UUIDv7 ids. Never OFFSET
+└── enforced.rs   reads this crate's OWN source: no query without a tenant predicate
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -222,6 +233,17 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**`ResourceCatalog` is async now.** It was synchronous in M0 because compilation is pure
+and nothing implemented it yet. Every real implementation is a database — the PostgreSQL
+one is four `sqlx` queries — and a synchronous trait would have forced it to block a
+runtime thread on I/O. `compile()` is untouched and still pure, which is what keeps the
+golden tests free of a database.
+
+**PostgreSQL queries are compile-time checked, with the metadata committed.**
+`cargo sqlx prepare` writes `.sqlx/`, builds use `SQLX_OFFLINE=true`, and CI fails if the
+recorded metadata has drifted from the queries in the tree. So a clone with no database
+still builds, and a renamed column is a compile error rather than a 500 in production.
 
 **The bus contract is JetStream's, not a channel's.** `InProcessBus` is a `tokio` channel
 per subscriber, but subjects follow NATS matching rules exactly (`*`, `>`), `ack` exists

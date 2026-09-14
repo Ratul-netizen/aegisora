@@ -12,6 +12,14 @@ use crate::ids::{CredentialRef, ResourceId, SiteId, TenantId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+// Maps onto the PostgreSQL enum of the same name. If a variant is added here without
+// a migration adding it there, the repository fails to compile against the schema —
+// which is the intended outcome.
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "resource_kind", rename_all = "snake_case")
+)]
 pub enum ResourceKind {
     Device,
     Interface,
@@ -45,6 +53,11 @@ impl ResourceKind {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "resource_status", rename_all = "snake_case")
+)]
 pub enum ResourceStatus {
     Up,
     Down,

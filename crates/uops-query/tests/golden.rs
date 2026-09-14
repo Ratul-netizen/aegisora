@@ -21,6 +21,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
 use uops_core::{ResourceId, ResourceKind, SiteId, TenantId, TenantScope};
 use uops_query::{Query, ResourceCatalog, compile, compile_tail, resolve};
 
@@ -45,17 +46,22 @@ impl FixedCatalog {
     }
 }
 
+#[async_trait]
 impl ResourceCatalog for FixedCatalog {
-    fn canonical(&self, _t: TenantId, ids: &[ResourceId]) -> uops_query::Result<Vec<ResourceId>> {
+    async fn canonical(
+        &self,
+        _t: TenantId,
+        ids: &[ResourceId],
+    ) -> uops_query::Result<Vec<ResourceId>> {
         Ok(ids.to_vec())
     }
-    fn of_kind(&self, _t: TenantId, _k: ResourceKind) -> uops_query::Result<Vec<ResourceId>> {
+    async fn of_kind(&self, _t: TenantId, _k: ResourceKind) -> uops_query::Result<Vec<ResourceId>> {
         Ok(Self::all())
     }
-    fn at_site(&self, _t: TenantId, _s: SiteId) -> uops_query::Result<Vec<ResourceId>> {
+    async fn at_site(&self, _t: TenantId, _s: SiteId) -> uops_query::Result<Vec<ResourceId>> {
         Ok(Self::all())
     }
-    fn descendants(
+    async fn descendants(
         &self,
         _t: TenantId,
         root: ResourceId,
@@ -74,13 +80,13 @@ fn golden_dir() -> PathBuf {
 
 /// Statement, parameters, chosen table and warnings — everything a reviewer needs to
 /// judge a codegen change without running `ClickHouse`.
-fn render(path: &Path) -> String {
+async fn render(path: &Path) -> String {
     let json = fs::read_to_string(path).unwrap();
     let q: Query = serde_json::from_str(&json)
         .unwrap_or_else(|e| panic!("{} is not a valid Query: {e}", path.display()));
 
     let scope = TenantScope::system(TenantId::from_uuid(TENANT.parse().unwrap()));
-    let resources = resolve(&q.resources, &scope, &FixedCatalog).unwrap();
+    let resources = resolve(&q.resources, &scope, &FixedCatalog).await.unwrap();
 
     let is_tail = path
         .file_name()
@@ -107,8 +113,8 @@ fn render(path: &Path) -> String {
     s
 }
 
-#[test]
-fn every_fixture_matches_its_golden_file() {
+#[tokio::test]
+async fn every_fixture_matches_its_golden_file() {
     let update = std::env::var_os("UPDATE_GOLDEN").is_some();
     let mut fixtures: Vec<PathBuf> = fs::read_dir(golden_dir())
         .expect("tests/golden must exist")
@@ -126,7 +132,7 @@ fn every_fixture_matches_its_golden_file() {
 
     let mut failures = Vec::new();
     for f in &fixtures {
-        let actual = render(f);
+        let actual = render(f).await;
         let expected_path = f.with_extension("sql");
 
         if update {

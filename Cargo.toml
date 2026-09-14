@@ -54,9 +54,19 @@ async-trait = "0.1"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+# --- PostgreSQL (M1) ------------------------------------------------------------
+# No TLS feature, deliberately, and for the same reason as ureq in uops-ch-migrate:
+# the rustls/native-tls trees carry licences outside the cargo-deny allow-list, and
+# every deployment shape reaches PostgreSQL over a private network or a unix socket.
+# Adding TLS is a feature flag and a deployment-profile decision, not a rewrite.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio", "postgres", "uuid", "chrono", "json", "macros", "migrate",
+] }
+
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }
+uops-store-pg = { path = "crates/uops-store-pg" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -10,13 +10,18 @@ authors.workspace = true
 
 [dependencies]
 uops-core.workspace = true
+# Resolution is a database round trip, so the catalog trait is async. Compilation
+# itself stays pure and synchronous — see the note in resolve.rs.
+async-trait.workspace = true
 chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true
