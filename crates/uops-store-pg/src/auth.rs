@@ -56,6 +56,15 @@ pub struct AuthenticatedSession {
     pub expires_at: DateTime<Utc>,
 }
 
+/// One tenant a user can reach, and what they may do there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantMembership {
+    pub tenant_id: TenantId,
+    pub name: String,
+    pub slug: String,
+    pub role: Role,
+}
+
 impl PgStore {
     /// Create a user. The caller has already hashed the password.
     pub async fn create_user(
@@ -96,7 +105,7 @@ impl PgStore {
         email: &str,
     ) -> Result<Option<UserCredentials>> {
         // tenant-exempt: authentication happens before any tenant is known — which
-        // tenants this user may reach is the *next* question, answered by roles_of.
+        // tenants this user may reach is the *next* question, answered by tenant_memberships.
         let row = sqlx::query!(
             r#"
             SELECT id AS "id: ActorId", password_hash, disabled_at
@@ -264,15 +273,27 @@ impl PgStore {
         Ok(row)
     }
 
-    /// Every tenant this user can reach, for the tenant switcher.
-    pub async fn roles_of(&self, user: ActorId) -> Result<Vec<(TenantId, Role)>> {
+    /// Every tenant this user can reach, named, for the tenant switcher.
+    ///
+    /// Ordered by name rather than by id, because this is a list a person reads. The
+    /// name is joined in here rather than fetched per row by the caller: a switcher that
+    /// shows UUIDs is a switcher nobody can use, and N+1 queries to avoid one join is
+    /// not a trade worth making on the login path.
+    pub async fn tenant_memberships(&self, user: ActorId) -> Result<Vec<TenantMembership>> {
+        // tenant-exempt: this is the question "which tenants may this user see", asked
+        // before any scope exists. Its answer is what a scope is later built from, and
+        // it is restricted to one user's own rows.
         let rows = sqlx::query!(
             r#"
-            SELECT r.tenant_id AS "tenant_id: TenantId", r.role AS "role: Role"
+            SELECT r.tenant_id AS "tenant_id: TenantId",
+                   t.name      AS "name!",
+                   t.slug      AS "slug!",
+                   r.role      AS "role: Role"
               FROM user_tenant_role r
               JOIN app_user u ON u.id = r.user_id
+              JOIN tenant   t ON t.id = r.tenant_id
              WHERE r.user_id = $1 AND u.disabled_at IS NULL
-             ORDER BY r.tenant_id
+             ORDER BY t.name, r.tenant_id
             "#,
             user as ActorId,
         )
@@ -280,7 +301,15 @@ impl PgStore {
         .await
         .map_err(|e| map("role", user.to_string(), e))?;
 
-        Ok(rows.into_iter().map(|r| (r.tenant_id, r.role)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| TenantMembership {
+                tenant_id: r.tenant_id,
+                name: r.name,
+                slug: r.slug,
+                role: r.role,
+            })
+            .collect())
     }
 
     /// Open a session for a user who has just authenticated.

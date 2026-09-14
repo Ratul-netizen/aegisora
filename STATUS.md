@@ -48,7 +48,8 @@ PostgreSQL.
 | **M1 · `POST /query`** | ✅ Done — 8 tests, the full stack over HTTP |
 | **M1 · first-run bootstrap** | ✅ Done — 5 store tests, 3 boot tests, 2 mutation guards |
 | **M1 · `uops-server`** | ✅ Done — it runs, and you can log into it |
-| M1 · web shell | ⬜ **Next** |
+| **M1 · web shell** | 🟡 shell + auth + tenant switcher + resources — 13 tests |
+| M1 · cross-tenant acceptance test | ⬜ **Next** |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
@@ -56,6 +57,7 @@ PostgreSQL.
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
 cargo test --workspace --all-targets && cargo test --workspace --doc   # 371 tests, green
+cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -246,13 +248,14 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **The web shell** — React + Vite, TanStack Query and Router, the tenant switcher, and
-   the global time-range picker that is shared state across every view. The largest
-   remaining piece, the only one with no Rust in it, and now the only thing between M1
-   and something a person can use without curl.
-2. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
+1. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
    against tenant B, "verified by an integration test, not by inspection". Writable once
    the surface is complete; the per-endpoint halves of it already exist.
+2. **The rest of the web shell** — the query explorer over `POST /api/v1/query`, the
+   resource detail view, and cursor pagination in the table. The shell, the auth, the
+   tenant switcher and the time range are done and the remaining views hang off them.
+3. **`docker compose up` from a clean checkout** — the last M1 acceptance criterion with
+   nothing written for it. Needs the web build served alongside the API.
 
 ## How to pick this up
 

@@ -53,7 +53,8 @@ pub mod store;
 
 pub use audit::{AccessEntry, AuditEntry};
 pub use auth::{
-    ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, UserCredentials, UserProfile,
+    ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, TenantMembership, UserCredentials,
+    UserProfile,
 };
 pub use bootstrap::{FirstRun, FirstRunRequest};
 pub use catalog::PgCatalog;

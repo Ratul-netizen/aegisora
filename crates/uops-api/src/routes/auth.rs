@@ -59,6 +59,10 @@ pub struct MeResponse {
 #[derive(Debug, Serialize)]
 pub struct TenantMembership {
     pub tenant_id: TenantId,
+    /// What the switcher shows. Without it the switcher shows UUIDs, and an MSP
+    /// engineer with fourteen customers picks the wrong one.
+    pub name: String,
+    pub slug: String,
     pub role: &'static str,
 }
 
@@ -211,12 +215,14 @@ pub async fn me(
 
     let tenants = state
         .store
-        .roles_of(caller.user_id)
+        .tenant_memberships(caller.user_id)
         .await?
         .into_iter()
-        .map(|(tenant_id, role)| TenantMembership {
-            tenant_id,
-            role: role_name(role),
+        .map(|m| TenantMembership {
+            tenant_id: m.tenant_id,
+            name: m.name,
+            slug: m.slug,
+            role: role_name(m.role),
         })
         .collect();
 

@@ -448,3 +448,52 @@ jobs:
             exit 1
           fi
           echo "ok: crypto-awslc refuses to build until AwsLcAead exists"
+
+  web:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # ci, not install: it installs exactly the lockfile and fails if package.json and
+      # the lockfile disagree, which is the whole reason the lockfile is committed.
+      - run: npm ci
+
+      - name: typecheck
+        run: npx tsc -b --noEmit
+
+      - name: lint
+        run: npx eslint src
+
+      - name: test
+        run: npx vitest run
+
+      - name: build
+        run: npm run build
+
+      # The session cookie is HttpOnly and cannot be read by script; the CSRF cookie is
+      # read by src/api.ts and nothing else. Neither belongs in storage, where it would
+      # outlive the session and be readable by anything running on the origin.
+      #
+      # Comment lines are dropped, as in the Rust hygiene guards: src/api.ts explains at
+      # the top why there is no token in localStorage, and a guard that forbids saying so
+      # gets the explanation deleted instead of the rule followed.
+      - name: No credential or tenant state in browser storage
+        run: |
+          hits=$(grep -rnE '\b(localStorage|sessionStorage|indexedDB)\b' src/ \
+                 | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::browser storage in the web app; the session is a cookie the server sets"
+            exit 1
+          fi
+          echo "ok"

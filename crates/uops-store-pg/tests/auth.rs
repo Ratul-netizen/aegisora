@@ -238,7 +238,7 @@ async fn disabling_an_account_ends_its_sessions_now() {
         None,
         "and must lose its roles, so a cached session cannot act either"
     );
-    assert!(store.roles_of(u).await.unwrap().is_empty());
+    assert!(store.tenant_memberships(u).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -262,10 +262,12 @@ async fn a_user_has_no_role_on_a_tenant_they_were_not_granted() {
         None,
         "a tenant in the same organization is still not this user's tenant"
     );
-    assert_eq!(
-        store.roles_of(u).await.unwrap(),
-        vec![(mine, Role::Operator)]
-    );
+    let memberships = store.tenant_memberships(u).await.unwrap();
+    assert_eq!(memberships.len(), 1, "{memberships:?}");
+    assert_eq!(memberships[0].tenant_id, mine);
+    assert_eq!(memberships[0].role, Role::Operator);
+    // The switcher shows this, not the uuid.
+    assert_eq!(memberships[0].name, "auth-roles-mine");
 }
 
 #[tokio::test]
