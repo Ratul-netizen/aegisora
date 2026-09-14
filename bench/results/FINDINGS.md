@@ -1,7 +1,11 @@
 # W1 storage benchmark — findings
 
-**Status: 10M and 100M complete.** `logs_by_time` comparison and metrics still to run.
+**Status: complete.** 10M and 100M both measured.
 ClickHouse 26.8.2.7, single node, Docker Desktop on Windows, warm cache, 5 iterations.
+
+> This file is the **raw evidence** — every query at both scales, with the reasoning
+> that produced each amendment. The **decision** it supports is
+> [`docs/benchmarks/w1.md`](../../docs/benchmarks/w1.md), which is what to read first.
 
 ---
 
@@ -297,19 +301,25 @@ the benchmark", nothing more.
 
 ---
 
-## Actions for SPEC
+## Actions for SPEC — all folded in
 
-- [ ] §M0.6 — add the `p_by_time` projection and state the ~2x storage cost
-- [ ] §M0.6 — add materialized columns for grouped semconv attributes (§6 above)
-- [ ] §M0.6 — record the text index at ~67% of compressed data; make it opt-out per source
-- [ ] §M0.5 — confirmed: `TextMode::Phrase`/`Substring` must emit `QueryWarning`
-- [ ] §M0.6 — close the tenant-wide-search [OPEN] item with the finding in §3
-- [ ] §M0.2 — unaffected. §M0.6 sort key for resource-scoped reads: **confirmed**
+- [x] §M0.6 — `p_by_time` projection added, with the measured ~1.9x storage cost
+- [x] §M0.6 — materialized columns for grouped semconv attributes (§6 above)
+- [x] §M0.6 — text index recorded at 71% of compressed data at 100M; opt-out per source
+- [x] §M0.5 — confirmed: `TextMode::Phrase`/`Substring` emit `QueryWarning`
+- [x] §M0.6 — tenant-wide-search [OPEN] item closed with the finding in §3
+- [x] §M0.2 — unaffected. §M0.6 sort key for resource-scoped reads: **confirmed**
+
+All six are implemented, not merely specified: see `ch-migrations/` and
+`crates/uops-query/`.
 
 ## Still to measure
 
-- 100M and 1B rows (does Q01 scale as linearly as projected?)
-- `logs_by_time` comparison to quantify the projection's benefit directly
-- Metrics table + the `metrics_5m` rollup MV, and rollup cost on ingest
+Scoped out of the W1 verdict deliberately — see "What this verdict does not cover" in
+[`docs/benchmarks/w1.md`](../../docs/benchmarks/w1.md).
+
+- 1B rows (does Q01 scale as linearly as projected?)
+- Metrics ingest throughput, and the write cost of maintaining the rollup MVs (M4)
 - Cold-cache numbers (`run.sh --cold`)
 - Concurrency ceiling
+- Replicated / sharded behaviour

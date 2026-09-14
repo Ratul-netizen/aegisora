@@ -16,9 +16,8 @@ control plane and ClickHouse for telemetry, OpenTelemetry Collector instead of a
 agent. Both on-premise and hosted are first-class; buyers are unrestricted, including
 government and defence, which is why on-prem is not a downgrade. The W1 storage
 benchmark is **complete and validated the architecture**. M0 is under way: the workspace,
-**Every M0 component is built.** What remains of M0 is one documentation checkbox: the
-W1 write-up lives at `bench/results/FINDINGS.md` rather than `docs/benchmarks/w1.md`,
-and it has no explicit written go/no-go verdict.
+**M0 is complete** — every component built, and the W1 go/no-go written up at
+[`docs/benchmarks/w1.md`](./docs/benchmarks/w1.md). M1 is next.
 
 ---
 
@@ -36,6 +35,7 @@ and it has no explicit written go/no-go verdict.
 | **M0 · PostgreSQL migrations** | ✅ Done — 5 migrations, 22 asserted invariants |
 | **M0 · ClickHouse migration runner** | ✅ Done — 34 tests, applied against 26.8 |
 | **M0 · `uops-bus`** | ✅ Done — 18 tests + an 11-case conformance suite |
+| **M0 acceptance criteria** | ✅ **All met** |
 | M1–M4 | ⬜ |
 
 ## Resume in three commands
@@ -79,7 +79,8 @@ The benchmark data is **regenerable, never committed**. Seed 42 reproduces it ex
 
 ## W1 results — the numbers that justify the architecture
 
-ClickHouse 26.8.2.7, single node, warm cache. Full detail:
+ClickHouse 26.8.2.7, single node, warm cache. The written verdict is
+[`docs/benchmarks/w1.md`](./docs/benchmarks/w1.md); the raw evidence behind it is
 [`bench/results/FINDINGS.md`](./bench/results/FINDINGS.md).
 
 ### The core bet, confirmed
@@ -194,9 +195,7 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **Close M0's last checkbox** — move the W1 write-up to `docs/benchmarks/w1.md` and
-   add the written go/no-go verdict the acceptance criteria asks for. Half an hour.
-2. **M1 — core platform.** PostgreSQL + ClickHouse wired behind an Axum API, React
+1. **M1 — core platform.** PostgreSQL + ClickHouse wired behind an Axum API, React
    shell, authentication, RBAC, resource inventory, and the identity resolution service
    running against the rules `uops-core` already implements and tests.
 
