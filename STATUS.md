@@ -16,8 +16,9 @@ control plane and ClickHouse for telemetry, OpenTelemetry Collector instead of a
 agent. Both on-premise and hosted are first-class; buyers are unrestricted, including
 government and defence, which is why on-prem is not a downgrade. The W1 storage
 benchmark is **complete and validated the architecture**. M0 is under way: the workspace,
-CI, `uops-core`, `uops-secrets`, `uops-query` and both database schemas are done.
-`uops-bus` is the last M0 item.
+**Every M0 component is built.** What remains of M0 is one documentation checkbox: the
+W1 write-up lives at `bench/results/FINDINGS.md` rather than `docs/benchmarks/w1.md`,
+and it has no explicit written go/no-go verdict.
 
 ---
 
@@ -34,14 +35,14 @@ CI, `uops-core`, `uops-secrets`, `uops-query` and both database schemas are done
 | **M0 · `uops-query`** | ✅ Done — 48 tests, 12 golden fixtures |
 | **M0 · PostgreSQL migrations** | ✅ Done — 5 migrations, 22 asserted invariants |
 | **M0 · ClickHouse migration runner** | ✅ Done — 34 tests, applied against 26.8 |
-| M0 · `uops-bus` | ⬜ |
+| **M0 · `uops-bus`** | ✅ Done — 18 tests + an 11-case conformance suite |
 | M1–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 149 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 178 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -168,6 +169,12 @@ crates/uops-ch-migrate/           versioned · idempotent · resumable
 ├── ledger.rs     ReplacingMergeTree + FINAL — ClickHouse has no unique constraint
 ├── runner.rs     applies, recording EVERY statement as it lands
 └── http.rs       the whole protocol: one POST per statement
+
+crates/uops-bus/                  keep the boundary, defer the daemon
+├── subject.rs    telemetry.{tenant}.{signal}.{source} — NATS matching rules exactly
+├── bus.rs        TelemetryBus + Delivery + AckHandle (a no-op that must exist)
+├── inprocess.rs  bounded tokio channel per subscriber; a full channel BLOCKS
+└── conformance.rs the contract, executable — shipped so NatsBus runs these same cases
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -187,13 +194,20 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **`uops-bus`** — `TelemetryBus` trait + `InProcess` impl + a conformance suite that both
-   implementations run.
+1. **Close M0's last checkbox** — move the W1 write-up to `docs/benchmarks/w1.md` and
+   add the written go/no-go verdict the acceptance criteria asks for. Half an hour.
+2. **M1 — core platform.** PostgreSQL + ClickHouse wired behind an Axum API, React
+   shell, authentication, RBAC, resource inventory, and the identity resolution service
+   running against the rules `uops-core` already implements and tests.
 
-Then M1. Five of six M0 items are done; `uops-bus` is the last, and it is the smallest.
+The M0 foundation is what M1 gets to assume: a resource model the database itself keeps
+tenant-clean, a query compiler that cannot emit SQL without a tenant, credentials that
+are sealed before they are stored, two schemas with runners that survive an unattended
+upgrade, and a bus boundary that makes NATS a wiring change.
 
-**Do not start yet:** the frontend, or any collector. Both are more fun than schema work
-and both need rewriting if the resource model shifts.
+**The resource model is now settled** — it is in PostgreSQL, in `uops-core`, and in the
+ClickHouse sort key. The frontend and the collectors were held back until it was, and
+M1 is where they start.
 
 ---
 
@@ -209,6 +223,17 @@ and both need rewriting if the resource model shifts.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The bus contract is JetStream's, not a channel's.** `InProcessBus` is a `tokio` channel
+per subscriber, but subjects follow NATS matching rules exactly (`*`, `>`), `ack` exists
+from the first commit doing nothing, and a new subscriber gets no history. Each of those
+would otherwise change *which messages a consumer receives* when the transport changes,
+which is not a wiring change. The conformance suite ships in the library as public
+functions so `NatsBus` runs the same eleven cases rather than a copy that has drifted.
+
+**Backpressure blocks, and there is a test that fails if it stops.** A full channel makes
+`publish` wait rather than dropping. CI mutates `send().await` to `try_send()` and
+requires the suite to fail — the same trick as the Postgres and ClickHouse guards.
 
 **`searchAll()` and `searchAny()` do not exist.** `uops-query` was emitting them for
 token search — the names the text-index beta announcements used. ClickHouse 26.8 answers

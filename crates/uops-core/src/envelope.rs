@@ -66,7 +66,9 @@ impl Severity {
 }
 
 /// Which collector produced this.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Hash` because it is one token of a bus subject, and subjects are map keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Snmp,

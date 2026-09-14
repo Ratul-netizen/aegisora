@@ -42,6 +42,18 @@ sha2 = "0.10"
 # default-features off: no TLS. See crates/uops-ch-migrate/Cargo.toml for why.
 ureq = { version = "3", default-features = false }
 
+# --- async (M0.7) ---------------------------------------------------------------
+# The first tokio in the workspace. The bus is the component that needs it: a
+# publish that blocks when a consumer is behind IS the backpressure design, and that
+# is an async property. Features are narrow on purpose — the server binary will want
+# more, and it can ask for more there.
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+async-trait = "0.1"
+# futures-core only: BoxStream and the Stream trait. futures-util is a dev dependency
+# where the combinators are actually used, so the library does not carry them.
+futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }

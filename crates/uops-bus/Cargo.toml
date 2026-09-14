@@ -1,0 +1,27 @@
+[package]
+name = "uops-bus"
+description = "The telemetry bus boundary: in-process channels now, NATS JetStream later."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+async-trait.workspace = true
+# chrono and futures-util are NOT dev-dependencies, because `conformance` and `testing`
+# are part of the public API: a future uops-bus-nats crate runs those same functions
+# rather than a copy of them that has drifted.
+chrono.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true

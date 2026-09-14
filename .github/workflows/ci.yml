@@ -35,6 +35,27 @@ jobs:
       - name: Doctests
         run: cargo test --workspace --doc
 
+      # Guards the bus conformance suite from going vacuous. It is the executable form
+      # of the TelemetryBus contract, and the whole NATS migration rests on it still
+      # meaning something a year from now. Removing backpressure — the behaviour
+      # PLAN 0 change #4 chose deliberately — must fail it.
+      - name: The bus conformance suite fails when backpressure is removed
+        run: |
+          F=crates/uops-bus/src/inprocess.rs
+          cp "$F" "$RUNNER_TEMP/inprocess.bak"
+          sed -i 's/if sender.send(delivery).await.is_err()/if sender.try_send(delivery).is_err()/' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-bus --test conformance_inprocess > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/inprocess.bak" "$F"
+            echo "::error::conformance passed with backpressure removed"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/inprocess.bak" "$F"
+          echo "ok: dropping instead of blocking fails the suite"
+
   secrets-hygiene:
     name: no credential material in logs
     runs-on: ubuntu-latest
