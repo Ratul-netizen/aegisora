@@ -101,6 +101,26 @@ impl ResolvedResources {
         }
     }
 
+    /// A set that was resolved somewhere else.
+    ///
+    /// Named to make the bypass visible: this does **not** collapse aliases, so a
+    /// caller using it is asserting that expansion already happened — a cached set from
+    /// a previous `resolve`, or a test that is not about resolution. Reaching for it to
+    /// avoid a database round trip on a fresh selector is how a merged-away resource
+    /// stops resolving.
+    #[must_use]
+    pub fn already_resolved(scope: &TenantScope, ids: Vec<ResourceId>) -> Self {
+        let ids: Vec<ResourceId> = ids
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Self {
+            tenant: scope.tenant_id(),
+            ids: Some(ids),
+        }
+    }
+
     /// Test-only shortcut for compiler tests that are not about resolution.
     #[cfg(test)]
     pub(crate) fn for_test(tenant: TenantId, ids: Option<Vec<ResourceId>>) -> Self {

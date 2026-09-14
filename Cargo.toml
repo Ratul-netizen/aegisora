@@ -79,6 +79,15 @@ axum = { version = "0.8", default-features = false, features = [
 tower = "0.5"
 tower-http = { version = "0.6", default-features = false, features = ["trace", "limit"] }
 
+# --- ClickHouse client (M1) -----------------------------------------------------
+# hyper rather than a new HTTP stack: axum already pulls exactly these, so this adds
+# no licences, no download and nothing to the SBOM. No TLS, for the same reason as
+# every other client here — see the sqlx note above.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }
@@ -86,6 +95,7 @@ uops-secrets = { path = "crates/uops-secrets" }
 uops-identity = { path = "crates/uops-identity" }
 uops-store-pg = { path = "crates/uops-store-pg" }
 uops-api = { path = "crates/uops-api" }
+uops-store-ch = { path = "crates/uops-store-ch" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

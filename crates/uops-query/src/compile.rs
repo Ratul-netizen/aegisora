@@ -283,6 +283,22 @@ impl Cx {
         Ok(())
     }
 
+    /// The effective start of the window for the table that was chosen.
+    ///
+    /// Unchanged on a base table, floored to the bucket on a pre-aggregate.
+    fn window_start(
+        &self,
+        requested: chrono::DateTime<chrono::Utc>,
+    ) -> chrono::DateTime<chrono::Utc> {
+        let width = i64::from(self.plan.stored_bucket_seconds);
+        if width <= 0 {
+            return requested;
+        }
+        let seconds = requested.timestamp();
+        let floored = seconds - seconds.rem_euclid(width);
+        chrono::DateTime::from_timestamp(floored, 0).unwrap_or(requested)
+    }
+
     fn from(&mut self) {
         self.b.push(" FROM ");
         self.b.push(self.plan.table);
@@ -302,7 +318,14 @@ impl Cx {
         self.b.push(" AND ");
         self.b.push(time_col);
         self.b.push(" >= ");
-        self.b.bind("DateTime64(3)", fmt_ts(q.time.start));
+        // On a pre-aggregate, the window's start is floored to the stored bucket width.
+        // A bucket is the unit of storage: a window that starts partway through one
+        // either includes it or loses it, and losing it means the leftmost bar of every
+        // histogram silently disappears — an Explorer opened at 14:37 would drop the
+        // 14:35 bucket. Found by running a real query against a real pre-aggregate;
+        // both sides' unit tests were happy.
+        self.b
+            .bind("DateTime64(3)", fmt_ts(self.window_start(q.time.start)));
         self.b.push(" AND ");
         self.b.push(time_col);
         self.b.push(" < ");

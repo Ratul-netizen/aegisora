@@ -44,7 +44,8 @@ PostgreSQL.
 | **M1 · `uops-api` scope extractor** | ✅ Done — 24 tests, mutation-guarded in CI |
 | **M1 · auth routes** | ✅ Done — login/logout/me, CSRF, 22 tests |
 | **M1 · resource routes + audit trail** | ✅ Done — 14 tests |
-| M1 · `uops-store-ch`, then `POST /query` | ⬜ **Next** |
+| **M1 · `uops-store-ch`** | ✅ Done — 24 tests, 11 against real ClickHouse |
+| M1 · `POST /query` | ⬜ **Next** |
 | M1 · first-run admin, web shell | ⬜ |
 | M1 · web shell | ⬜ |
 | M2–M4 | ⬜ |
@@ -53,7 +54,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 318 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 343 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -207,6 +208,11 @@ crates/uops-secrets/src/password.rs  argon2id, m=19456 t=2 p=1 — SPEC M0.8
 crates/uops-secrets/src/session.rs   opaque tokens; only the HASH is stored
 crates/uops-store-pg/src/auth.rs     users, roles, sessions; one statement per request
 
+crates/uops-store-ch/               M1 — the other half of the query layer
+├── client.rs     async HTTP on hyper, which axum already pulls
+├── store.rs      the M0.6 traits; nothing here writes SQL
+└── rows.rs       columns mirror ch-migrations exactly
+
 crates/uops-api/
 ├── extract.rs    THE file: the only caller of TenantScope::from_authenticated
 ├── error.rs      RFC 7807. A tenant you cannot see is 404, never 403
@@ -266,6 +272,13 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**A pre-aggregated query floors its window to the bucket.** Found by running a real
+histogram against a real `logs_counts_5m`: it returned nothing, because every bucket in
+the fixture began a few minutes before the window did. A bucket is the unit of storage,
+so a window starting partway through one either includes it or loses it — and losing it
+drops the leftmost bar of every histogram. An Explorer opened at 14:37 would silently
+omit 14:35. Base-table queries are untouched.
 
 **The audit hook hangs off the scope extractor, not a list of routes.** SPEC says
 "middleware over the query and resource routes", and a layer wrapped around a chosen list
@@ -354,8 +367,7 @@ The PostgreSQL dev database lives in a Docker volume:
 `docker compose -f deploy/docker-compose.yml up -d`, then `bash scripts/db.sh migrate`
 and `bash scripts/db.sh test`. `bash scripts/db.sh reset` re-applies from empty.
 
-The benchmark ClickHouse container holds ~200M rows in a Docker volume (~12 GiB). It is
-stopped, not deleted — `docker compose -f bench/docker-compose.yml up -d` brings it back
-with data intact. To reclaim the space:
-`docker compose -f bench/docker-compose.yml down -v`. Everything is regenerable from
-seed 42.
+The benchmark ClickHouse volume has been removed — the data is gone, and that is fine:
+it is regenerable from seed 42 and nothing depends on it. `bench/scripts/load.sh`
+rebuilds it if W1 ever needs re-running. Earlier versions of this file said the volume
+still held ~12 GiB; it does not.

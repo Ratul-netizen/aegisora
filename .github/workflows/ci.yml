@@ -223,6 +223,12 @@ jobs:
       - name: Schema behaviour
         run: bash scripts/ch.sh smoke
 
+      # The telemetry store: compiled SQL executed against the schema it was compiled
+      # for. Both sides' unit tests passed for weeks while they disagreed about whether
+      # searchAll() exists, so this is the job that catches the next one.
+      - name: Telemetry store
+        run: cargo test -p uops-store-ch
+
       # The API's isolation tests, and the guard on them. A valid session naming
       # another customer's tenant must get a 404 — and the suite that says so must
       # fail if the role check is removed, or it is decoration.

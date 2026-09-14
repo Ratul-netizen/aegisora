@@ -384,6 +384,44 @@ mod tests {
     }
 
     #[test]
+    fn a_pre_aggregate_query_starts_at_a_bucket_boundary() {
+        // A bucket is the unit of storage. A window starting partway through one either
+        // includes it or loses it, and losing it drops the leftmost bar of every
+        // histogram — an Explorer opened at 14:37 would silently omit 14:35.
+        //
+        // Found by running a real histogram against a real pre-aggregate: it returned
+        // nothing at all, because every bucket in the fixture began before the window
+        // did. Both sides' unit tests passed throughout.
+        let s = scope();
+        let unaligned = TimeRange::new(
+            Utc.timestamp_opt(1_700_000_000, 0).unwrap(), // 22:13:20
+            Utc.timestamp_opt(1_700_003_600, 0).unwrap(),
+        );
+
+        let mut histogram = Query::new(SignalType::Log, unaligned);
+        histogram.aggregations = vec![Aggregation {
+            func: AggFunc::Count,
+            field: None,
+            alias: "c".into(),
+        }];
+        histogram.group_by = vec![Field::TimeBucket { seconds: 300 }];
+
+        let out = compile(&histogram, &s, &all(&s)).unwrap();
+        assert_eq!(out.table, "logs_counts_5m");
+        assert_eq!(
+            out.sql.params()["p1"].value,
+            "2023-11-14 22:10:00.000",
+            "the window must be floored to the stored five-minute bucket"
+        );
+
+        // A base-table query is untouched: there is no bucket to align to, and moving
+        // the window would return rows the caller did not ask for.
+        let raw = Query::new(SignalType::Log, unaligned);
+        let out = compile(&raw, &s, &all(&s)).unwrap();
+        assert_eq!(out.sql.params()["p1"].value, "2023-11-14 22:13:20.000");
+    }
+
+    #[test]
     fn the_default_ordering_follows_the_sort_key() {
         // (tenant_id, resource_id, observed_at) is the sort key on every telemetry
         // table, so this ordering is free and any other is a sort.
