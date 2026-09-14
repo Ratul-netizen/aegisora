@@ -243,6 +243,28 @@ jobs:
           fi
           echo "ok: removing the constraint fails the suite"
 
+      # Two replicas of the server starting in the same second both see an empty
+      # app_user. Without the advisory lock both bootstrap, and the operator is shown
+      # two passwords, one of which belongs to an account they will never find again.
+      # Nothing about the code looks wrong when this breaks: a shared lock is still a
+      # lock, and still spelled like one.
+      - name: The bootstrap tests fail when the advisory lock stops excluding
+        run: |
+          F=crates/uops-store-pg/src/bootstrap.rs
+          cp "$F" "$RUNNER_TEMP/bootstrap.bak"
+          sed -i 's/pg_advisory_xact_lock(/pg_advisory_xact_lock_shared(/' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-pg --test bootstrap > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/bootstrap.bak" "$F"
+            echo "::error::the bootstrap tests passed with a lock that excludes nobody"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/bootstrap.bak" "$F"
+          echo "ok: a shared bootstrap lock fails the suite"
+
       - name: The API isolation tests fail when the role check is removed
         run: |
           F=crates/uops-api/src/extract.rs

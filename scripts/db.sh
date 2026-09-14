@@ -5,6 +5,7 @@
 #   bash scripts/db.sh migrate   # apply migrations/ in order
 #   bash scripts/db.sh test      # assert the schema invariants
 #   bash scripts/db.sh reset     # drop everything and re-apply
+#   bash scripts/db.sh sweep     # drop scratch databases left by bootstrap tests
 #   bash scripts/db.sh psql      # interactive shell
 #   bash scripts/db.sh down      # stop (keeps the volume)
 #
@@ -68,8 +69,22 @@ cmd_test() {
   psql_run -f - < "$ROOT/migrations/tests/invariants.sql"
 }
 
+# Scratch databases from the bootstrap tests, which need a genuinely empty
+# installation and so cannot share this one. A passing test drops its own; a panicking
+# test cannot, because Drop is not async. They are empty and harmless, and they
+# accumulate, so reset sweeps them.
+cmd_sweep() {
+  local stray
+  stray=$(psql_run -tAc "SELECT datname FROM pg_database WHERE datname LIKE 'uops_boot_%'")
+  for db in $stray; do
+    psql_run -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" > /dev/null
+    echo "dropped scratch database $db"
+  done
+}
+
 cmd_reset() {
   psql_run -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+  cmd_sweep
   cmd_migrate
 }
 
@@ -78,6 +93,7 @@ case "${1:-}" in
   migrate) cmd_migrate ;;
   test)    cmd_test ;;
   reset)   cmd_reset ;;
+  sweep)   cmd_sweep ;;
   psql)    docker compose -f "$COMPOSE" exec -e PGPASSWORD=uops postgres \
              psql -U uops -d uops ;;
   down)    docker compose -f "$COMPOSE" down ;;

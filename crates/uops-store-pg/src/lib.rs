@@ -42,6 +42,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod bootstrap;
 pub mod catalog;
 mod enforced;
 pub mod error;
@@ -54,6 +55,7 @@ pub use audit::{AccessEntry, AuditEntry};
 pub use auth::{
     ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, UserCredentials, UserProfile,
 };
+pub use bootstrap::{FirstRun, FirstRunRequest};
 pub use catalog::PgCatalog;
 pub use page::{Cursor, DEFAULT_PAGE, MAX_PAGE, Page};
 pub use resource::{NewResource, ResourceFilter};

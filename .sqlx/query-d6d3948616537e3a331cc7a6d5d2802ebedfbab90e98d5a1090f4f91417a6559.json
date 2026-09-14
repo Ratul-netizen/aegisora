@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO user_tenant_role (user_id, tenant_id, role, granted_by)\n            VALUES ($1, $2, $3, NULL)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "tenant_role",
+            "kind": {
+              "Enum": [
+                "viewer",
+                "operator",
+                "admin"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d6d3948616537e3a331cc7a6d5d2802ebedfbab90e98d5a1090f4f91417a6559"
+}
