@@ -49,14 +49,14 @@ PostgreSQL.
 | **M1 · first-run bootstrap** | ✅ Done — 5 store tests, 3 boot tests, 2 mutation guards |
 | **M1 · `uops-server`** | ✅ Done — it runs, and you can log into it |
 | **M1 · web shell** | 🟡 shell + auth + tenant switcher + resources — 13 tests |
-| M1 · cross-tenant acceptance test | ⬜ **Next** |
+| **M1 · cross-tenant acceptance test** | ✅ Done — 5 tests over every route, 2 mutation guards |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 371 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 376 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -248,13 +248,10 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **M1's headline acceptance test** — a user in tenant A attempting *every* endpoint
-   against tenant B, "verified by an integration test, not by inspection". Writable once
-   the surface is complete; the per-endpoint halves of it already exist.
-2. **The rest of the web shell** — the query explorer over `POST /api/v1/query`, the
+1. **The rest of the web shell** — the query explorer over `POST /api/v1/query`, the
    resource detail view, and cursor pagination in the table. The shell, the auth, the
    tenant switcher and the time range are done and the remaining views hang off them.
-3. **`docker compose up` from a clean checkout** — the last M1 acceptance criterion with
+2. **`docker compose up` from a clean checkout** — the last M1 acceptance criterion with
    nothing written for it. Needs the web build served alongside the API.
 
 ## How to pick this up
@@ -264,7 +261,7 @@ docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhou
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
 DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 371, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 376, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace

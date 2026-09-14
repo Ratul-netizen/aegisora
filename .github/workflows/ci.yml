@@ -304,6 +304,51 @@ jobs:
           cp "$RUNNER_TEMP/firstrun.bak" "$F"
           echo "ok: announcing the wrong password fails the suite"
 
+      # SPEC §M1's headline acceptance criterion, guarded.
+      #
+      # The mutation leaves `tenant_id = $2` in the SQL and makes it always true. That
+      # matters: the source scanner in uops-store-pg::enforced greps for a tenant
+      # predicate and still finds one, and the schema invariants still pass, because
+      # neither of them executes anything. Verified — both are green under this
+      # mutation. The isolation test is the only thing in the repository that catches
+      # it, which is the argument for the test existing.
+      - name: The isolation tests fail when a tenant predicate stops filtering
+        run: |
+          F=crates/uops-store-pg/src/resource.rs
+          cp "$F" "$RUNNER_TEMP/resource.bak"
+          sed -i 's/WHERE id = \$1 AND tenant_id = \$2/WHERE id = $1 AND (tenant_id = $2 OR TRUE)/g' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-api --test isolation > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/resource.bak" "$F"
+            echo "::error::the isolation tests passed with a tenant predicate that matches every row"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/resource.bak" "$F"
+          echo "ok: a tenant predicate that filters nothing fails the suite"
+
+      # And the coverage half of it: a route added without an isolation case must fail
+      # before any request is sent. Without this, "every endpoint" decays to "every
+      # endpoint that existed when someone last thought about it".
+      - name: The isolation tests fail when a route has no case
+        run: |
+          F=crates/uops-api/src/routes/mod.rs
+          cp "$F" "$RUNNER_TEMP/routes.bak"
+          sed -i 's|\.route("/api/v1/query", post(query::run))|.route("/api/v1/query", post(query::run))\n        .route("/api/v1/mutation-guard", get(auth::me))|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-api --test isolation > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/routes.bak" "$F"
+            echo "::error::the isolation tests passed with an uncovered route"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/routes.bak" "$F"
+          echo "ok: an uncovered route fails the suite"
+
       - name: The API isolation tests fail when the role check is removed
         run: |
           F=crates/uops-api/src/extract.rs
