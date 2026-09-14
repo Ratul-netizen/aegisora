@@ -41,14 +41,16 @@ PostgreSQL.
 | **M1 · `uops-store-pg`** | 🟡 resources + catalog done — 19 tests, 8 against a real server |
 | **M1 · `uops-identity`** | ✅ Done — 24 tests on the rules, 11 more against PostgreSQL |
 | **M1 · auth foundations** | ✅ Done — passwords, session tokens, roles, 18 tests |
-| M1 · `uops-api` HTTP layer / web | ⬜ **Next** |
+| **M1 · `uops-api` scope extractor** | ✅ Done — 24 tests, mutation-guarded in CI |
+| M1 · auth routes, resource routes, audit middleware | ⬜ **Next** |
+| M1 · web shell | ⬜ |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 256 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 280 tests, green
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -202,6 +204,11 @@ crates/uops-secrets/src/password.rs  argon2id, m=19456 t=2 p=1 — SPEC M0.8
 crates/uops-secrets/src/session.rs   opaque tokens; only the HASH is stored
 crates/uops-store-pg/src/auth.rs     users, roles, sessions; one statement per request
 
+crates/uops-api/
+├── extract.rs    THE file: the only caller of TenantScope::from_authenticated
+├── error.rs      RFC 7807. A tenant you cannot see is 404, never 403
+└── state.rs      what every handler is given
+
 crates/uops-store-pg/src/identity.rs
    IdentityStore over PostgreSQL. Merge and split are one transaction each:
    half a merge orphans every row of telemetry under the old resource_id.
@@ -251,6 +258,14 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The tenant is a request header, not a path segment.** `/api/v1/resources` with
+`X-Uops-Tenant`, rather than `/api/v1/tenants/{id}/resources`. An MSP engineer's session
+spans several customers, and the alternative — a "currently selected" tenant on the
+session — makes a request's meaning depend on invisible state, makes an audit row
+ambiguous about which customer was read, and gives a stolen cookie a selection to carry.
+A custom header is also a CSRF defence in its own right, since a cross-origin form cannot
+set one; that is a second layer under the double-submit token, not a replacement.
 
 **`create_resource` was two different operations with one name.** The repository's is an
 operator deliberately adding a device with a name and a site; the resolver's is "something

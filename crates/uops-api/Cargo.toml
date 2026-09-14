@@ -1,0 +1,36 @@
+[package]
+name = "uops-api"
+description = "The HTTP surface. The only place TenantScope::from_authenticated is reachable."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+uops-identity.workspace = true
+uops-query.workspace = true
+uops-secrets.workspace = true
+uops-store-pg.workspace = true
+
+axum.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+
+[dev-dependencies]
+# The integration tests seed organizations and tenants directly, because those are
+# fixtures rather than anything the API is responsible for creating.
+sqlx.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tower = { workspace = true, features = ["util"] }
+uuid.workspace = true
+
+[lints]
+workspace = true

@@ -223,6 +223,29 @@ jobs:
       - name: Schema behaviour
         run: bash scripts/ch.sh smoke
 
+      # The API's isolation tests, and the guard on them. A valid session naming
+      # another customer's tenant must get a 404 — and the suite that says so must
+      # fail if the role check is removed, or it is decoration.
+      - name: API tests
+        run: cargo test -p uops-api
+
+      - name: The isolation tests fail when the role check is removed
+        run: |
+          F=crates/uops-api/src/extract.rs
+          cp "$F" "$RUNNER_TEMP/extract.bak"
+          sed -i 's/\.ok_or(ApiError::NotFound)?;/.unwrap_or(Role::Viewer);/' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-api --test extractor > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/extract.bak" "$F"
+            echo "::error::isolation tests passed with the role check removed"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/extract.bak" "$F"
+          echo "ok: defaulting an absent role fails the suite"
+
       # Guards the refusal that protects an unattended upgrade: an applied migration
       # that has been edited must stop the run rather than be silently skipped.
       - name: An edited applied migration is refused

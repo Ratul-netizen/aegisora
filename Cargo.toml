@@ -69,12 +69,23 @@ sqlx = { version = "0.8", default-features = false, features = [
 # for a solved problem.
 lru = "0.12"
 
+# --- HTTP (M1) ------------------------------------------------------------------
+# No TLS in the server: terminate at a reverse proxy. Same licence reasoning as the
+# ClickHouse and PostgreSQL clients, and on-premise deployments put one in front
+# anyway for certificate management they already have processes for.
+axum = { version = "0.8", default-features = false, features = [
+    "http1", "json", "query", "tokio", "macros",
+] }
+tower = "0.5"
+tower-http = { version = "0.6", default-features = false, features = ["trace", "limit"] }
+
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }
 uops-secrets = { path = "crates/uops-secrets" }
 uops-identity = { path = "crates/uops-identity" }
 uops-store-pg = { path = "crates/uops-store-pg" }
+uops-api = { path = "crates/uops-api" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
