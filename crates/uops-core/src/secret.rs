@@ -19,6 +19,9 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
+use crate::{Error, Result};
 use zeroize::Zeroize;
 
 /// Wraps credential material so it cannot accidentally escape.
@@ -111,6 +114,127 @@ impl<T: Zeroize> From<T> for Secret<T> {
     }
 }
 
+/// An `SNMPv3` USM authentication protocol.
+///
+/// The weak ones are here because refusing them means refusing devices that exist. A
+/// switch bought in 2012 and still in a rack offers `MD5` and nothing else, and telling
+/// its owner to replace it is not monitoring advice. [`AuthProtocol::is_weak`] is how
+/// the UI marks them, the same way an SNMP community string is marked — visible, not
+/// forbidden.
+///
+/// SPEC §M2's acceptance criterion is `SHA-256`, which is [`AuthProtocol::Sha256`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthProtocol {
+    /// RFC 3414. Broken for collision resistance; still the only option on old kit.
+    Md5,
+    /// RFC 3414. Weak, and near-universal.
+    Sha1,
+    /// RFC 7860.
+    Sha224,
+    /// RFC 7860. What SPEC asks for.
+    Sha256,
+    /// RFC 7860.
+    Sha384,
+    /// RFC 7860.
+    Sha512,
+}
+
+impl AuthProtocol {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Md5 => "md5",
+            Self::Sha1 => "sha1",
+            Self::Sha224 => "sha224",
+            Self::Sha256 => "sha256",
+            Self::Sha384 => "sha384",
+            Self::Sha512 => "sha512",
+        }
+    }
+
+    /// True for protocols that should be reported rather than relied on.
+    #[must_use]
+    pub const fn is_weak(self) -> bool {
+        matches!(self, Self::Md5 | Self::Sha1)
+    }
+}
+
+impl std::str::FromStr for AuthProtocol {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s {
+            "md5" => Self::Md5,
+            "sha1" => Self::Sha1,
+            "sha224" => Self::Sha224,
+            "sha256" => Self::Sha256,
+            "sha384" => Self::Sha384,
+            "sha512" => Self::Sha512,
+            other => {
+                return Err(Error::Invalid(format!(
+                    "`{other}` is not an SNMPv3 auth protocol"
+                )));
+            }
+        })
+    }
+}
+
+/// An `SNMPv3` USM privacy protocol.
+///
+/// `NoPriv` is absent on purpose. A credential that authenticates but does not encrypt
+/// puts every polled value on the wire in cleartext, and "authPriv or v2c" is a clearer
+/// thing to explain to a customer than three security levels with different meanings.
+/// A device that cannot encrypt uses a community string and is marked insecure, which
+/// is at least honest about what it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivProtocol {
+    /// RFC 3414. 56-bit effective key. Present for the same reason `MD5` is.
+    Des,
+    /// RFC 3826.
+    Aes128,
+    /// Non-standard extension, widely implemented.
+    Aes192,
+    /// Non-standard extension, widely implemented. What SPEC asks for.
+    Aes256,
+}
+
+impl PrivProtocol {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Des => "des",
+            Self::Aes128 => "aes128",
+            Self::Aes192 => "aes192",
+            Self::Aes256 => "aes256",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_weak(self) -> bool {
+        matches!(self, Self::Des)
+    }
+}
+
+impl std::str::FromStr for PrivProtocol {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s {
+            "des" => Self::Des,
+            "aes128" => Self::Aes128,
+            "aes192" => Self::Aes192,
+            "aes256" => Self::Aes256,
+            other => {
+                return Err(Error::Invalid(format!(
+                    "`{other}` is not an SNMPv3 privacy protocol"
+                )));
+            }
+        })
+    }
+}
+
 /// Credential material, by kind.
 ///
 /// Every variant's payload is zeroized on drop. This is the only thing a
@@ -124,9 +248,16 @@ pub enum CredentialMaterial {
     /// on the wire and cannot be made otherwise.
     SnmpCommunity(String),
     /// `SNMPv3` USM credentials.
+    ///
+    /// The protocols travel with the keys because that is where they live: a USM user
+    /// on a device is the tuple (name, auth protocol, auth key, privacy protocol,
+    /// privacy key), and a credential carrying keys without saying which algorithms
+    /// they are for is a credential the poller has to guess about.
     SnmpV3 {
         username: String,
+        auth: AuthProtocol,
         auth_key: String,
+        privacy: PrivProtocol,
         priv_key: String,
     },
     SshPassword {
@@ -149,6 +280,11 @@ impl Zeroize for CredentialMaterial {
                 username,
                 auth_key,
                 priv_key,
+                // The protocol names are not secret and are Copy; there is nothing to
+                // wipe. Bound explicitly rather than with `..` so that adding a field
+                // that *is* secret fails to compile here.
+                auth: _,
+                privacy: _,
             } => {
                 username.zeroize();
                 auth_key.zeroize();
@@ -218,10 +354,54 @@ mod tests {
     }
 
     #[test]
+    fn a_protocol_name_round_trips_and_an_unknown_one_is_refused() {
+        // The names go on the wire in a sealed credential, so a rename here would make
+        // every credential already sealed with the old one undecryptable.
+        for p in [
+            AuthProtocol::Md5,
+            AuthProtocol::Sha1,
+            AuthProtocol::Sha224,
+            AuthProtocol::Sha256,
+            AuthProtocol::Sha384,
+            AuthProtocol::Sha512,
+        ] {
+            assert_eq!(p.as_str().parse::<AuthProtocol>().unwrap(), p);
+        }
+        for p in [
+            PrivProtocol::Des,
+            PrivProtocol::Aes128,
+            PrivProtocol::Aes192,
+            PrivProtocol::Aes256,
+        ] {
+            assert_eq!(p.as_str().parse::<PrivProtocol>().unwrap(), p);
+        }
+        assert!("sha3".parse::<AuthProtocol>().is_err());
+        assert!("rc4".parse::<PrivProtocol>().is_err());
+        // Not case-insensitive, deliberately: these are wire names, not user input.
+        assert!("SHA256".parse::<AuthProtocol>().is_err());
+    }
+
+    #[test]
+    fn the_weak_protocols_are_the_ones_that_are_actually_weak() {
+        // Not an opinion that should drift. MD5 and SHA-1 are broken for the property
+        // USM relies on; DES has a 56-bit effective key. AES-128 is not weak — it is
+        // simply not what SPEC asks for, and conflating the two would make the UI warn
+        // about a fine credential.
+        assert!(AuthProtocol::Md5.is_weak());
+        assert!(AuthProtocol::Sha1.is_weak());
+        assert!(!AuthProtocol::Sha256.is_weak());
+        assert!(PrivProtocol::Des.is_weak());
+        assert!(!PrivProtocol::Aes128.is_weak());
+        assert!(!PrivProtocol::Aes256.is_weak());
+    }
+
+    #[test]
     fn credential_debug_shows_kind_but_not_payload() {
         let c = CredentialMaterial::SnmpV3 {
             username: "admin".into(),
+            auth: AuthProtocol::Sha256,
             auth_key: "auth-key-material".into(),
+            privacy: PrivProtocol::Aes256,
             priv_key: "priv-key-material".into(),
         };
         let rendered = format!("{c:?}");

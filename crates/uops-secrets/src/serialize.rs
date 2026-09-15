@@ -69,12 +69,19 @@ pub fn serialize_material(m: &CredentialMaterial) -> Secret<Vec<u8>> {
         }
         CredentialMaterial::SnmpV3 {
             username,
+            auth,
             auth_key,
+            privacy,
             priv_key,
         } => {
             out.push(TAG_SNMP_V3);
             put_field(&mut out, username);
+            // The protocols as their names, not as discriminants. A number here would
+            // make adding a variant in the middle of the enum silently reinterpret
+            // every credential already sealed with it.
+            put_field(&mut out, auth.as_str());
             put_field(&mut out, auth_key);
+            put_field(&mut out, privacy.as_str());
             put_field(&mut out, priv_key);
         }
         CredentialMaterial::SshPassword { username, password } => {
@@ -110,7 +117,13 @@ pub fn deserialize_material(input: &[u8]) -> Result<Secret<CredentialMaterial>> 
         TAG_SNMP_COMMUNITY => CredentialMaterial::SnmpCommunity(take_field(rest, &mut pos)?),
         TAG_SNMP_V3 => CredentialMaterial::SnmpV3 {
             username: take_field(rest, &mut pos)?,
+            auth: take_field(rest, &mut pos)?
+                .parse()
+                .map_err(|_| Error::Corrupt("unknown SNMPv3 auth protocol"))?,
             auth_key: take_field(rest, &mut pos)?,
+            privacy: take_field(rest, &mut pos)?
+                .parse()
+                .map_err(|_| Error::Corrupt("unknown SNMPv3 privacy protocol"))?,
             priv_key: take_field(rest, &mut pos)?,
         },
         TAG_SSH_PASSWORD => CredentialMaterial::SshPassword {
@@ -132,6 +145,7 @@ pub fn deserialize_material(input: &[u8]) -> Result<Secret<CredentialMaterial>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uops_core::{AuthProtocol, PrivProtocol};
 
     /// Returns the re-read value still wrapped, because `CredentialMaterial`
     /// implements `Drop` in order to zeroize — so its fields cannot be moved out of a
@@ -149,13 +163,35 @@ mod tests {
 
         let out = round_trip(&CredentialMaterial::SnmpV3 {
             username: "admin".into(),
+            auth: AuthProtocol::Sha256,
             auth_key: "auth".into(),
+            privacy: PrivProtocol::Aes256,
             priv_key: "priv".into(),
         });
         assert!(matches!(
             out.expose(),
-            CredentialMaterial::SnmpV3 { username, auth_key, priv_key }
-                if username == "admin" && auth_key == "auth" && priv_key == "priv"
+            CredentialMaterial::SnmpV3 { username, auth, auth_key, privacy, priv_key }
+                if username == "admin"
+                    && *auth == AuthProtocol::Sha256
+                    && auth_key == "auth"
+                    && *privacy == PrivProtocol::Aes256
+                    && priv_key == "priv"
+        ));
+
+        // A weak pair seals and opens like any other. The product reports them; it does
+        // not refuse to store one, because a device that offers nothing else still has
+        // to be monitored.
+        let out = round_trip(&CredentialMaterial::SnmpV3 {
+            username: "old".into(),
+            auth: AuthProtocol::Md5,
+            auth_key: "a".into(),
+            privacy: PrivProtocol::Des,
+            priv_key: "p".into(),
+        });
+        assert!(matches!(
+            out.expose(),
+            CredentialMaterial::SnmpV3 { auth, privacy, .. }
+                if *auth == AuthProtocol::Md5 && *privacy == PrivProtocol::Des
         ));
 
         let out = round_trip(&CredentialMaterial::SshPassword {

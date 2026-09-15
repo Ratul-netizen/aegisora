@@ -55,7 +55,8 @@ PostgreSQL.
 | **M2 · monitoring profiles** | ✅ Done — 5 built-ins, 40 tests, schema + resolution |
 | **M2 · scheduler + counters** | ✅ Done — time wheel, jitter, wrap detection; 19 tests |
 | **M2 · SNMP walk + simulator** | ✅ Done — 19 tests, a 1 000-agent fleet in a Vec |
-| M2 · v3 credentials | ⬜ **Next** |
+| **M2 · v3 credential handling** | 🟡 protocols, policy, access context — 9 tests |
+| M2 · the real transport | ⬜ **Next** |
 | M2 · the executor | ⬜ |
 | M2–M4 | ⬜ |
 
@@ -63,7 +64,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 456 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 467 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -265,11 +266,13 @@ because it reads as covered.
 2. **No UI for the review queue.** `pending_reviews` exists and is tested; nothing
    surfaces it. Blocked on the above, since a queue you can only agree with is worse
    than no queue.
-3. **M2 · SNMPv3 credentials.** The walk works against simulated agents; nothing
-   authenticates. authPriv (SHA-256 / AES-256) with the credential fetched through
-   `SecretStore` and an access-log entry is its own acceptance criterion, and the one
-   piece of M2 that cannot be finished against a simulator — SPEC says "against a real
-   device", which needs hardware or a containerised net-snmp agent.
+3. **M2 · "against a real device".** The credential half of that criterion is done —
+   protocols, strength policy, access context. The other half is in its wording: SPEC
+   asks for authPriv against real hardware, which a simulator cannot satisfy. The
+   cheapest honest answer is a containerised `net-snmp` agent in the compose file with
+   a v3 user configured, run as its own CI job; a real switch is better and needs kit.
+   **This is a decision to make before the transport is written**, because it decides
+   what "it works" is tested against.
 4. **M2 · the real transport.** `Transport` has one implementation and it is the
    simulator. The `snmp2`-backed one is next to it and small; what it needs first is a
    decision about socket reuse — one UDP socket per poller or one per device — which is
@@ -288,7 +291,7 @@ docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhou
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
 DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 456, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 467, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace
@@ -304,6 +307,7 @@ M1 is where they start.
 
 | Item | Blocks | Note |
 |---|---|---|
+| **One unreproduced test failure** | nothing yet | A single `cargo test --workspace` run reported 408 passed / 1 failed and stopped short of the usual 32 suites; the next run and every run since has been clean. The two timing-sensitive suites (login timing, bootstrap scratch databases) were re-run 5× and 3× and are stable. Recorded rather than dismissed — if it returns, the thing to capture is which suite truncated |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |

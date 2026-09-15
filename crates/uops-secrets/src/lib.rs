@@ -103,7 +103,9 @@ mod tests {
     fn snmpv3() -> Secret<CredentialMaterial> {
         Secret::new(CredentialMaterial::SnmpV3 {
             username: "netops".into(),
+            auth: uops_core::AuthProtocol::Sha256,
             auth_key: "auth-secret-material".into(),
+            privacy: uops_core::PrivProtocol::Aes256,
             priv_key: "priv-secret-material".into(),
         })
     }
@@ -124,6 +126,7 @@ mod tests {
                 username,
                 auth_key,
                 priv_key,
+                ..
             } => {
                 assert_eq!(username, "netops");
                 assert_eq!(auth_key, "auth-secret-material");

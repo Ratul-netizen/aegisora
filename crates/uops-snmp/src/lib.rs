@@ -19,10 +19,12 @@
 //! and neither is obvious, so owning them beats trusting them.
 
 pub mod bulk;
+pub mod credential;
 pub mod sim;
 pub mod transport;
 pub mod walk;
 
 pub use bulk::{Repetitions, Tuning};
+pub use credential::{CredentialError, SnmpCredential, Strength};
 pub use transport::{Target, Transport, TransportError, Value, VarBind};
 pub use walk::{WalkError, walk};

@@ -41,4 +41,4 @@ pub use identity::{
 pub use ids::{ActorId, CredentialRef, DecisionId, OrgId, ResourceId, SessionId, SiteId, TenantId};
 pub use resource::{Relationship, RelationshipKind, Resource, ResourceKind, ResourceStatus};
 pub use scope::{Role, TenantScope};
-pub use secret::{CredentialMaterial, Secret};
+pub use secret::{AuthProtocol, CredentialMaterial, PrivProtocol, Secret};

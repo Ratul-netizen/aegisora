@@ -12,6 +12,7 @@ authors.workspace = true
 [dependencies]
 uops-core.workspace = true
 uops-profile.workspace = true
+uops-secrets.workspace = true
 
 async-trait.workspace = true
 snmp2.workspace = true
