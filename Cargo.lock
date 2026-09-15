@@ -2237,6 +2237,7 @@ dependencies = [
  "tokio",
  "uops-core",
  "uops-profile",
+ "uops-snmp",
 ]
 
 [[package]]

@@ -14,9 +14,11 @@ uops-core.workspace = true
 uops-profile.workspace = true
 
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+uops-snmp.workspace = true
 
 [lints]
 workspace = true

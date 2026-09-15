@@ -10,6 +10,8 @@
 //!   seconds on a 1 Gbps link and a naive subtraction produces a negative rate.
 
 pub mod counter;
+pub mod executor;
 pub mod wheel;
 
+pub use executor::{Completed, Executor, Limits, Outcome};
 pub use wheel::{Wheel, WheelError};

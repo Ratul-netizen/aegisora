@@ -447,6 +447,31 @@ jobs:
           cp "$RUNNER_TEMP/walk.bak" "$F"
           echo "ok: a walk that does not stop fails the suite"
 
+      # SPEC §M2: "dead device does not delay polling of healthy devices (measured, not
+      # assumed)". The mutation serialises the fleet — one poll in flight, whatever the
+      # limit says — which is precisely the failure the criterion is about.
+      #
+      # This guard exists because the first version of the measurement did NOT catch it.
+      # Completed::elapsed started after acquiring a slot, so queue time was invisible
+      # and a strictly serialised fleet reported the same numbers as a concurrent one.
+      # It measures total() now, and the mutation produces 4.07s against 5.5ms.
+      - name: The fleet tests fail when the poller is serialised
+        run: |
+          F=crates/uops-poll/src/executor.rs
+          cp "$F" "$RUNNER_TEMP/executor.bak"
+          sed -i 's|Arc::new(Semaphore::new(limits.global))|Arc::new(Semaphore::new(1))|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-poll --test fleet > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/executor.bak" "$F"
+            echo "::error::the fleet tests passed with every device polled one at a time"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/executor.bak" "$F"
+          echo "ok: a serialised fleet fails the suite"
+
       - name: The API isolation tests fail when the role check is removed
         run: |
           F=crates/uops-api/src/extract.rs
