@@ -62,6 +62,7 @@ PostgreSQL.
 | **M2 · the planner** | ✅ Done — jobs grouped by interval, 9 tests |
 | **M2 · the real transport** | ✅ Done — snmp2 over UDP, 6 tests against net-snmp |
 | **M2 · pollable devices** | ✅ Done — the store query the poller reads, 5 tests |
+| **M2 · profile persistence** | ✅ Done — seeding, precedence, 7 tests |
 | M2 · the poller binary | ⬜ **Next** |
 | M2 · the executor | ⬜ |
 | M2–M4 | ⬜ |
@@ -70,7 +71,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 503 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 510 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -283,10 +284,7 @@ because it reads as covered.
    a per-device concurrency question and so belongs with the executor.
 4. **M2 · the poller binary — pick up here.** Every part exists and is tested; what
    is missing is the process that joins them. In order:
-   1. Load profiles. `monitoring_profile` exists (migration 0007) and nothing reads or
-      writes it. The built-ins are embedded in `uops_profile::builtin::all()`, so the
-      first step is seeding them into the table and a store method to read a tenant's
-      set — theirs plus the built-ins.
+   1. ~~Load profiles.~~ Done: `seed_builtin_profiles`, `profiles_for`, `put_profile`.
    2. The loop. `PgStore::pollable_devices` gives the devices; `uops_profile::resolve`
       picks each one's profile from its cached `snmp.sysobjectid`; `uops_poll::plan`
       expands that into jobs; `Wheel::insert` schedules them; `Executor::run` runs the
@@ -306,7 +304,7 @@ docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhou
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
 DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 503, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 510, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace

@@ -2341,6 +2341,7 @@ dependencies = [
  "tokio",
  "uops-core",
  "uops-identity",
+ "uops-profile",
  "uops-query",
  "uops-secrets",
  "uuid",

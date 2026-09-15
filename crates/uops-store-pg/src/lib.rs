@@ -49,6 +49,7 @@ pub mod error;
 pub mod identity;
 pub mod page;
 pub mod pollable;
+pub mod profile;
 pub mod resource;
 pub mod store;
 

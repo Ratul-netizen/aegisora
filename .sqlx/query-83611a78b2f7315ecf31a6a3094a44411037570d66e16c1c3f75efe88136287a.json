@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT DISTINCT ON (profile_key)\n                   profile_key,\n                   definition AS \"definition!\"\n              FROM monitoring_profile\n             WHERE enabled\n               AND (tenant_id = $1 OR tenant_id IS NULL)\n             ORDER BY profile_key,\n                      (tenant_id IS NOT NULL) DESC,\n                      version DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "profile_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "definition!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "83611a78b2f7315ecf31a6a3094a44411037570d66e16c1c3f75efe88136287a"
+}

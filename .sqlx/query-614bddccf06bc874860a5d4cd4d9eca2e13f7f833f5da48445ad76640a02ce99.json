@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO monitoring_profile (id, tenant_id, profile_key, version, definition)\n                VALUES (gen_random_uuid(), NULL, $1, $2, $3)\n                ON CONFLICT (profile_key, version) WHERE tenant_id IS NULL\n                DO UPDATE SET definition = EXCLUDED.definition,\n                              updated_at = now()\n                          WHERE monitoring_profile.definition IS DISTINCT FROM EXCLUDED.definition\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "614bddccf06bc874860a5d4cd4d9eca2e13f7f833f5da48445ad76640a02ce99"
+}
