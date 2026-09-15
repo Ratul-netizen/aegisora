@@ -35,7 +35,13 @@ serde_json = "1"
 # The cost is the one SPEC §M2 names: "async-snmp does this automatically; snmp2 needs
 # it written" — GETBULK tooBig handling. That is a dozen lines we control rather than a
 # licence we cannot remove.
-snmp2 = { version = "0.5", default-features = false, features = ["v3", "crypto-rust", "tokio"] }
+# heap_buffers: without it every AsyncSession holds its 64 KiB receive buffer as a
+# stack array, and a handful of concurrent sessions overflow a thread's stack. Found by
+# the agent tests — three of six threads died with STATUS_STACK_OVERFLOW before this was
+# on. A poller holds hundreds of sessions, so it was never going to be optional here.
+snmp2 = { version = "0.5", default-features = false, features = [
+    "v3", "crypto-rust", "tokio", "heap_buffers",
+] }
 
 # --- monitoring profiles (M2) ---------------------------------------------------
 # YAML, because a profile is written and reviewed by a human — an OID table in JSON is

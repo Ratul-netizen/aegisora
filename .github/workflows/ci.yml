@@ -236,6 +236,39 @@ jobs:
 
       # ---- Everything -------------------------------------------------------------
 
+      # SPEC §M2: "SNMPv3 authPriv (SHA-256 / AES-256) against a real device". The
+      # simulator proves every failure mode and cannot prove this one — it is the same
+      # code on both ends. net-snmp is a different implementation of USM, so the key
+      # derivation, the privacy IV and the HMAC are all actually being checked.
+      #
+      # Without UOPS_SNMP_AGENT these tests skip and say so. Setting it here is what
+      # makes them run, and a skip in this job would be a silent hole.
+      - name: Start the SNMP agent fixture
+        run: |
+          docker compose -f deploy/docker-compose.yml --profile test up -d snmp-agent
+          for i in $(seq 1 30); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' uops-snmp-agent 2>/dev/null || echo starting)
+            if [ "$state" = "healthy" ]; then
+              echo "agent healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          docker compose -f deploy/docker-compose.yml --profile test logs snmp-agent | tail -5
+
+      - name: SNMPv3 authPriv against a real agent
+        env:
+          UOPS_SNMP_AGENT: 127.0.0.1:16100
+        run: |
+          output=$(cargo test -p uops-snmp --test agent -- --nocapture 2>&1)
+          echo "$output"
+          # A skipped test passes. If the fixture were unreachable the suite would be
+          # green and prove nothing, so the skip message is itself a failure here.
+          if echo "$output" | grep -q "SKIPPED"; then
+            echo "::error::the agent tests skipped; the fixture was not reachable"
+            exit 1
+          fi
+
       # The whole suite, in the one job that has what it needs. Unit and integration
       # together: which is which is not a distinction worth maintaining in a list
       # somebody has to remember to update.

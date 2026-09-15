@@ -17,7 +17,7 @@ uops-secrets.workspace = true
 async-trait.workspace = true
 snmp2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "time", "rt"] }
+tokio = { workspace = true, features = ["net", "time", "rt", "sync"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

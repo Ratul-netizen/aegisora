@@ -60,7 +60,7 @@ PostgreSQL.
 | **M2 · net-snmp test agent** | ✅ Done — SHA-256/AES-256 authPriv, verified end to end |
 | **M2 · the executor** | ✅ Done — limits, budgets, and the measured criterion |
 | **M2 · the planner** | ✅ Done — jobs grouped by interval, 9 tests |
-| M2 · the real transport | ⬜ **Next** |
+| **M2 · the real transport** | ✅ Done — snmp2 over UDP, 6 tests against net-snmp |
 | M2 · the executor | ⬜ |
 | M2–M4 | ⬜ |
 
@@ -68,7 +68,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 488 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 498 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -279,12 +279,12 @@ because it reads as covered.
    simulator. The `snmp2`-backed one is next to it and small; what it needs first is a
    decision about socket reuse — one UDP socket per poller or one per device — which is
    a per-device concurrency question and so belongs with the executor.
-4. **M2 · wiring it together.** Every part now exists — profiles say what to poll,
-   the wheel says when, the executor runs it under limits, the walk collects it, the
-   counter arithmetic interprets it. Nothing joins them: there is no poller binary, no
-   path from a `resource` row to a scheduled job, and nothing writes a sample to
-   `ClickHouse`. That is the next piece, and it is mostly plumbing between things that
-   are already tested.
+4. **M2 · the poller binary.** Every part exists and the transport now reaches real
+   hardware. What is missing is the process: read pollable resources from `PostgreSQL`,
+   resolve each to a profile, plan the jobs, load them into the wheel, run the due ones
+   through the executor, and write the samples to `ClickHouse`. Interface discovery —
+   creating child resources and `member_of` edges — hangs off the same loop and is the
+   last M2 acceptance criterion with nothing behind it.
 
 ## How to pick this up
 
@@ -293,7 +293,7 @@ docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhou
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
 DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 488, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 498, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace
