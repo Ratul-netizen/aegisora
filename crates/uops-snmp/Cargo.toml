@@ -1,0 +1,25 @@
+[package]
+name = "uops-snmp"
+description = "The SNMP client: GETBULK with tooBig handling, v3 credentials from the secret store. SPEC §M2."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+uops-profile.workspace = true
+
+async-trait.workspace = true
+snmp2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "time", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true
