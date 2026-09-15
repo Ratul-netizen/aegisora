@@ -375,6 +375,52 @@ jobs:
           cp "$RUNNER_TEMP/identity.bak" "$F"
           echo "ok: a review that outlives its own answer fails the suite"
 
+      # SPEC §M2: "a 32-bit counter wrap produces no negative rate in any query".
+      #
+      # The mutation is the repair everybody proposes: assume the counter went round
+      # exactly once and add the modulus back. It is right exactly once, and on a
+      # 10 Gbps link a 32-bit byte counter wraps seventeen times a minute — so it
+      # reports a seventeenth of the traffic, confidently, with nothing to indicate it
+      # guessed.
+      - name: The counter tests fail when a wrap is silently repaired
+        run: |
+          F=crates/uops-poll/src/counter.rs
+          cp "$F" "$RUNNER_TEMP/counter.bak"
+          sed -i 's|^    Delta::Wrapped$|    rate(width.modulus() - u128::from(previous.value) + u128::from(current.value), elapsed_nanos)|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-poll counter > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/counter.bak" "$F"
+            echo "::error::the counter tests passed with a wrap repaired by guesswork"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/counter.bak" "$F"
+          echo "ok: guessing at a wrap fails the suite"
+
+      # The bug the wheel tests found while being written. Jitter is applied after the
+      # interval is checked against the wheel's span, so a legal interval can be pushed
+      # past it — and an offset larger than the wheel lands at `offset - slots` ticks
+      # ahead. A 10-tick interval jittered to 11 on a 10-slot wheel fires one tick later
+      # instead of eleven, forever, and nothing about the code looks wrong.
+      - name: The wheel tests fail when a jittered offset can wrap the wheel
+        run: |
+          F=crates/uops-poll/src/wheel.rs
+          cp "$F" "$RUNNER_TEMP/wheel.bak"
+          sed -i 's/jittered.clamp(1, self.slots.len() as u64)/jittered.max(1)/' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-poll wheel > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/wheel.bak" "$F"
+            echo "::error::the wheel tests passed with a schedule that can fire early"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/wheel.bak" "$F"
+          echo "ok: an offset that outruns the wheel fails the suite"
+
       - name: The API isolation tests fail when the role check is removed
         run: |
           F=crates/uops-api/src/extract.rs

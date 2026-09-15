@@ -2060,6 +2060,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-poll"
+version = "0.0.1"
+dependencies = [
+ "thiserror",
+ "tokio",
+ "uops-core",
+ "uops-profile",
+]
+
+[[package]]
 name = "uops-profile"
 version = "0.0.1"
 dependencies = [
