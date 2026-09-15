@@ -50,6 +50,7 @@ PostgreSQL.
 | **M1 · `uops-server`** | ✅ Done — it runs, and you can log into it |
 | **M1 · web shell** | ✅ Done — shell, auth, switcher, inventory, detail, explorer |
 | **M1 · cross-tenant acceptance test** | ✅ Done — 5 tests over every route, 2 mutation guards |
+| **M1 · 10 000-resource p95** | ✅ Done — measured through the router, worst p95 75 ms |
 | **M1 · `docker compose up`** | ✅ Done — one 30 MB image, migrations as their own step, CI-verified |
 | **M1 · identity end to end** | ✅ Done — the SPEC sentence as one sequence; found a real bug |
 | **M2 · monitoring profiles** | ✅ Done — 5 built-ins, 40 tests, schema + resolution |
@@ -66,7 +67,7 @@ PostgreSQL.
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 478 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 479 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -291,7 +292,7 @@ docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhou
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
 DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 478, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 479, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace
