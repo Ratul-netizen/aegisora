@@ -54,15 +54,16 @@ PostgreSQL.
 | **M1 · identity end to end** | ✅ Done — the SPEC sentence as one sequence; found a real bug |
 | **M2 · monitoring profiles** | ✅ Done — 5 built-ins, 40 tests, schema + resolution |
 | **M2 · scheduler + counters** | ✅ Done — time wheel, jitter, wrap detection; 19 tests |
-| **M2 · SNMP crate + GETBULK** | 🟡 crate chosen, tooBig tuning done — 7 tests |
-| M2 · v3 credentials + the walk | ⬜ **Next** |
+| **M2 · SNMP walk + simulator** | ✅ Done — 19 tests, a 1 000-agent fleet in a Vec |
+| M2 · v3 credentials | ⬜ **Next** |
+| M2 · the executor | ⬜ |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 444 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 456 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -264,11 +265,15 @@ because it reads as covered.
 2. **No UI for the review queue.** `pending_reviews` exists and is tested; nothing
    surfaces it. Blocked on the above, since a queue you can only agree with is worse
    than no queue.
-3. **M2 · the walk, and SNMPv3 credentials.** `snmp2` is chosen and its `tooBig`
-   tuning is written; nothing sends a packet yet. Next is the transport trait — the
-   seam that lets 1 000 simulated agents be a test rather than a lab — then the walk
-   itself, then v3 authPriv (SHA-256 / AES-256) with the credential fetched through
-   `SecretStore` and an access-log entry, which is its own acceptance criterion.
+3. **M2 · SNMPv3 credentials.** The walk works against simulated agents; nothing
+   authenticates. authPriv (SHA-256 / AES-256) with the credential fetched through
+   `SecretStore` and an access-log entry is its own acceptance criterion, and the one
+   piece of M2 that cannot be finished against a simulator — SPEC says "against a real
+   device", which needs hardware or a containerised net-snmp agent.
+4. **M2 · the real transport.** `Transport` has one implementation and it is the
+   simulator. The `snmp2`-backed one is next to it and small; what it needs first is a
+   decision about socket reuse — one UDP socket per poller or one per device — which is
+   a per-device concurrency question and so belongs with the executor.
 4. **M2 · the executor.** The remaining half of the poller design: a per-device
    concurrency cap and a global semaphore, and a per-device timeout budget so one dead
    device cannot delay the wheel. The wheel already reschedules before handing work
@@ -283,7 +288,7 @@ docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhou
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
 DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 444, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 456, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace

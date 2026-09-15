@@ -421,6 +421,32 @@ jobs:
           cp "$RUNNER_TEMP/wheel.bak" "$F"
           echo "ok: an offset that outruns the wheel fails the suite"
 
+      # A walk that does not stop at its table boundary keeps going into the rest of the
+      # agent — ifTable, then ifXTable, then ipAddrTable, then everything. A three-request
+      # poll becomes a several-thousand-request one, on every device, every interval. On a
+      # fleet that is a denial of service you wrote yourself, and the only symptom is that
+      # polling is slow.
+      #
+      # The stop is Oid::starts_with, arc-wise. This guard is also what catches it being
+      # rewritten as a string comparison, which is correct for almost every prefix and
+      # wrong for 1.3.6.1.2.1.2.2.10 against 1.3.6.1.2.1.2.2.1.
+      - name: The walk tests fail when a table boundary stops being one
+        run: |
+          F=crates/uops-snmp/src/walk.rs
+          cp "$F" "$RUNNER_TEMP/walk.bak"
+          sed -i 's|if !vb.oid.starts_with(table) {|if false \&\& !vb.oid.starts_with(table) {|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-snmp --test walk > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/walk.bak" "$F"
+            echo "::error::the walk tests passed with a walk that runs past its table"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/walk.bak" "$F"
+          echo "ok: a walk that does not stop fails the suite"
+
       - name: The API isolation tests fail when the role check is removed
         run: |
           F=crates/uops-api/src/extract.rs
