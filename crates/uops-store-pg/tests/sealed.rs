@@ -56,6 +56,9 @@ fn ctx() -> AccessContext {
     AccessContext::new(uops_core::scope::Actor::Collector, "snmp-poll")
 }
 
+/// The id the rotation test rotates *to*.
+const NEXT_KEK: &str = "test-kek-2";
+
 /// A KEK built from fixed bytes, so two rings open the same ciphertext.
 ///
 /// `KekRing` is deliberately not `Clone` — it holds key material — and
@@ -63,13 +66,41 @@ fn ctx() -> AccessContext {
 /// restart must *not* do. Built from a file instead, which is one of the two ways a
 /// deployment supplies one and needs no environment mutation (unsafe since Rust 2024,
 /// and forbidden in this workspace).
+///
+/// # Why the ring carries the rotation's target too
+///
+/// `SealedStore::list_all` is deliberately global — a KEK rotation has to re-wrap every
+/// row or leave one behind that only the retired key can open — so the rotation test
+/// below re-wraps *every credential in the database*, including the ones the other tests
+/// in this file are using. That is correct: a deployment has one key ring, and a
+/// rotation is a whole-database operation by definition.
+///
+/// It is also why the ring here holds both ids from fixed bytes rather than the rotation
+/// generating a random second key. With a random one, a test whose credential had been
+/// re-wrapped by a concurrently-running rotation could not open it, and the failure
+/// looked like an intermittent `UnknownKek` in whichever test lost the race. Both keys
+/// being deterministic makes every ring in this file able to open anything any of them
+/// wrapped, which is what a single deployment's ring actually is.
 fn fixed_kek(dir: &std::path::Path) -> KekRing {
     let path = dir.join("kek.hex");
     if !path.exists() {
         std::fs::write(&path, "0".repeat(64)).expect("write the test kek");
     }
-    KekRing::from_file(&path, uops_secrets::record::KeyId("test-kek".to_owned()))
-        .expect("load the test kek")
+    let mut ring = KekRing::from_file(&path, uops_secrets::record::KeyId("test-kek".to_owned()))
+        .expect("load the test kek");
+    ring.add_retired(
+        uops_secrets::record::KeyId(NEXT_KEK.to_owned()),
+        Secret::new(next_key()),
+    );
+    ring
+}
+
+/// The second KEK, from fixed bytes. See [`fixed_kek`].
+///
+/// Deliberately not all-zeroes: that is the first key, and two identical KEKs would make
+/// the rotation test pass whether or not anything was actually re-wrapped.
+fn next_key() -> uops_secrets::Key {
+    uops_secrets::Key::from_bytes([0x11; uops_secrets::KEY_LEN])
 }
 
 /// A vault over PostgreSQL, with a fixed KEK so a second one can open what the first
@@ -253,8 +284,8 @@ async fn rotating_the_kek_rewraps_without_touching_the_ciphertext() {
     // rather than dropping it, is what keeps un-rewrapped rows readable while the
     // rotation runs — see KekRing's own docs.
     v.promote_kek(
-        uops_secrets::record::KeyId("test-kek-2".to_owned()),
-        uops_core::Secret::new(uops_secrets::Key::generate().expect("key").expose().clone()),
+        uops_secrets::record::KeyId(NEXT_KEK.to_owned()),
+        Secret::new(next_key()),
     );
 
     let report = v.rotate_kek().expect("rotate");

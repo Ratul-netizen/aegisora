@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use snmp2::{Oid as SnmpOid, Value as SnmpValue, v3};
 use tokio::sync::Mutex;
-use uops_core::CredentialMaterial;
+use uops_core::{CredentialMaterial, Secret};
 use uops_profile::Oid;
 
 use crate::bulk::Repetitions;
@@ -58,7 +58,7 @@ pub const DEFAULT_POOL: usize = 512;
 pub struct UdpTransport {
     sessions: Mutex<HashMap<SocketAddr, Arc<Mutex<snmp2::AsyncSession>>>>,
     order: Mutex<Vec<SocketAddr>>,
-    credential: Arc<CredentialMaterial>,
+    credential: Arc<Secret<CredentialMaterial>>,
     timeout: Duration,
     pool: usize,
 }
@@ -77,11 +77,18 @@ impl UdpTransport {
     /// A transport that talks to every device with the same credential.
     ///
     /// One credential per transport rather than per request: a poller instance is
-    /// already per-tenant-per-credential in the scheduling above this, and threading a
-    /// `Secret` through every call would mean a credential that lives as long as the
-    /// call stack rather than as long as the poll.
+    /// already per-tenant-per-credential in the scheduling above this, and passing it
+    /// per call would mean a credential that lives as long as the call stack rather
+    /// than as long as the poll.
+    ///
+    /// Takes the `Secret`, not the material. `CredentialMaterial` is deliberately not
+    /// `Clone` — copying key material is not something a caller should be able to do by
+    /// typing six characters — so a transport that wanted the bare value could only be
+    /// built by a caller that had somehow obtained an owned one. Holding the wrapper
+    /// also means the material is zeroized when the last transport is dropped, which
+    /// the bare value was not.
     #[must_use]
-    pub fn new(credential: CredentialMaterial) -> Self {
+    pub fn new(credential: Secret<CredentialMaterial>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             order: Mutex::new(Vec::new()),
@@ -152,7 +159,7 @@ impl UdpTransport {
             0,
         ]);
 
-        match self.credential.as_ref() {
+        match self.credential.expose() {
             CredentialMaterial::SnmpCommunity(community) => {
                 snmp2::AsyncSession::new_v2c(address, community.as_bytes(), start)
                     .await
@@ -307,6 +314,61 @@ impl Transport for UdpTransport {
             }
         };
 
+        self.finish(target.address, result).await
+    }
+
+    async fn get_scalars(
+        &self,
+        target: &Target,
+        oids: &[Oid],
+    ) -> Result<Vec<VarBind>, TransportError> {
+        if oids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // A GET of the instances, not a GETNEXT of the objects. Asking after an OID
+        // that is already an instance skips the thing being asked for and answers with
+        // whatever the agent holds next — a different metric's value under this
+        // metric's name, which is a failure that produces plausible numbers rather than
+        // an error. `instance` resolves both spellings a profile may use.
+        let encoded: Vec<SnmpOid<'static>> = oids
+            .iter()
+            .map(|oid| to_snmp_oid(&crate::transport::instance(oid)))
+            .collect::<Result<_, TransportError>>()?;
+        let refs: Vec<&SnmpOid<'static>> = encoded.iter().collect();
+        let session = self.session(target.address).await?;
+
+        let result = {
+            let mut guard = session.lock().await;
+            // One PDU for the whole set: the difference between one round trip per
+            // device per poll and one per metric.
+            match tokio::time::timeout(self.timeout, guard.get_many(&refs)).await {
+                Err(_) => return Err(TransportError::Timeout),
+                Ok(Ok(pdu)) => Ok(pdu
+                    .varbinds
+                    .filter_map(|(o, v)| {
+                        o.to_string().parse::<Oid>().ok().map(|oid| VarBind {
+                            oid,
+                            value: from_snmp_value(&v),
+                        })
+                    })
+                    .collect::<Vec<_>>()),
+                Ok(Err(e)) => Err(e),
+            }
+        };
+
+        self.finish(target.address, result).await
+    }
+}
+
+impl UdpTransport {
+    /// Classify a request's outcome, dropping the session on what looks like an auth
+    /// failure. Shared by both request shapes so they cannot drift apart.
+    async fn finish(
+        &self,
+        address: SocketAddr,
+        result: Result<Vec<VarBind>, snmp2::Error>,
+    ) -> Result<Vec<VarBind>, TransportError> {
         match result {
             Ok(varbinds) => Ok(varbinds),
             Err(e) => {
@@ -314,7 +376,7 @@ impl Transport for UdpTransport {
                 if classified == TransportError::AuthFailed {
                     // Almost always drifted engine counters or a rebooted agent rather
                     // than a wrong password — see forget().
-                    self.forget(target.address).await;
+                    self.forget(address).await;
                 }
                 Err(classified)
             }
@@ -337,6 +399,7 @@ fn classify(e: &snmp2::Error) -> TransportError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uops_core::Secret;
     use uops_core::{AuthProtocol, PrivProtocol};
 
     #[test]
@@ -365,13 +428,13 @@ mod tests {
 
     #[test]
     fn a_debug_print_never_shows_the_credential() {
-        let t = UdpTransport::new(CredentialMaterial::SnmpV3 {
+        let t = UdpTransport::new(Secret::new(CredentialMaterial::SnmpV3 {
             username: "netops".into(),
             auth: AuthProtocol::Sha256,
             auth_key: "auth-key-material".into(),
             privacy: PrivProtocol::Aes256,
             priv_key: "priv-key-material".into(),
-        });
+        }));
         let rendered = format!("{t:?}");
         assert!(!rendered.contains("auth-key-material"), "{rendered}");
         assert!(!rendered.contains("priv-key-material"), "{rendered}");
@@ -380,7 +443,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_non_snmp_credential_is_refused_when_a_session_is_opened() {
-        let t = UdpTransport::new(CredentialMaterial::ApiToken("t".into()));
+        let t = UdpTransport::new(Secret::new(CredentialMaterial::ApiToken("t".into())));
         let err = t
             .get_bulk(
                 &Target {

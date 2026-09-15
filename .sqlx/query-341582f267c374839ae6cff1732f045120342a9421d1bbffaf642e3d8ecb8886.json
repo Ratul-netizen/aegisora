@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT r.id            AS \"resource_id: ResourceId\",\n                   r.tenant_id     AS \"tenant_id: TenantId\",\n                   r.site_id       AS \"site_id: SiteId\",\n                   i.value         AS address,\n                   r.credential_ref AS \"credential: CredentialRef\",\n                   r.profile_id,\n                   -- `?`: the LEFT JOIN makes it nullable and sqlx reads nullability\n                   -- from the column, which is NOT NULL in its own table.\n                   p.profile_key AS \"profile_key?\",\n                   r.attributes ->> $3 AS sysobjectid\n              FROM resource r\n              JOIN resource_identifier i\n                ON i.resource_id = r.id\n               AND i.tenant_id = r.tenant_id\n               AND i.kind = 'mgmt_ip'\n              -- LEFT, and filtered on `enabled`: a pin at a disabled profile leaves the\n              -- device pollable under whatever sysObjectID matching chooses, rather than\n              -- dropping it out of the fleet entirely.\n              LEFT JOIN monitoring_profile p\n                ON p.id = r.profile_id\n               AND p.enabled\n             WHERE r.tenant_id = $1\n               AND r.status <> 'decommissioned'\n             ORDER BY r.id\n             LIMIT $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_id: ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "site_id: SiteId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "credential: CredentialRef",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "profile_key?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "sysobjectid",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "341582f267c374839ae6cff1732f045120342a9421d1bbffaf642e3d8ecb8886"
+}

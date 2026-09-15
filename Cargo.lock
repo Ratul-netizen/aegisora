@@ -2245,6 +2245,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-poller"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sqlx",
+ "tokio",
+ "uops-core",
+ "uops-poll",
+ "uops-profile",
+ "uops-secrets",
+ "uops-snmp",
+ "uops-store-ch",
+ "uops-store-pg",
+ "uuid",
+]
+
+[[package]]
 name = "uops-profile"
 version = "0.0.1"
 dependencies = [

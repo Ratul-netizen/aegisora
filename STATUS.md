@@ -246,6 +246,17 @@ crates/uops-store-pg/src/identity.rs
    IdentityStore over PostgreSQL. Merge and split are one transaction each:
    half a merge orphans every row of telemetry under the old resource_id.
 
+crates/uops-poller/
+   The polling binary. main.rs is the order things happen in; the pieces are
+   config (no default KEK — a poller that cannot open a credential polls
+   nothing, so it refuses to start naming the variable), credentials (one
+   UdpTransport per credential, not per device), fleet (rows to devices; the
+   crossing between tenants is a visible `for` loop, because TenantScope has
+   no "all tenants" and should not), poll (request, convert, write) and run
+   (the loop, and what it says when a device fails).
+   Proven end to end in tests/live.rs: a device in PostgreSQL, polled over
+   real SNMP against the net-snmp container, becoming rows in ClickHouse.
+
 crates/uops-store-pg/src/sealed.rs
    SealedStore over the credential table. Until now every credential in the
    system lived in MemorySealedStore and did not survive a restart, which the
@@ -300,10 +311,20 @@ because it reads as covered.
       starting the binary — the `credential` table and the `SealedStore` trait both
       existed, but nothing joined them, so the poller could not have read a real
       credential.
-   3b. **The binary.** What is left is the process that owns all of it: connect, seed
-      profiles, load devices on an interval, tick once a second, and wire a task to
-      `UdpTransport` + `walk` + `sample` + `ChStore::insert_metrics`. Every part it
-      needs is tested; none of them are joined by a `main` yet.
+   3b. ~~The binary.~~ Done: `uops-poller`. Connects, seeds profiles, loads every
+      tenant's devices on an interval, ticks once a second, and wires a task to
+      `UdpTransport` + `walk` + `sample` + ClickHouse. `tests/live.rs` asserts the whole
+      path against real infrastructure and CI runs it; a mutation guard breaks the
+      `mgmt_ip` join and requires it to fail.
+      **Not done inside it:** the availability check. `generic-snmp` asks for ICMP,
+      which needs a raw socket and therefore a privilege this process should not hold
+      by default; TCP needs a port no built-in profile sets. The job is scheduled and
+      counted as unsupported rather than silently succeeding — a check that always
+      "passed" would report every device permanently up, which is worse than no
+      availability at all.
+      **Also not done:** a lease. Two pollers against one database would both schedule
+      every device, doubling the load on the fleet and writing each sample twice. One
+      process for now, said out loud in `main.rs`.
    4. Discovery. Each row of the interface walk becomes a child resource plus a
       `member_of` edge. That is the last M2 acceptance criterion with nothing behind
       it, and `generic-snmp` covering an unknown vendor falls out of the same loop.
@@ -331,8 +352,9 @@ M1 is where they start.
 
 | Item | Blocks | Note |
 |---|---|---|
-| **Shared-database contamination** | intermittent local failures | The scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
+| **Shared-database contamination** | intermittent local failures | **Recurred, larger.** The development database had accumulated **2 608 tenants** from every integration test that ever panicked before its clean-up. Harmless until the poller existed; now a reload reads *every* tenant and issues two queries each, so an unswept database turned one reload into five thousand round trips and the live poller test from 2.6 s into 29 s. `db.sh sweep` now removes every tenant but `default` and everything under it, and the poller's live test takes its own scratch database rather than sharing. Earlier instance: the scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
+| **`the_explorer_histogram_is_served_from_the_pre_aggregate` is flaky** | a trustworthy CI signal | Roughly 1 run in 15, standalone, on a clean database. Fails with `rows: []` — the pre-aggregate returns nothing at all rather than one row of two. Not a clock race: the window is a fixed pair of 2023 timestamps and the test uses its own tenant, so it is not contamination either. Found while stabilising the poller's suite; pre-existing and unrelated to it. The suspicion is the materialised view not being visible to the `SELECT` that immediately follows the `INSERT`, which would make it a property of how `insert_logs` writes rather than of the query planner — but that is a suspicion, not a diagnosis |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |

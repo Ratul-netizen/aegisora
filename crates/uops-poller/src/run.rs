@@ -1,0 +1,398 @@
+//! The loop.
+//!
+//! Everything below this file has tests. This is the order those things happen in, which
+//! is the part that cannot be unit-tested and the part an operator experiences:
+//!
+//! ```text
+//!   reload    every tenant's devices and profiles, into the schedule
+//!   tick      once a second: what the wheel says is due
+//!   run       per task: ask the device, convert, write
+//!   report    what failed, once per device per reload window
+//! ```
+//!
+//! # Why a tick does not wait for its tasks
+//!
+//! [`uops_poll::poller::run_tick`] dispatches and returns; the executor bounds
+//! concurrency and each task bounds its own time. A tick that waited would let one slow
+//! device delay the next second's work, which is exactly the failure SPEC §M2 names —
+//! and it would do so invisibly, as a schedule that gradually slips rather than a device
+//! that reports a timeout.
+//!
+//! # Why failures are reported once per device per reload window
+//!
+//! A device that is down fails every poll. At a 60-second interval that is 1 440 lines a
+//! day for one device, and a fleet with fifty such devices produces a log in which
+//! nothing else can be found. Each device's first failure is printed; the rest are
+//! counted and summarised, and the set is cleared on reload so a device that is still
+//! down says so again every minute rather than never.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::sync::Mutex;
+use uops_core::{ResourceId, TenantScope};
+use uops_poll::poller::{JobKey, Schedule, Task, run_tick, tasks, tick_instant};
+use uops_poll::{Executor, TickReport};
+use uops_profile::Oid;
+use uops_snmp::Target;
+use uops_store_ch::ChStore;
+use uops_store_pg::PgStore;
+
+use crate::config::Config;
+use crate::credentials::Transports;
+use crate::fleet;
+use crate::poll;
+
+/// Everything a task needs, shared across the tick's tasks.
+///
+/// Behind an `Arc` because `run_tick` takes a `'static` closure — the tasks it spawns
+/// outlive the call that made them, which is the whole point of not waiting for them.
+pub struct Runner {
+    store: PgStore,
+    metrics: ChStore,
+    transports: Mutex<Transports>,
+    devices: poll::Devices,
+    /// Each device's discovery name column, from its profile. The schedule holds jobs,
+    /// not profiles, and `Work::Discovery` carries the table rather than the column that
+    /// names a row.
+    name_from: Mutex<HashMap<ResourceId, Option<Oid>>>,
+    /// Devices whose failure has already been reported this reload window.
+    reported: Mutex<HashSet<ResourceId>>,
+    /// Failures not printed because the device had already been reported.
+    suppressed: std::sync::atomic::AtomicUsize,
+    timeout: Duration,
+}
+
+impl std::fmt::Debug for Runner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runner")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Runner {
+    #[must_use]
+    pub fn new(
+        store: PgStore,
+        metrics: ChStore,
+        transports: Transports,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            store,
+            metrics,
+            transports: Mutex::new(transports),
+            devices: poll::Devices::new(),
+            name_from: Mutex::new(HashMap::new()),
+            reported: Mutex::new(HashSet::new()),
+            suppressed: std::sync::atomic::AtomicUsize::new(0),
+            timeout,
+        }
+    }
+
+    /// Run one task, reporting whatever went wrong.
+    ///
+    /// `Err(())` rather than the error: the executor counts outcomes and has no use for
+    /// a reason, and the reason has already been reported here where the device it
+    /// belongs to is known.
+    async fn run_one(&self, task: Task) -> Result<usize, ()> {
+        let device = task.device.resource;
+
+        let transport = {
+            let mut transports = self.transports.lock().await;
+            match transports.for_credential(
+                task.device.tenant,
+                device,
+                task.device.credential,
+                self.timeout,
+            ) {
+                Ok(t) => t,
+                Err(problem) => {
+                    self.report(device, &problem.to_string()).await;
+                    return Err(());
+                }
+            }
+        };
+
+        let name_from = self.name_from.lock().await.get(&device).cloned().flatten();
+        let ctx = poll::Context {
+            transport: Arc::clone(&transport) as Arc<dyn uops_snmp::Transport>,
+            devices: &self.devices,
+            metrics: &self.metrics,
+            name_from,
+            observed_at: tick_instant(),
+        };
+
+        let written = match poll::run(&task, &ctx).await {
+            Ok(n) => n,
+            Err(e) => {
+                self.report(device, &e.to_string()).await;
+                return Err(());
+            }
+        };
+
+        // A discovery that succeeded is also the moment the device's sysObjectID is
+        // known. Recorded here rather than inside `poll` because it is a write to
+        // PostgreSQL, and `poll` deliberately has no store: its failure is not a reason
+        // to fail the poll that produced the names.
+        if matches!(task.work, uops_poll::plan::Work::Discovery { .. }) {
+            self.record_sysobjectid(&task, transport.as_ref()).await;
+        }
+
+        Ok(written)
+    }
+
+    /// Fetch and persist the device's `sysObjectID`, if it has changed.
+    ///
+    /// Best effort by design. This is what makes profile resolution work on the *next*
+    /// poll; failing the current one over it would trade a working poll for a better
+    /// profile later.
+    async fn record_sysobjectid<T: uops_snmp::Transport + ?Sized>(
+        &self,
+        task: &Task,
+        transport: &T,
+    ) {
+        let target = Target {
+            address: task.device.address,
+        };
+        // The device does not answer it, or the request failed. Neither is worth a line:
+        // the profile falls back to generic-snmp, which is what it was already doing.
+        let Ok(Some(seen)) = poll::sysobjectid(transport, &target).await else {
+            return;
+        };
+
+        let Some(changed) = self
+            .devices
+            .note_sysobjectid(task.device.resource, &seen)
+            .await
+        else {
+            return;
+        };
+
+        let scope = TenantScope::collector(task.device.tenant);
+        if let Err(e) = self
+            .store
+            .record_sysobjectid(&scope, task.device.resource, &changed)
+            .await
+        {
+            // Worth a line: the poll worked and the cache did not, which means this
+            // device will re-read and re-write its object id on every discovery.
+            eprintln!(
+                "uops-poller: {} answered sysObjectID {changed} but it could not be stored: {e}",
+                task.device.resource
+            );
+        }
+    }
+
+    /// Print a device's failure, or count it if this device has already been reported.
+    async fn report(&self, device: ResourceId, problem: &str) {
+        if self.reported.lock().await.insert(device) {
+            eprintln!("uops-poller: {device}: {problem}");
+        } else {
+            self.suppressed
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Start a new reporting window, returning how many failures it suppressed.
+    async fn new_window(&self) -> (usize, usize) {
+        let devices = {
+            let mut reported = self.reported.lock().await;
+            let n = reported.len();
+            reported.clear();
+            n
+        };
+        let suppressed = self
+            .suppressed
+            .swap(0, std::sync::atomic::Ordering::Relaxed);
+        (devices, suppressed)
+    }
+}
+
+/// Reload the fleet into the schedule, and say what changed.
+///
+/// Separate from [`serve`] so a reload can be run and asserted on without a clock.
+///
+/// # Errors
+///
+/// Only when the tenant list cannot be read — see [`crate::fleet::load`].
+pub async fn reload(
+    runner: &Runner,
+    schedule: &mut Schedule,
+    limit: i64,
+) -> uops_core::Result<(usize, usize)> {
+    let loaded = fleet::load(&runner.store, limit).await?;
+
+    for skipped in &loaded.skipped {
+        eprintln!(
+            "uops-poller: tenant {} resource {}: {}",
+            skipped.tenant, skipped.resource, skipped.reason
+        );
+    }
+
+    {
+        let mut name_from = runner.name_from.lock().await;
+        name_from.clear();
+        for (device, profile) in &loaded.devices {
+            name_from.insert(
+                device.resource,
+                profile
+                    .discovery
+                    .first()
+                    .map(|d| d.creates.name_from.clone()),
+            );
+        }
+    }
+
+    let (added, removed) = schedule.reload(&loaded.devices);
+
+    // Per-device memory follows the schedule. Without this the map grows for the life of
+    // the process and a poller that has been up for a year holds state for every device
+    // that ever existed.
+    let live: HashSet<ResourceId> = loaded.devices.iter().map(|(d, _)| d.resource).collect();
+    let forgotten = runner.devices.retain(&live).await;
+
+    let retried = runner.transports.lock().await.retry_failures();
+    let (reported, suppressed) = runner.new_window().await;
+
+    println!(
+        "uops-poller: reload — {} tenants, {} devices (+{added} -{removed}), {} jobs; \
+         forgot {forgotten}, retrying {retried} credentials; \
+         last window: {reported} devices failed, {suppressed} repeats not printed",
+        loaded.tenants,
+        loaded.devices.len(),
+        schedule.live_jobs(),
+    );
+
+    Ok((added, removed))
+}
+
+/// Poll until told to stop.
+///
+/// # Errors
+///
+/// Only the first reload's, which happens before the loop starts: a poller that cannot
+/// read its fleet at all has nothing to do, and failing at startup is how an operator
+/// finds out. A reload *inside* the loop that fails is reported and the previous fleet
+/// is kept — the devices already scheduled are still real.
+pub async fn serve(
+    runner: Arc<Runner>,
+    config: &Config,
+    shutdown: impl Future<Output = ()> + Send,
+) -> uops_core::Result<()> {
+    let executor = Executor::new(config.limits.into());
+    let mut schedule = Schedule::new();
+
+    reload(&runner, &mut schedule, config.device_limit).await?;
+
+    let mut tick = tokio::time::interval(uops_poll::poller::SLOT);
+    // Skip missed ticks rather than firing them back to back. A process descheduled for
+    // five seconds should resume polling, not try to catch up by running five seconds of
+    // work at once against a fleet that has just been through whatever caused the pause.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let mut reload_at = tokio::time::interval(config.reload_every);
+    reload_at.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    reload_at.tick().await; // the first tick of an interval is immediate
+
+    let mut due: Vec<JobKey> = Vec::new();
+    let mut shutdown = std::pin::pin!(shutdown);
+
+    loop {
+        tokio::select! {
+            () = &mut shutdown => {
+                println!("uops-poller: stopping");
+                return Ok(());
+            }
+            _ = reload_at.tick() => {
+                if let Err(e) = reload(&runner, &mut schedule, config.device_limit).await {
+                    // Keep going on the fleet we have. The devices already scheduled did
+                    // not stop existing because PostgreSQL had a bad minute.
+                    eprintln!("uops-poller: reload failed, keeping the current fleet: {e}");
+                }
+            }
+            _ = tick.tick() => {
+                note(&tick_once(&runner, &executor, &mut schedule, &mut due).await);
+            }
+        }
+    }
+}
+
+/// Advance the wheel one slot and run what that slot holds.
+///
+/// Public so an end-to-end test can drive the loop without a clock: [`serve`] is a
+/// `select!` around a timer, and a test that had to wait real seconds for a jittered job
+/// to come due would be a test nobody runs. `due` is the caller's buffer, reused across
+/// ticks so the loop allocates nothing per second.
+///
+/// Does not wait for the work — see the module docs on why.
+pub async fn tick_once(
+    runner: &Arc<Runner>,
+    executor: &Executor,
+    schedule: &mut Schedule,
+    due: &mut Vec<JobKey>,
+) -> TickReport {
+    schedule.due(due);
+    let batch = tasks(schedule, due);
+    if batch.is_empty() {
+        return TickReport::default();
+    }
+    let runner = Arc::clone(runner);
+    run_tick(executor, batch, move |task| {
+        let runner = Arc::clone(&runner);
+        async move { runner.run_one(task).await }
+    })
+    .await
+}
+
+/// Say something about a tick, but only when it is worth saying.
+///
+/// A line per second is not a log. What is worth a line is a tick in which something
+/// went wrong or the budget was hit — the two things that mean the schedule is not
+/// keeping up.
+fn note(report: &TickReport) {
+    if report.failed == 0 && report.budget_exhausted == 0 {
+        return;
+    }
+    eprintln!(
+        "uops-poller: tick — {} due, {} ok, {} failed, {} out of time, {} samples",
+        report.due, report.ok, report.failed, report.budget_exhausted, report.samples
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_quiet_tick_says_nothing() {
+        // Asserting the decision rather than the output: a poller that printed a line a
+        // second would bury everything else in it.
+        let quiet = TickReport {
+            due: 40,
+            ok: 40,
+            ..TickReport::default()
+        };
+        assert!(quiet.failed == 0 && quiet.budget_exhausted == 0);
+        note(&quiet);
+
+        let loud = TickReport {
+            due: 40,
+            ok: 39,
+            failed: 1,
+            ..TickReport::default()
+        };
+        assert!(loud.failed > 0);
+    }
+
+    #[test]
+    fn a_poll_error_says_which_kind_it_is() {
+        // The distinction that decides who gets paged: the device, or the poller.
+        let store = poll::PollError::Store("clickhouse is unreachable".to_owned());
+        assert!(store.to_string().contains("could not be stored"));
+        let device = poll::PollError::Transport(uops_snmp::TransportError::Timeout);
+        assert!(device.to_string().contains("timeout"));
+    }
+}

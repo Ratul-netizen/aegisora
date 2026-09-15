@@ -79,11 +79,15 @@ pub enum TransportError {
     Protocol(String),
 }
 
-/// Something that can ask a device for a run of varbinds.
+/// Something that can ask a device for varbinds.
 ///
-/// `GETBULK` only. A poller that also needed `GET` would need a second method; it does
-/// not — a scalar is a `GETBULK` of one repetition, and having one code path means the
-/// `tooBig` handling covers scalars too rather than being a thing only walks get.
+/// `GETBULK` only, in two shapes — a run following one OID, and one successor each for a
+/// set of them. Both are the same PDU: `GETBULK` carries a *non-repeaters* count saying
+/// how many of its varbinds are wanted once rather than walked, so a walk is
+/// `non_repeaters = 0` and a set of scalars is `non_repeaters = n, max_repetitions = 0`.
+/// There is no `GET` here because there does not need to be: the second shape fetches a
+/// scalar set in one round trip, and having one PDU means the `tooBig` handling covers
+/// scalars rather than being a thing only walks get.
 #[async_trait::async_trait]
 pub trait Transport: Send + Sync {
     /// Ask for up to `max_repetitions` varbinds following `after`.
@@ -96,4 +100,86 @@ pub trait Transport: Send + Sync {
         after: &Oid,
         max_repetitions: Repetitions,
     ) -> Result<Vec<VarBind>, TransportError>;
+
+    /// Each of `oids`, read as a scalar, in one request.
+    ///
+    /// Profiles write a scalar either way — `1.3.6.1.2.1.1.3` because that is the object
+    /// the MIB document names, or `1.3.6.1.2.1.1.3.0` because that is the instance a
+    /// manager reads — and neither is wrong. [`instance`] resolves both to the instance,
+    /// so the answer is at `x.0` whichever was written and
+    /// `uops_poll::sample::scalars` matches it either way.
+    ///
+    /// The default implementation sends one request per OID, as `GETNEXT` of the object:
+    /// correct, and what a transport with no batching can do. [`crate::UdpTransport`]
+    /// overrides it with a single `GET`, which is the difference between five round trips
+    /// per device per poll and one.
+    async fn get_scalars(
+        &self,
+        target: &Target,
+        oids: &[Oid],
+    ) -> Result<Vec<VarBind>, TransportError> {
+        let mut out = Vec::with_capacity(oids.len());
+        for oid in oids {
+            // GETNEXT of the *object*, which lands on its instance. Asking after the
+            // instance would skip the thing being asked for and return whatever the
+            // agent holds next, which is a different metric's value under this metric's
+            // name — a failure that produces plausible numbers rather than an error.
+            out.extend(
+                self.get_bulk(target, &object(oid), Repetitions::new(1))
+                    .await?,
+            );
+        }
+        Ok(out)
+    }
+}
+
+/// A scalar object's instance OID.
+///
+/// A scalar has exactly one instance and its sub-identifier is `0` — that is SMI, not a
+/// convention this code invented — so `sysUpTime` and `sysUpTime.0` name the same thing
+/// and this returns the second for both.
+#[must_use]
+pub fn instance(oid: &Oid) -> Oid {
+    if oid.arcs().last() == Some(&0) {
+        oid.clone()
+    } else {
+        oid.child(0)
+    }
+}
+
+/// A scalar instance's object OID — the inverse of [`instance`].
+///
+/// For the `GETNEXT` spelling of a scalar read, whose answer is the successor of the
+/// object and therefore the instance.
+#[must_use]
+pub fn object(oid: &Oid) -> Oid {
+    match oid.arcs().last() {
+        Some(&0) => oid.parent().unwrap_or_else(|| oid.clone()),
+        _ => oid.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scalar_is_the_same_object_written_either_way() {
+        let object_form: Oid = "1.3.6.1.2.1.1.3".parse().unwrap();
+        let instance_form: Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
+
+        assert_eq!(instance(&object_form), instance_form);
+        assert_eq!(instance(&instance_form), instance_form);
+        assert_eq!(object(&instance_form), object_form);
+        assert_eq!(object(&object_form), object_form);
+    }
+
+    #[test]
+    fn the_shortest_oid_does_not_lose_its_last_arc() {
+        // Two arcs is the shortest an OID may be — they are encoded as one byte — so
+        // `object` has nothing to strip. Returning it unchanged is what stops a
+        // malformed profile turning into a request for the whole MIB.
+        let shortest: Oid = "1.0".parse().unwrap();
+        assert_eq!(object(&shortest), shortest);
+    }
 }

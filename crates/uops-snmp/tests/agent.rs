@@ -16,10 +16,10 @@
 
 use std::time::Duration;
 
-use uops_core::{AuthProtocol, CredentialMaterial, PrivProtocol};
+use uops_core::{AuthProtocol, CredentialMaterial, PrivProtocol, Secret};
 use uops_profile::Oid;
 use uops_snmp::bulk::Tuning;
-use uops_snmp::transport::{Target, TransportError, Value};
+use uops_snmp::transport::{Target, Transport, TransportError, Value};
 use uops_snmp::udp::UdpTransport;
 use uops_snmp::walk;
 
@@ -83,7 +83,7 @@ async fn sha256_aes256_authpriv_reads_the_system_group() {
     // SPEC's exact pair, against a real USM implementation. Everything about this path
     // — key localisation, the privacy IV, the HMAC — is code neither side shares.
     let target = agent_or_skip!();
-    let transport = UdpTransport::new(v3()).with_timeout(Duration::from_secs(5));
+    let transport = UdpTransport::new(Secret::new(v3())).with_timeout(Duration::from_secs(5));
 
     let mut tuning = Tuning::default();
     let rows = walk::walk(&transport, &target, &system(), &mut tuning)
@@ -111,7 +111,7 @@ async fn a_walk_of_a_real_interface_table_stops_at_its_boundary() {
     // The stop condition, against an agent that really does have the next table. On the
     // simulator this is a fixture I wrote; here it is IF-MIB as net-snmp implements it.
     let target = agent_or_skip!();
-    let transport = UdpTransport::new(v3());
+    let transport = UdpTransport::new(Secret::new(v3()));
 
     let mut tuning = Tuning::default();
     let rows = walk::walk(&transport, &target, &if_name(), &mut tuning)
@@ -140,7 +140,9 @@ async fn a_v2c_community_also_works() {
     // The other credential kind, on the same agent. A poller that only spoke v3 would
     // be unable to monitor most of the equipment that exists.
     let target = agent_or_skip!();
-    let transport = UdpTransport::new(CredentialMaterial::SnmpCommunity(COMMUNITY.to_owned()));
+    let transport = UdpTransport::new(Secret::new(CredentialMaterial::SnmpCommunity(
+        COMMUNITY.to_owned(),
+    )));
 
     let mut tuning = Tuning::default();
     let rows = walk::walk(&transport, &target, &system(), &mut tuning)
@@ -155,13 +157,13 @@ async fn a_wrong_passphrase_is_refused_rather_than_answered() {
     // answered anything to a bad credential, `sha256_aes256_authpriv_reads_the_system_group`
     // would prove nothing about authentication.
     let target = agent_or_skip!();
-    let transport = UdpTransport::new(CredentialMaterial::SnmpV3 {
+    let transport = UdpTransport::new(Secret::new(CredentialMaterial::SnmpV3 {
         username: USER.to_owned(),
         auth: AuthProtocol::Sha256,
         auth_key: "not-the-passphrase".to_owned(),
         privacy: PrivProtocol::Aes256,
         priv_key: PRIV_PASS.to_owned(),
-    })
+    }))
     .with_timeout(Duration::from_secs(3));
 
     let mut tuning = Tuning::default();
@@ -177,7 +179,7 @@ async fn the_session_pool_reuses_one_socket_per_device() {
     // The design decision in udp.rs, observed rather than asserted from the code: many
     // requests to one device open one session, so v3 engine discovery is paid once.
     let target = agent_or_skip!();
-    let transport = UdpTransport::new(v3());
+    let transport = UdpTransport::new(Secret::new(v3()));
 
     for _ in 0..5 {
         let mut tuning = Tuning::default();
@@ -202,7 +204,7 @@ async fn an_address_with_no_agent_times_out_rather_than_hanging() {
         println!("SKIPPED: UOPS_SNMP_AGENT is unset");
         return;
     }
-    let transport = UdpTransport::new(v3()).with_timeout(Duration::from_millis(400));
+    let transport = UdpTransport::new(Secret::new(v3())).with_timeout(Duration::from_millis(400));
     let target = Target {
         address: "127.0.0.1:1".parse().unwrap(),
     };
@@ -226,5 +228,82 @@ async fn an_address_with_no_agent_times_out_rather_than_hanging() {
         started.elapsed() < Duration::from_secs(5),
         "took {:?}",
         started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_set_of_scalars_comes_back_in_one_request() {
+    // The path a metric poll actually takes, and the one the simulator cannot check: the
+    // simulator uses the trait's default `get_scalars`, which is a GETNEXT per OID, and
+    // UdpTransport overrides it with a single GET. Two different PDUs, and only this
+    // test sends the one that runs in production.
+    //
+    // Both spellings a profile may use are asked for at once. `sysUpTime` names the
+    // object and `sysUpTime.0` names its only instance; a profile author writes whichever
+    // the MIB document in front of them shows, and the answer must be the same.
+    let target = agent_or_skip!();
+    let transport = UdpTransport::new(Secret::new(v3())).with_timeout(Duration::from_secs(5));
+
+    let wanted = [
+        oid("1.3.6.1.2.1.1.3"),   // sysUpTime, as the object
+        oid("1.3.6.1.2.1.1.3.0"), // sysUpTime, as the instance
+        oid("1.3.6.1.2.1.1.7.0"), // sysServices
+    ];
+    let rows = transport
+        .get_scalars(&target, &wanted)
+        .await
+        .expect("the agent must answer a GET");
+
+    // Every answer is at the instance, whichever spelling was asked for.
+    let uptime = oid("1.3.6.1.2.1.1.3.0");
+    let answers: Vec<&Value> = rows
+        .iter()
+        .filter(|vb| vb.oid == uptime)
+        .map(|vb| &vb.value)
+        .collect();
+    assert_eq!(
+        answers.len(),
+        2,
+        "both spellings of sysUpTime must be answered, at its instance: {rows:?}"
+    );
+    assert!(
+        answers
+            .iter()
+            .all(|v| matches!(v, Value::Unsigned(_) | Value::Integer(_))),
+        "sysUpTime must be a number: {answers:?}"
+    );
+
+    assert!(
+        rows.iter().any(|vb| vb.oid == oid("1.3.6.1.2.1.1.7.0")),
+        "sysServices was asked for and is not in the answer: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_scalar_that_the_agent_does_not_have_does_not_fail_the_others() {
+    // A profile is written for a family of devices and one of them will not implement
+    // every OID in it. GET answers per varbind — noSuchObject for the missing one — and
+    // the rest of the response is still a response. A transport that treated this as a
+    // failed request would lose every metric on the device over one absent OID.
+    let target = agent_or_skip!();
+    let transport = UdpTransport::new(Secret::new(v3()));
+
+    let rows = transport
+        .get_scalars(
+            &target,
+            &[
+                oid("1.3.6.1.2.1.1.3.0"),
+                // Under a private enterprise number that is not assigned to anything
+                // this agent implements.
+                oid("1.3.6.1.4.1.99999.1.1.0"),
+            ],
+        )
+        .await
+        .expect("a missing OID is not a failed request");
+
+    assert!(
+        rows.iter().any(|vb| vb.oid == oid("1.3.6.1.2.1.1.3.0")
+            && matches!(vb.value, Value::Unsigned(_) | Value::Integer(_))),
+        "the OID the agent does have must still be answered: {rows:?}"
     );
 }

@@ -1,0 +1,42 @@
+[package]
+name = "uops-poller"
+description = "The polling binary. Joins the scheduler, the SNMP transport and the two stores."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+uops-poll.workspace = true
+uops-profile.workspace = true
+uops-secrets.workspace = true
+uuid.workspace = true
+uops-snmp.workspace = true
+uops-store-ch.workspace = true
+uops-store-pg.workspace = true
+
+chrono.workspace = true
+# "net" for the TCP availability check, "signal" for graceful shutdown, "time" for the
+# tick, "rt-multi-thread" because PgSealedStore bridges a synchronous trait with
+# block_in_place and a current-thread runtime would panic on the first credential read.
+tokio = { workspace = true, features = ["net", "signal", "time", "rt-multi-thread", "macros", "sync"] }
+async-trait.workspace = true
+
+[dev-dependencies]
+# The end-to-end poll test runs against uops-snmp's simulator: no network, and the
+# failure modes (a silent agent, one that answers tooBig) are values rather than
+# infrastructure somebody has to set up.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+# The live test seeds its own tenant, device and credential: sqlx to write the rows,
+# uops-profile for the built-ins it polls under.
+sqlx.workspace = true
+uops-profile.workspace = true
+uops-secrets.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

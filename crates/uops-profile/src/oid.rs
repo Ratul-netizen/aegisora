@@ -91,6 +91,19 @@ impl Oid {
         arcs.push(suffix);
         Self(arcs)
     }
+
+    /// `self` without its last arc — the object a scalar instance belongs to, usually.
+    ///
+    /// `None` at two arcs, which is the shortest an OID may be: the first two are
+    /// encoded as a single byte and cannot be separated. Returning `None` rather than a
+    /// one-arc OID means a caller cannot accidentally construct something unencodable.
+    #[must_use]
+    pub fn parent(&self) -> Option<Self> {
+        if self.0.len() <= 2 {
+            return None;
+        }
+        Some(Self(self.0[..self.0.len() - 1].to_vec()))
+    }
 }
 
 impl FromStr for Oid {

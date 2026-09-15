@@ -269,6 +269,23 @@ jobs:
             exit 1
           fi
 
+      # The binary's own end-to-end: a device in PostgreSQL, polled over real SNMP,
+      # becoming rows in ClickHouse. Every other test in uops-poller replaces one end or
+      # the other; this is the only one with nothing simulated in it, which is where the
+      # failures in the joins live.
+      - name: A device in PostgreSQL becomes rows in ClickHouse
+        env:
+          UOPS_SNMP_AGENT: 127.0.0.1:16100
+        run: |
+          output=$(cargo test -p uops-poller --test live -- --test-threads=1 --nocapture 2>&1)
+          echo "$output"
+          # Same reasoning as the agent tests above: a skipped test is a green suite that
+          # proves nothing, so the skip message is itself a failure here.
+          if echo "$output" | grep -q "SKIPPED:"; then
+            echo "::error::the live poller test skipped; the fixture was not reachable"
+            exit 1
+          fi
+
       # The whole suite, in the one job that has what it needs. Unit and integration
       # together: which is which is not a distinction worth maintaining in a list
       # somebody has to remember to update.
@@ -504,6 +521,50 @@ jobs:
           fi
           cp "$RUNNER_TEMP/executor.bak" "$F"
           echo "ok: a serialised fleet fails the suite"
+
+      # `resource` has no address column: an address is an identifier, so the poller
+      # reaches a device through the same `mgmt_ip` row identity resolution wrote. Join
+      # the wrong kind and the fleet is empty — and an empty fleet polls nothing, fails
+      # nothing, and reports success.
+      - name: The live poller test fails when the device join loses its address
+        env:
+          UOPS_SNMP_AGENT: 127.0.0.1:16100
+        run: |
+          F=crates/uops-store-pg/src/pollable.rs
+          cp "$F" "$RUNNER_TEMP/pollable.bak"
+          sed -i "s/AND i.kind = 'mgmt_ip'/AND i.kind = 'hostname'/" "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if SQLX_OFFLINE=false cargo test -p uops-poller --test live > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/pollable.bak" "$F"
+            echo "::error::the live test passed with a fleet that cannot contain any device"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/pollable.bak" "$F"
+          echo "ok: a fleet with no reachable devices fails the suite"
+
+      # Discovery and the interface poll are separate jobs on separate intervals, and
+      # the only thing carrying the names between them is the per-device memory. A
+      # poller that discovered into a value it then dropped would write rows labelled by
+      # index forever — which looks like working software until somebody opens a graph.
+      - name: The poll tests fail when discovery forgets what it found
+        run: |
+          F=crates/uops-poller/src/poll.rs
+          cp "$F" "$RUNNER_TEMP/poll.bak"
+          sed -i 's|or_default().names = names;|or_default().names = InterfaceNames::new();|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-poller --test poll > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/poll.bak" "$F"
+            echo "::error::the poll tests passed with discovery throwing away its result"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/poll.bak" "$F"
+          echo "ok: discovery that goes nowhere fails the suite"
 
       - name: The API isolation tests fail when the role check is removed
         run: |

@@ -5,7 +5,7 @@
 #   bash scripts/db.sh migrate   # apply migrations/ in order
 #   bash scripts/db.sh test      # assert the schema invariants
 #   bash scripts/db.sh reset     # drop everything and re-apply
-#   bash scripts/db.sh sweep     # drop scratch databases left by bootstrap tests
+#   bash scripts/db.sh sweep     # drop scratch databases and test tenants left behind
 #   bash scripts/db.sh psql      # interactive shell
 #   bash scripts/db.sh down      # stop (keeps the volume)
 #
@@ -75,21 +75,63 @@ cmd_test() {
 # accumulate, so reset sweeps them.
 cmd_sweep() {
   local stray
-  stray=$(psql_run -tAc "SELECT datname FROM pg_database WHERE datname LIKE 'uops_boot_%'")
+  stray=$(psql_run -tAc "SELECT datname FROM pg_database
+                          WHERE datname LIKE 'uops_boot_%'
+                             OR datname LIKE 'uops_poll_%'")
   for db in $stray; do
     psql_run -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" > /dev/null
     echo "dropped scratch database $db"
   done
 
-  # The scale test seeds ten thousand resources. It removes them itself now, but a run
-  # that panicked before it got there leaves them, and ten thousand rows change what the
-  # planner chooses for every other suite sharing this database.
-  local bulk
-  bulk=$(psql_run -tAc     "DELETE FROM resource WHERE tenant_id IN
-       (SELECT id FROM tenant WHERE slug LIKE 'scale-%')
-     RETURNING 1" | grep -c 1 || true)
-  if [ "${bulk:-0}" -gt 0 ]; then
-    echo "removed $bulk resource(s) left by an interrupted scale test"
+  # Every tenant but the one first-run creates.
+  #
+  # Nearly every integration test in this workspace creates a tenant, and a test that
+  # panics before its clean-up leaves it behind. They accumulate: this was found at 2 608
+  # of them, which is not a tidiness problem — the poller's reload reads *every* tenant
+  # and issues two queries for each, so a development database nobody swept turns a
+  # reload into five thousand round trips. It is also the same shape as the scale test's
+  # ten thousand orphaned resources, which changed what the planner chose for every other
+  # suite and took a day to find.
+  #
+  # This is a scratch database — `reset` drops the whole schema — so "every tenant but
+  # `default`" is the right rule here and would be the wrong one anywhere else.
+  local removed
+  removed=$(psql_run -tAc "
+    WITH doomed AS (SELECT id FROM tenant WHERE slug <> 'default'),
+         a AS (DELETE FROM access_log            WHERE tenant_id IN (SELECT id FROM doomed)),
+         b AS (DELETE FROM audit_log             WHERE tenant_id IN (SELECT id FROM doomed)),
+         c AS (DELETE FROM credential_access_log WHERE tenant_id IN (SELECT id FROM doomed)),
+         d AS (DELETE FROM identity_decision     WHERE tenant_id IN (SELECT id FROM doomed)),
+         e AS (DELETE FROM resource_relationship WHERE tenant_id IN (SELECT id FROM doomed)),
+         f AS (DELETE FROM resource_alias        WHERE tenant_id IN (SELECT id FROM doomed)),
+         g AS (DELETE FROM resource_identifier   WHERE tenant_id IN (SELECT id FROM doomed)),
+         h AS (DELETE FROM resource              WHERE tenant_id IN (SELECT id FROM doomed)),
+         i AS (DELETE FROM credential            WHERE tenant_id IN (SELECT id FROM doomed)),
+         j AS (DELETE FROM monitoring_profile    WHERE tenant_id IN (SELECT id FROM doomed)),
+         k AS (DELETE FROM user_tenant_role      WHERE tenant_id IN (SELECT id FROM doomed)),
+         l AS (DELETE FROM site                  WHERE tenant_id IN (SELECT id FROM doomed)),
+         m AS (DELETE FROM tenant WHERE id IN (SELECT id FROM doomed) RETURNING 1)
+    SELECT count(*) FROM m")
+  if [ "${removed:-0}" -gt 0 ]; then
+    echo "removed $removed test tenant(s) and everything under them"
+  fi
+
+  # Organizations are not tenant-scoped, so they are orphaned rather than cascaded — and
+  # `app_user` hangs off the organization rather than the tenant, so the users go with
+  # them. Sessions reference the user and are deleted first for the same reason.
+  local orgs
+  orgs=$(psql_run -tAc "
+    WITH doomed AS (
+      SELECT id FROM organization o
+       WHERE NOT EXISTS (SELECT 1 FROM tenant t WHERE t.org_id = o.id)
+    ),
+    users AS (SELECT id FROM app_user WHERE org_id IN (SELECT id FROM doomed)),
+    a AS (DELETE FROM session  WHERE user_id IN (SELECT id FROM users)),
+    b AS (DELETE FROM app_user WHERE id      IN (SELECT id FROM users)),
+    c AS (DELETE FROM organization WHERE id  IN (SELECT id FROM doomed) RETURNING 1)
+    SELECT count(*) FROM c")
+  if [ "${orgs:-0}" -gt 0 ]; then
+    echo "removed $orgs organization(s) with no tenants left"
   fi
 }
 

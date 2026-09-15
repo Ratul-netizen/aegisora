@@ -45,6 +45,14 @@ pub struct PollableDevice {
     pub credential: Option<CredentialRef>,
     /// An explicit profile pin, which beats `sysObjectID` matching.
     pub profile_id: Option<uuid::Uuid>,
+    /// The pinned profile's key, resolved in the same query.
+    ///
+    /// `resource.profile_id` is a `monitoring_profile` row and profile *resolution*
+    /// matches on the key, so without this the poller would have to fetch every pinned
+    /// row separately to turn an id it already has into a name it can use. `None` when
+    /// nothing is pinned — or when the pinned row is disabled, which is how an operator
+    /// turns a profile off for a device that still points at it.
+    pub profile_key: Option<String>,
     /// Cached from a previous poll. `None` means this device has not been asked yet and
     /// will fall back to `generic-snmp` until it has.
     pub sysobjectid: Option<String>,
@@ -76,12 +84,21 @@ impl PgStore {
                    i.value         AS address,
                    r.credential_ref AS "credential: CredentialRef",
                    r.profile_id,
+                   -- `?`: the LEFT JOIN makes it nullable and sqlx reads nullability
+                   -- from the column, which is NOT NULL in its own table.
+                   p.profile_key AS "profile_key?",
                    r.attributes ->> $3 AS sysobjectid
               FROM resource r
               JOIN resource_identifier i
                 ON i.resource_id = r.id
                AND i.tenant_id = r.tenant_id
                AND i.kind = 'mgmt_ip'
+              -- LEFT, and filtered on `enabled`: a pin at a disabled profile leaves the
+              -- device pollable under whatever sysObjectID matching chooses, rather than
+              -- dropping it out of the fleet entirely.
+              LEFT JOIN monitoring_profile p
+                ON p.id = r.profile_id
+               AND p.enabled
              WHERE r.tenant_id = $1
                AND r.status <> 'decommissioned'
              ORDER BY r.id
@@ -104,9 +121,36 @@ impl PgStore {
                 address: r.address,
                 credential: r.credential,
                 profile_id: r.profile_id,
+                profile_key: r.profile_key,
                 sysobjectid: r.sysobjectid,
             })
             .collect())
+    }
+
+    /// Every tenant, for a poller that serves all of them.
+    ///
+    /// `TenantScope` has no "all tenants" constructor, deliberately — a cross-tenant
+    /// *query* should never be expressible. What a single-process poller needs instead
+    /// is the list, so that it can build a scope per tenant and do the crossing in a
+    /// visible loop rather than in a `WHERE` clause. This returns identifiers and
+    /// nothing else: no tenant's data crosses here, only the fact that it exists.
+    ///
+    /// # Errors
+    ///
+    /// Storage failures.
+    pub async fn all_tenant_ids(&self) -> Result<Vec<TenantId>> {
+        // tenant-exempt: the list of tenants cannot itself be filtered by tenant. The
+        // marker is explicit rather than implied by the `id: TenantId` cast below,
+        // which happens to contain the string the scanner looks for and would have let
+        // this pass for the wrong reason.
+        let rows = sqlx::query_scalar!(
+            r#"SELECT id AS "id: TenantId" FROM tenant ORDER BY created_at, id"#
+        )
+        .fetch_all(self.pool())
+        .await
+        .map_err(|e| map("tenant", String::new(), e))?;
+
+        Ok(rows)
     }
 
     /// Record the `sysObjectID` a poll discovered.
