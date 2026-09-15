@@ -25,48 +25,39 @@ PostgreSQL.
 
 ## Where we are
 
+Counts are tests that actually run, per crate, from `cargo test --all-targets`.
+
 | Phase | State |
 |---|---|
 | Strategy & architecture | ✅ Frozen (PLAN.md) |
 | M0–M4 specification | ✅ Written (SPEC.md) |
 | **W1 storage benchmark** | ✅ **Complete — architecture validated** |
-| **M0 · workspace + CI** | ✅ Done |
-| **M0 · `uops-core`** | ✅ Done — 34 tests, 3 doctests, 5 compile_fail |
-| **M0 · `uops-secrets`** | ✅ Done — 33 tests |
-| **M0 · `uops-query`** | ✅ Done — 48 tests, 12 golden fixtures |
-| **M0 · PostgreSQL migrations** | ✅ Done — 5 migrations, 22 asserted invariants |
-| **M0 · ClickHouse migration runner** | ✅ Done — 34 tests, applied against 26.8 |
-| **M0 · `uops-bus`** | ✅ Done — 18 tests + an 11-case conformance suite |
-| **M0 acceptance criteria** | ✅ **All met** |
-| **M1 · `uops-store-pg`** | 🟡 resources + catalog done — 19 tests, 8 against a real server |
-| **M1 · `uops-identity`** | ✅ Done — 24 tests on the rules, 11 more against PostgreSQL |
-| **M1 · auth foundations** | ✅ Done — passwords, session tokens, roles, 18 tests |
-| **M1 · `uops-api` scope extractor** | ✅ Done — 24 tests, mutation-guarded in CI |
-| **M1 · auth routes** | ✅ Done — login/logout/me, CSRF, 22 tests |
-| **M1 · resource routes + audit trail** | ✅ Done — 14 tests |
-| **M1 · `uops-store-ch`** | ✅ Done — 24 tests, 11 against real ClickHouse |
-| **M1 · `POST /query`** | ✅ Done — 8 tests, the full stack over HTTP |
-| **M1 · first-run bootstrap** | ✅ Done — 5 store tests, 3 boot tests, 2 mutation guards |
-| **M1 · `uops-server`** | ✅ Done — it runs, and you can log into it |
-| **M1 · web shell** | ✅ Done — shell, auth, switcher, inventory, detail, explorer |
-| **M1 · cross-tenant acceptance test** | ✅ Done — 5 tests over every route, 2 mutation guards |
-| **M1 · 10 000-resource p95** | ✅ Done — measured through the router, worst p95 75 ms |
-| **M1 · `docker compose up`** | ✅ Done — one 30 MB image, migrations as their own step, CI-verified |
-| **M1 · identity end to end** | ✅ Done — the SPEC sentence as one sequence; found a real bug |
-| **M2 · monitoring profiles** | ✅ Done — 5 built-ins, 40 tests, schema + resolution |
-| **M2 · scheduler + counters** | ✅ Done — time wheel, jitter, wrap detection; 19 tests |
-| **M2 · SNMP walk + simulator** | ✅ Done — 19 tests, a 1 000-agent fleet in a Vec |
-| **M2 · v3 credential handling** | 🟡 protocols, policy, access context — 9 tests |
-| **M2 · net-snmp test agent** | ✅ Done — SHA-256/AES-256 authPriv, verified end to end |
-| **M2 · the executor** | ✅ Done — limits, budgets, and the measured criterion |
-| **M2 · the planner** | ✅ Done — jobs grouped by interval, 9 tests |
-| **M2 · the real transport** | ✅ Done — snmp2 over UDP, 6 tests against net-snmp |
-| **M2 · pollable devices** | ✅ Done — the store query the poller reads, 5 tests |
-| **M2 · profile persistence** | ✅ Done — seeding, precedence, 7 tests |
-| **M2 · the polling loop** | 🟡 schedule, samples, tick — 19 tests; no binary yet |
-| M2 · the poller binary | ⬜ **Next** |
-| M2 · the executor | ⬜ |
-| M2–M4 | ⬜ |
+| **M0 — all acceptance criteria met** | ✅ |
+| `uops-core` | ✅ 36 tests, incl. 5 `compile_fail` |
+| `uops-secrets` | ✅ 51 |
+| `uops-query` | ✅ 49, 12 golden fixtures |
+| `uops-bus` | ✅ 29, incl. an 11-case conformance suite |
+| PostgreSQL migrations | ✅ 8 migrations, 22 asserted invariants |
+| `uops-ch-migrate` | ✅ 34, applied against ClickHouse 26.8 |
+| **M1 — all acceptance criteria met** | ✅ |
+| `uops-store-pg` | ✅ 74 |
+| `uops-identity` | ✅ 24 on the rules, more against PostgreSQL |
+| `uops-api` | ✅ 83 — auth, resources, query, audit, cross-tenant |
+| `uops-store-ch` | ✅ 25, against real ClickHouse |
+| `uops-server` | ✅ 5 — it runs, and you can log into it |
+| web shell | ✅ shell, auth, tenant switcher, inventory, detail, explorer |
+| 10 000-resource p95 | ✅ measured through the router, worst 75 ms |
+| `docker compose up` | ✅ one 30 MB image, migrations as their own step, CI-verified |
+| **M2 — 4 of 6 acceptance criteria met** | 🟡 |
+| `uops-profile` | ✅ 40 — 5 built-ins, schema, resolution |
+| `uops-poll` | ✅ 56 — wheel, jitter, counters, executor, planner, samples |
+| `uops-snmp` | ✅ 42 — walk, simulator, `snmp2` over UDP, real net-snmp |
+| `uops-poller` | ✅ 32 — the binary, end to end against real everything |
+| interface discovery | ✅ children + `member_of`, matched on name |
+| counter wrap → no negative rate | ⬜ module written, nothing computes rates |
+| ICMP availability | ⬜ needs a raw-socket privilege decision |
+| p95 through the binary | ⬜ measured in the library only |
+| M3–M4 | ⬜ |
 
 ## Resume in three commands
 
