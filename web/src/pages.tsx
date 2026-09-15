@@ -1,16 +1,15 @@
 /**
- * The pages that exist so far: sign in, an overview, and the resource inventory.
+ * Sign in, and the overview.
  *
- * The inventory is the one that matters — it is the first screen in this product that
- * shows a customer their own data, and it is the proof that the tenant header, the
- * session cookie, the scope extractor and the cursor pagination all line up.
+ * The resource inventory lives in resources.tsx and the query explorer in explore.tsx;
+ * both are large enough to read on their own.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
-import { ApiError, api, type Resource } from "./api";
+import { ApiError, api } from "./api";
 import { describeRange, resolveRange, useShell } from "./shell";
 
 export function LoginPage() {
@@ -103,83 +102,6 @@ export function OverviewPage() {
       <p className="dim">
         Your role on this tenant is <strong>{tenant.role}</strong>.
       </p>
-    </>
-  );
-}
-
-function statusColour(status: string): string {
-  if (status === "up" || status === "ok") return "var(--ok)";
-  if (status === "down" || status === "critical") return "var(--danger)";
-  if (status === "degraded" || status === "warn") return "var(--warn)";
-  return "var(--text-dim)";
-}
-
-export function ResourcesPage() {
-  const { tenant } = useShell();
-
-  // Keyed by tenant, so switching tenants is a different cache entry rather than a
-  // refetch over the top of the previous customer's rows.
-  const resources = useQuery({
-    queryKey: ["resources", tenant.tenant_id],
-    queryFn: () => api.resources(tenant.tenant_id),
-  });
-
-  if (resources.isPending) return <p className="dim">Loading…</p>;
-
-  if (resources.isError) {
-    return (
-      <div className="problem" role="alert">
-        {resources.error instanceof ApiError
-          ? resources.error.message
-          : "Could not load resources."}
-      </div>
-    );
-  }
-
-  const items: Resource[] = resources.data.items;
-
-  if (items.length === 0) {
-    return (
-      <div className="empty-state">
-        <h1>No resources yet</h1>
-        <p>
-          Nothing has been discovered or created in {tenant.name}. Resources appear here
-          as collectors report them, or when one is created through the API.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <h1>Resources</h1>
-      <p className="dim">
-        {items.length} in {tenant.name}
-        {resources.data.next && " (first page)"}
-      </p>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Kind</th>
-            <th>Status</th>
-            <th>Vendor</th>
-            <th>Last seen</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((r) => (
-            <tr key={r.id}>
-              <td>{r.display_name ?? r.name}</td>
-              <td className="dim">{r.kind}</td>
-              <td style={{ color: statusColour(r.status) }}>{r.status}</td>
-              <td className="dim">{r.vendor ?? "—"}</td>
-              <td className="mono dim">{r.last_seen.slice(0, 19).replace("T", " ")}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </>
   );
 }

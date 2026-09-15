@@ -63,7 +63,7 @@ pub use error::{Error, Result};
 pub use plan::{TableKind, TablePlan};
 pub use resolve::{ResolvedResources, ResourceCatalog, resolve};
 pub use sql::{Param, Sql};
-pub use warning::QueryWarning;
+pub use warning::{QueryWarning, WarningView};
 
 #[cfg(test)]
 mod tests {

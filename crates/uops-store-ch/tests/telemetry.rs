@@ -365,10 +365,10 @@ async fn a_slow_query_still_runs_and_says_it_was_slow() {
 
     assert_eq!(result.len(), 1, "a substring must still match mid-token");
     assert!(
-        result
-            .warnings
-            .iter()
-            .any(|w| matches!(w, uops_query::QueryWarning::NotIndexAccelerated { .. })),
+        result.warnings.iter().any(|w| matches!(
+            w.warning,
+            uops_query::QueryWarning::NotIndexAccelerated { .. }
+        )),
         "{:?}",
         result.warnings
     );
@@ -445,7 +445,7 @@ async fn metrics_go_in_and_the_rollup_answers_a_long_window() {
         result
             .warnings
             .iter()
-            .any(|w| matches!(w, uops_query::QueryWarning::Downsampled { .. })),
+            .any(|w| matches!(w.warning, uops_query::QueryWarning::Downsampled { .. })),
         "downsampling must never be silent: {:?}",
         result.warnings
     );

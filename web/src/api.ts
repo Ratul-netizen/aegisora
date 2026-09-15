@@ -147,6 +147,18 @@ export interface Me {
   tenants: TenantMembership[];
 }
 
+/** Matches ResourceStatus in uops-core. */
+export const STATUSES = [
+  "up",
+  "down",
+  "degraded",
+  "unknown",
+  "maintenance",
+  "decommissioned",
+] as const;
+
+export type ResourceStatus = (typeof STATUSES)[number];
+
 export interface Resource {
   id: string;
   tenant_id: string;
@@ -157,13 +169,22 @@ export interface Resource {
   model: string | null;
   os: string | null;
   os_version: string | null;
-  status: string;
+  status: ResourceStatus;
+  site_id: string | null;
+  parent_id: string | null;
+  attributes: Record<string, unknown>;
   first_seen: string;
   last_seen: string;
 }
 
 export interface Page<T> {
   items: T[];
+  /**
+   * An opaque keyset cursor, or null at the end.
+   *
+   * Opaque on purpose: it encodes the sort key of the last row, and a client that takes
+   * it apart is a client that breaks when the sort changes. Pass it back verbatim.
+   */
   next: string | null;
 }
 
@@ -179,4 +200,20 @@ export const api = {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
     return request<Page<Resource>>(`/api/v1/resources${query}`, { tenant });
   },
+
+  resource: (tenant: string, id: string) =>
+    request<Resource>(`/api/v1/resources/${encodeURIComponent(id)}`, { tenant }),
+
+  setResourceStatus: (tenant: string, id: string, status: string) =>
+    request<Resource>(`/api/v1/resources/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      body: { status },
+      tenant,
+    }),
+
+  decommission: (tenant: string, id: string) =>
+    request<Resource>(`/api/v1/resources/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      tenant,
+    }),
 };

@@ -48,7 +48,7 @@ PostgreSQL.
 | **M1 · `POST /query`** | ✅ Done — 8 tests, the full stack over HTTP |
 | **M1 · first-run bootstrap** | ✅ Done — 5 store tests, 3 boot tests, 2 mutation guards |
 | **M1 · `uops-server`** | ✅ Done — it runs, and you can log into it |
-| **M1 · web shell** | 🟡 shell + auth + tenant switcher + resources — 13 tests |
+| **M1 · web shell** | ✅ Done — shell, auth, switcher, inventory, detail, explorer |
 | **M1 · cross-tenant acceptance test** | ✅ Done — 5 tests over every route, 2 mutation guards |
 | M2–M4 | ⬜ |
 
@@ -248,11 +248,15 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **The rest of the web shell** — the query explorer over `POST /api/v1/query`, the
-   resource detail view, and cursor pagination in the table. The shell, the auth, the
-   tenant switcher and the time range are done and the remaining views hang off them.
-2. **`docker compose up` from a clean checkout** — the last M1 acceptance criterion with
-   nothing written for it. Needs the web build served alongside the API.
+1. **`docker compose up` from a clean checkout** — the last M1 acceptance criterion
+   with nothing written for it. Needs the web build served alongside the API, which
+   means either a static-file route in `uops-server` or a reverse proxy in the compose
+   file. The second is closer to how this is actually deployed.
+2. **Identity resolution end to end** — the remaining M1 criterion: two sources
+   resolving to one resource, a 0.60–0.95 case reaching the review queue, a merge, and
+   a split that reverts it. Every piece exists and is tested in `uops-identity` and
+   `uops-store-pg`; what does not exist is the sequence run as one scenario, or any UI
+   for the review queue.
 
 ## How to pick this up
 

@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uops_core::{ResourceId, SiteId, TenantId};
-use uops_query::QueryWarning;
+use uops_query::{QueryWarning, WarningView};
 
 use crate::client::Summary;
 use crate::error::{Error, Result};
@@ -87,7 +87,9 @@ pub struct ResultSet {
     /// read" is the first question asked of any slow query.
     pub table: &'static str,
     /// Correct-but-slow, reported rather than hidden — see `uops_query::QueryWarning`.
-    pub warnings: Vec<QueryWarning>,
+    /// Sent as [`WarningView`], which carries the rendered sentence as well as the tag,
+    /// so no client has to keep its own copy of the wording.
+    pub warnings: Vec<WarningView>,
     pub rows_read: u64,
     pub bytes_read: u64,
 }
@@ -105,6 +107,9 @@ impl ResultSet {
         warnings: Vec<QueryWarning>,
         summary: Summary,
     ) -> Result<Self> {
+        // The one place the compiler's warnings become wire warnings.
+        let warnings: Vec<WarningView> = warnings.into_iter().map(Into::into).collect();
+
         // An empty body is an empty result, not a protocol error: a query matching
         // nothing is the most ordinary outcome there is.
         if body.trim().is_empty() {

@@ -45,6 +45,32 @@ pub enum QueryWarning {
     FullTenantScan,
 }
 
+/// A warning as the API sends it.
+///
+/// The tagged variant, flattened, plus the sentence [`QueryWarning::message`] already
+/// knows how to write. The message is on the wire rather than reconstructed by each
+/// client because the alternative is a switch statement in every one of them, and the
+/// day a variant is added those switches do not fail — they fall through to a default
+/// and print `not_index_accelerated`, losing the half of the warning that says what to
+/// do about it.
+///
+/// Serialize only. It is an output shape; nothing parses it back.
+#[derive(Clone, Debug, Serialize)]
+pub struct WarningView {
+    #[serde(flatten)]
+    pub warning: QueryWarning,
+    pub message: String,
+}
+
+impl From<QueryWarning> for WarningView {
+    fn from(warning: QueryWarning) -> Self {
+        Self {
+            message: warning.message(),
+            warning,
+        }
+    }
+}
+
 impl QueryWarning {
     /// One line, for the UI banner.
     #[must_use]

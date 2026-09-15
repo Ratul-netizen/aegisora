@@ -31,7 +31,9 @@ import { createRoot } from "react-dom/client";
 
 import { ApiError, api } from "./api";
 import { Layout } from "./layout";
-import { LoginPage, OverviewPage, ResourcesPage } from "./pages";
+import { ExplorePage } from "./explore";
+import { LoginPage, OverviewPage } from "./pages";
+import { ResourcePage, ResourcesPage } from "./resources";
 import { ShellProvider, validateShellSearch } from "./shell";
 import "./styles.css";
 
@@ -107,9 +109,21 @@ const resourcesRoute = createRoute({
   component: ResourcesPage,
 });
 
+const resourceRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/resources/$id",
+  component: ResourcePage,
+});
+
+const exploreRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/explore",
+  component: ExplorePage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  shellRoute.addChildren([overviewRoute, resourcesRoute]),
+  shellRoute.addChildren([overviewRoute, resourcesRoute, resourceRoute, exploreRoute]),
 ]);
 
 const router = createRouter({ routeTree });
