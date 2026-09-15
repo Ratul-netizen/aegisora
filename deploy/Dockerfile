@@ -41,7 +41,11 @@ ENV SQLX_OFFLINE=true
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY .sqlx/ .sqlx/
 COPY crates/ crates/
+# Both are read at compile time, not at run time: migrations by sqlx::migrate! in
+# uops-pg-migrate, profiles by include_str! in uops-profile. Leave either out and the
+# build fails here rather than the image shipping without them.
 COPY migrations/ migrations/
+COPY profiles/ profiles/
 
 # --workspace --bins: every binary in this workspace ships in this image, and keeps
 # shipping when one is added. Naming them individually is a list that goes stale

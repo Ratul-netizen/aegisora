@@ -1,0 +1,58 @@
+# MikroTik RouterOS. The example SPEC §M2 is written around.
+#
+# RouterOS implements the standard MIBs well, so most of this is IF-MIB and
+# HOST-RESOURCES-MIB. The vendor arc is used for the temperature sensor, which has no
+# standard equivalent and is the thing that actually fails in a hot rack.
+id: mikrotik-routeros
+version: 1
+name: MikroTik RouterOS
+
+match:
+  sysobjectid_prefix: "1.3.6.1.4.1.14988"
+
+discovery:
+  - kind: interface
+    walk: "1.3.6.1.2.1.2.2.1"
+    key: ifIndex
+    creates:
+      resource_kind: interface
+      name_from: "1.3.6.1.2.1.31.1.1.1.1"
+      relationship: member_of
+      identifiers:
+        - kind: mac
+          oid: "1.3.6.1.2.1.2.2.1.6"
+
+metrics:
+  - name: system.cpu.utilization
+    oid: "1.3.6.1.2.1.25.3.3.1.2.1"        # hrProcessorLoad.1
+    kind: gauge
+    unit: "%"
+    interval: 60s
+  - name: system.uptime
+    oid: "1.3.6.1.2.1.1.3.0"
+    kind: gauge
+    unit: s
+    interval: 60s
+  - name: hardware.temperature
+    oid: "1.3.6.1.4.1.14988.1.1.3.10.0"    # mtxrHlTemperature, deci-degrees
+    kind: gauge
+    unit: Cel
+    interval: 60s
+  - name: network.io.receive
+    oid: "1.3.6.1.2.1.31.1.1.1.6"
+    kind: counter
+    unit: By
+    scope: interface
+    interval: 60s
+  - name: network.io.transmit
+    oid: "1.3.6.1.2.1.31.1.1.1.10"
+    kind: counter
+    unit: By
+    scope: interface
+    interval: 60s
+
+availability:
+  - kind: icmp
+    interval: 30s
+    timeout: 2s
+    retries: 3

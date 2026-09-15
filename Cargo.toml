@@ -25,6 +25,11 @@ uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# --- monitoring profiles (M2) ---------------------------------------------------
+# YAML, because a profile is written and reviewed by a human — an OID table in JSON is
+# unreadable and a customer editing one will make a mistake nobody catches. serde_yaml
+# itself is archived; this is the maintained fork, MIT, same API.
+serde_yaml_ng = "0.10"
 thiserror = "2"
 
 # --- crypto (M0.4) -------------------------------------------------------------
@@ -101,6 +106,7 @@ uops-query = { path = "crates/uops-query" }
 uops-secrets = { path = "crates/uops-secrets" }
 uops-identity = { path = "crates/uops-identity" }
 uops-store-pg = { path = "crates/uops-store-pg" }
+uops-profile = { path = "crates/uops-profile" }
 uops-api = { path = "crates/uops-api" }
 uops-server = { path = "crates/uops-server" }
 uops-store-ch = { path = "crates/uops-store-ch" }

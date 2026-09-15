@@ -1,0 +1,72 @@
+# Cisco IOS and IOS-XE.
+#
+# The prefix is the whole Cisco enterprise arc, deliberately broad. A model-specific
+# profile added later wins on its own without this one being touched, because
+# resolution is longest-prefix — see uops-profile/src/resolve.rs.
+id: cisco-ios
+version: 1
+name: Cisco IOS / IOS-XE
+
+match:
+  sysobjectid_prefix: "1.3.6.1.4.1.9"
+
+discovery:
+  - kind: interface
+    walk: "1.3.6.1.2.1.2.2.1"
+    key: ifIndex
+    creates:
+      resource_kind: interface
+      name_from: "1.3.6.1.2.1.31.1.1.1.1"
+      relationship: member_of
+      identifiers:
+        - kind: mac
+          oid: "1.3.6.1.2.1.2.2.1.6"
+
+metrics:
+  # CISCO-PROCESS-MIB, the 5-minute average. The 5-second one exists and is noise: it
+  # samples whatever the CPU was doing during one interrupt storm.
+  - name: system.cpu.utilization
+    oid: "1.3.6.1.4.1.9.9.109.1.1.1.1.8.1" # cpmCPUTotal5minRev.1
+    kind: gauge
+    unit: "%"
+    interval: 60s
+  # CISCO-MEMORY-POOL-MIB, pool 1 — the processor pool on every platform that has one.
+  - name: system.memory.usage
+    oid: "1.3.6.1.4.1.9.9.48.1.1.1.5.1"    # ciscoMemoryPoolUsed.1
+    kind: gauge
+    unit: By
+    interval: 60s
+  - name: system.memory.available
+    oid: "1.3.6.1.4.1.9.9.48.1.1.1.6.1"    # ciscoMemoryPoolFree.1
+    kind: gauge
+    unit: By
+    interval: 60s
+  - name: system.uptime
+    oid: "1.3.6.1.2.1.1.3.0"
+    kind: gauge
+    unit: s
+    interval: 60s
+  - name: network.io.receive
+    oid: "1.3.6.1.2.1.31.1.1.1.6"
+    kind: counter
+    unit: By
+    scope: interface
+    interval: 60s
+  - name: network.io.transmit
+    oid: "1.3.6.1.2.1.31.1.1.1.10"
+    kind: counter
+    unit: By
+    scope: interface
+    interval: 60s
+  - name: network.interface.errors.receive
+    oid: "1.3.6.1.2.1.2.2.1.14"
+    kind: counter
+    unit: "1"
+    scope: interface
+    interval: 60s
+
+availability:
+  - kind: icmp
+    interval: 30s
+    timeout: 2s
+    retries: 3
