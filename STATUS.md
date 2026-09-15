@@ -51,13 +51,14 @@ PostgreSQL.
 | **M1 · web shell** | ✅ Done — shell, auth, switcher, inventory, detail, explorer |
 | **M1 · cross-tenant acceptance test** | ✅ Done — 5 tests over every route, 2 mutation guards |
 | **M1 · `docker compose up`** | ✅ Done — one 30 MB image, migrations as their own step, CI-verified |
+| **M1 · identity end to end** | ✅ Done — the SPEC sentence as one sequence; found a real bug |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 376 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 378 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -249,11 +250,19 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **Identity resolution end to end** — the remaining M1 criterion: two sources
-   resolving to one resource, a 0.60–0.95 case reaching the review queue, a merge, and
-   a split that reverts it. Every piece exists and is tested in `uops-identity` and
-   `uops-store-pg`; what does not exist is the sequence run as one scenario, or any UI
-   for the review queue.
+1. **The review queue has no way to say "no"** — found while writing the scenario
+   above. A case leaves the queue when the provisional is merged away, and that is the
+   only way out. An operator who decides two resources are genuinely *different* has no
+   action to take: the question comes back tomorrow and every day after. This needs a
+   dismissal — a decision outcome, a store method and a route — and it is a product
+   decision about what "not the same" means for a provisional resource that already has
+   telemetry attached, so it is not something to invent silently.
+2. **No UI for the review queue.** `pending_reviews` exists and is tested; nothing
+   surfaces it. Blocked on the above, since a queue you can only agree with is worse
+   than no queue.
+3. **M1 is otherwise complete.** Every acceptance criterion in SPEC §M1 is met and
+   tested. M2 is the NMS — ICMP, TCP and SNMP polling, monitoring profiles, interface
+   discovery.
 
 ## How to pick this up
 
@@ -262,7 +271,7 @@ docker compose -f deploy/docker-compose.yml up -d          # postgres + clickhou
 bash scripts/db.sh migrate && bash scripts/db.sh test      # 22 schema invariants
 bash scripts/ch.sh apply && bash scripts/ch.sh verify      # 6 migrations, 12 golden
 DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   bash scripts/serve.sh                                      # http://127.0.0.1:8080
-DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 376, all green
+DATABASE_URL=postgres://uops:uops@localhost:5432/uops   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops   cargo test --workspace --all-targets                     # 378, all green
 ```
 
 The integration tests need both containers. The unit tests do not, and the workspace

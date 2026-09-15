@@ -349,6 +349,32 @@ jobs:
           cp "$RUNNER_TEMP/routes.bak" "$F"
           echo "ok: an uncovered route fails the suite"
 
+      # The bug this scenario found, restored. An operator merges a review case away;
+      # the review row names the provisional and the merge decision names the survivor,
+      # so nothing in identity_decision ever answers it and the queue offers the same
+      # question forever.
+      #
+      # Measured under this mutation: uops-identity passes, the PgIdentityStore suite
+      # passes, the schema invariants pass. Only the end-to-end scenario notices, which
+      # is the argument for running the SPEC sentence as one sequence rather than as
+      # four independent tests.
+      - name: The identity scenario fails when a merged review never leaves the queue
+        run: |
+          F=crates/uops-store-pg/src/identity.rs
+          cp "$F" "$RUNNER_TEMP/identity.bak"
+          sed -i 's/AND a.historical_id = d.resource_id)/AND a.historical_id = d.resource_id AND false)/' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-pg --test identity_scenario > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/identity.bak" "$F"
+            echo "::error::the scenario passed with a review queue that never clears"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/identity.bak" "$F"
+          echo "ok: a review that outlives its own answer fails the suite"
+
       - name: The API isolation tests fail when the role check is removed
         run: |
           F=crates/uops-api/src/extract.rs

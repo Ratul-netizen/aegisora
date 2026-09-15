@@ -382,12 +382,25 @@ impl IdentityStore for PgStore {
              WHERE d.tenant_id = $1
                AND d.outcome = 'review'
                AND d.resource_id IS NOT NULL
+               -- Answered one of two ways, and both are needed.
+               --
+               -- A manual decision that names the provisional: the operator merged
+               -- something *into* it, or split something off it.
                AND NOT EXISTS (
                      SELECT 1 FROM identity_decision answered
                       WHERE answered.tenant_id = d.tenant_id
                         AND answered.resource_id = d.resource_id
                         AND answered.outcome IN ('manual_merge', 'manual_split')
                         AND answered.decided_at >= d.decided_at)
+               -- Or the provisional was merged away, which is the common case and the
+               -- one a decision row cannot express: merge() records the *surviving*
+               -- resource, so nothing in identity_decision names the provisional at
+               -- all. Without this clause an operator answers the question, and is
+               -- asked it again tomorrow, forever.
+               AND NOT EXISTS (
+                     SELECT 1 FROM resource_alias a
+                      WHERE a.tenant_id = d.tenant_id
+                        AND a.historical_id = d.resource_id)
              ORDER BY d.decided_at DESC
              LIMIT $2
             "#,

@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT d.id          AS \"id: DecisionId\",\n                   d.resource_id AS \"resource_id: ResourceId\",\n                   d.confidence,\n                   d.matched_by  AS \"matched_by: Json<Vec<Match>>\",\n                   d.observed    AS \"observed: Json<Vec<Identifier>>\",\n                   d.source,\n                   d.actor_id    AS \"actor_id: ActorId\",\n                   d.decided_at\n              FROM identity_decision d\n             WHERE d.tenant_id = $1\n               AND d.outcome = 'review'\n               AND d.resource_id IS NOT NULL\n               -- Answered one of two ways, and both are needed.\n               --\n               -- A manual decision that names the provisional: the operator merged\n               -- something *into* it, or split something off it.\n               AND NOT EXISTS (\n                     SELECT 1 FROM identity_decision answered\n                      WHERE answered.tenant_id = d.tenant_id\n                        AND answered.resource_id = d.resource_id\n                        AND answered.outcome IN ('manual_merge', 'manual_split')\n                        AND answered.decided_at >= d.decided_at)\n               -- Or the provisional was merged away, which is the common case and the\n               -- one a decision row cannot express: merge() records the *surviving*\n               -- resource, so nothing in identity_decision names the provisional at\n               -- all. Without this clause an operator answers the question, and is\n               -- asked it again tomorrow, forever.\n               AND NOT EXISTS (\n                     SELECT 1 FROM resource_alias a\n                      WHERE a.tenant_id = d.tenant_id\n                        AND a.historical_id = d.resource_id)\n             ORDER BY d.decided_at DESC\n             LIMIT $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: DecisionId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "resource_id: ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "confidence",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 3,
+        "name": "matched_by: Json<Vec<Match>>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "observed: Json<Vec<Identifier>>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "actor_id: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "07d064e5b97d85d87c1ef2e393a129928f575d8648b579f9e599eb3f97501331"
+}
