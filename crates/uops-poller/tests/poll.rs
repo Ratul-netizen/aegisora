@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use uops_core::{CredentialRef, ResourceId, SiteId, TenantId};
+use uops_core::{CredentialRef, IdentifierKind, ResourceId, SiteId, TenantId};
 use uops_poll::plan::{Device, Work, plan};
 use uops_poll::poller::Task;
 use uops_profile::{Oid, Profile};
@@ -148,10 +148,7 @@ fn context<'a>(
         transport,
         devices,
         metrics,
-        name_from: profile
-            .discovery
-            .first()
-            .map(|d| d.creates.name_from.clone()),
+        discovery: profile.discovery.first().cloned(),
         observed_at: chrono::Utc::now(),
     }
 }
@@ -165,7 +162,10 @@ async fn a_scalar_poll_becomes_a_row_with_the_profiles_name_and_unit() {
     let ctx = context(transport, &devices, &recorder, &profile);
 
     let task = task(&device, &profile, |w| matches!(w, Work::Scalars { .. }));
-    let written = poll::run(&task, &ctx).await.expect("the poll must succeed");
+    let written = poll::run(&task, &ctx)
+        .await
+        .expect("the poll must succeed")
+        .rows;
 
     assert_eq!(written, 1, "generic-snmp has one device-scoped metric");
     let rows = recorder.metric("system.uptime");
@@ -216,13 +216,13 @@ async fn interface_counters_are_labelled_by_the_discovery_that_preceded_them() {
     let ctx = context(Arc::clone(&transport), &devices, &recorder, &profile);
 
     let discovery = task(&device, &profile, |w| matches!(w, Work::Discovery { .. }));
-    let found = poll::run(&discovery, &ctx).await.expect("discovery");
+    let found = poll::run(&discovery, &ctx).await.expect("discovery").rows;
     assert_eq!(found, 0, "discovery writes no metric rows");
 
     let columns = task(&device, &profile, |w| {
         matches!(w, Work::InterfaceColumns { .. })
     });
-    let written = poll::run(&columns, &ctx).await.expect("columns");
+    let written = poll::run(&columns, &ctx).await.expect("columns").rows;
     // Four interface metrics × three interfaces.
     assert_eq!(written, 12);
 
@@ -272,7 +272,7 @@ async fn a_column_walk_before_any_discovery_is_labelled_by_index_not_dropped() {
     let columns = task(&device, &profile, |w| {
         matches!(w, Work::InterfaceColumns { .. })
     });
-    let written = poll::run(&columns, &ctx).await.expect("columns");
+    let written = poll::run(&columns, &ctx).await.expect("columns").rows;
     assert_eq!(written, 8);
 
     let received = recorder.metric("network.io.receive");
@@ -309,7 +309,8 @@ async fn a_metric_the_agent_does_not_implement_is_skipped_rather_than_invented()
     let task = task(&device, &profile, |w| matches!(w, Work::Scalars { .. }));
     let written = poll::run(&task, &ctx)
         .await
-        .expect("the poll must not fail");
+        .expect("the poll must not fail")
+        .rows;
     assert_eq!(written, 0);
     assert!(recorder.rows().is_empty());
 }
@@ -428,5 +429,189 @@ async fn a_devices_tuning_survives_between_polls() {
     assert!(
         tuning.current().get() <= 4,
         "the halving must be remembered, not repeated: {tuning:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_discovery_walk_reports_a_child_for_every_named_row() {
+    // What the store turns into resources and edges. Names and indexes both: the name is
+    // what a child is matched on across runs, the index is what joins a sample's label
+    // back to it.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+    let transport: Arc<dyn Transport> = Arc::new(healthy(3));
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let task = task(&device, &profile, |w| matches!(w, Work::Discovery { .. }));
+    let polled = poll::run(&task, &ctx).await.expect("discovery");
+
+    assert_eq!(polled.rows, 0, "discovery writes no metric rows");
+    let found: Vec<(&str, Vec<u32>)> = polled
+        .discovered
+        .iter()
+        .map(|c| (c.name.as_str(), c.index.clone()))
+        .collect();
+    assert_eq!(
+        found,
+        vec![("Gi0/1", vec![1]), ("Gi0/2", vec![2]), ("Gi0/3", vec![3]),]
+    );
+}
+
+#[tokio::test]
+async fn an_interfaces_mac_is_read_from_the_column_the_profile_names() {
+    // `generic-snmp` declares ifPhysAddress as a `mac` identifier. It is how a flow
+    // record or an LLDP neighbour, which arrive with a MAC and nothing else, later reach
+    // this interface.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+
+    let mut agent = Agent::empty();
+    for index in 1..=2u32 {
+        agent.set(
+            oid("1.3.6.1.2.1.31.1.1.1.1").child(index),
+            Value::Bytes(format!("Gi0/{index}").into_bytes()),
+        );
+        // ifPhysAddress: six raw bytes, which is what a MAC is on the wire.
+        agent.set(
+            oid("1.3.6.1.2.1.2.2.1.6").child(index),
+            Value::Bytes(vec![
+                0x02,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                u8::try_from(index).unwrap(),
+            ]),
+        );
+    }
+    let mut fleet = Fleet::new();
+    fleet.insert(ADDRESS.parse::<SocketAddr>().unwrap(), agent);
+    let transport: Arc<dyn Transport> = Arc::new(fleet);
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let task = task(&device, &profile, |w| matches!(w, Work::Discovery { .. }));
+    let polled = poll::run(&task, &ctx).await.expect("discovery");
+
+    let macs: Vec<(&str, &str)> = polled
+        .discovered
+        .iter()
+        .filter_map(|c| {
+            c.identifiers
+                .first()
+                .map(|i| (c.name.as_str(), i.value.as_str()))
+        })
+        .collect();
+    assert_eq!(
+        macs,
+        vec![
+            ("Gi0/1", "02:00:00:00:00:01"),
+            ("Gi0/2", "02:00:00:00:00:02")
+        ]
+    );
+    assert!(
+        polled
+            .discovered
+            .iter()
+            .all(|c| c.identifiers.iter().all(|i| i.kind == IdentifierKind::Mac)),
+        "the kind comes from the profile, not from guessing at the value"
+    );
+}
+
+#[tokio::test]
+async fn an_all_zero_phys_address_is_not_treated_as_a_mac() {
+    // Most rows on a router. Loopbacks, tunnels, VLAN interfaces and the null interface
+    // all report six zero bytes, because they have no physical address.
+    //
+    // `resource_identifier` is unique on (tenant_id, kind, value), so treating that as a
+    // MAC would mean the first loopback in a tenant claims `00:00:00:00:00:00` and every
+    // other one silently attaches to nothing — an identifier pointing at an arbitrary
+    // interface, which is worse than no identifier.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+
+    let mut agent = Agent::empty();
+    agent.set(
+        oid("1.3.6.1.2.1.31.1.1.1.1").child(1),
+        Value::Bytes(b"Loopback0".to_vec()),
+    );
+    agent.set(
+        oid("1.3.6.1.2.1.2.2.1.6").child(1),
+        Value::Bytes(vec![0; 6]),
+    );
+    // And a length that is not six: some agents return an empty string for the same idea.
+    agent.set(
+        oid("1.3.6.1.2.1.31.1.1.1.1").child(2),
+        Value::Bytes(b"Tunnel1".to_vec()),
+    );
+    agent.set(
+        oid("1.3.6.1.2.1.2.2.1.6").child(2),
+        Value::Bytes(Vec::new()),
+    );
+
+    let mut fleet = Fleet::new();
+    fleet.insert(ADDRESS.parse::<SocketAddr>().unwrap(), agent);
+    let transport: Arc<dyn Transport> = Arc::new(fleet);
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let task = task(&device, &profile, |w| matches!(w, Work::Discovery { .. }));
+    let polled = poll::run(&task, &ctx).await.expect("discovery");
+
+    assert_eq!(
+        polled.discovered.len(),
+        2,
+        "both interfaces are still found"
+    );
+    for child in &polled.discovered {
+        assert!(
+            child.identifiers.is_empty(),
+            "{} was given an identifier it does not have: {:?}",
+            child.name,
+            child.identifiers
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_row_with_no_name_produces_telemetry_but_not_a_resource() {
+    // An interface whose ifName the agent does not answer. It cannot become a resource —
+    // the name is what it would be matched on across runs, and a child keyed on nothing
+    // would be re-created every fifteen minutes. Its counters are still real, and are
+    // still written, labelled by index.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+
+    let mut agent = Agent::empty();
+    agent.set(
+        oid("1.3.6.1.2.1.31.1.1.1.1").child(1),
+        Value::Bytes(b"Gi0/1".to_vec()),
+    );
+    // Index 2 has a counter and no name.
+    agent.set(oid("1.3.6.1.2.1.31.1.1.1.6").child(1), Value::Counter64(10));
+    agent.set(oid("1.3.6.1.2.1.31.1.1.1.6").child(2), Value::Counter64(20));
+    let mut fleet = Fleet::new();
+    fleet.insert(ADDRESS.parse::<SocketAddr>().unwrap(), agent);
+    let transport: Arc<dyn Transport> = Arc::new(fleet);
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let discovery = task(&device, &profile, |w| matches!(w, Work::Discovery { .. }));
+    let polled = poll::run(&discovery, &ctx).await.expect("discovery");
+    assert_eq!(
+        polled.discovered.len(),
+        1,
+        "only the named row can become a resource"
+    );
+
+    let columns = task(&device, &profile, |w| {
+        matches!(w, Work::InterfaceColumns { .. })
+    });
+    poll::run(&columns, &ctx).await.expect("columns");
+    assert_eq!(
+        recorder.metric("network.io.receive").len(),
+        2,
+        "both interfaces' counters are real measurements"
     );
 }

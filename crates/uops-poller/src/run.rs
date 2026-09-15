@@ -34,7 +34,6 @@ use tokio::sync::Mutex;
 use uops_core::{ResourceId, TenantScope};
 use uops_poll::poller::{JobKey, Schedule, Task, run_tick, tasks, tick_instant};
 use uops_poll::{Executor, TickReport};
-use uops_profile::Oid;
 use uops_snmp::Target;
 use uops_store_ch::ChStore;
 use uops_store_pg::PgStore;
@@ -53,10 +52,10 @@ pub struct Runner {
     metrics: ChStore,
     transports: Mutex<Transports>,
     devices: poll::Devices,
-    /// Each device's discovery name column, from its profile. The schedule holds jobs,
-    /// not profiles, and `Work::Discovery` carries the table rather than the column that
-    /// names a row.
-    name_from: Mutex<HashMap<ResourceId, Option<Oid>>>,
+    /// Each device's discovery rule, from its profile. The schedule holds jobs, not
+    /// profiles, and `Work::Discovery` carries only the table — not the column that
+    /// names a row, nor the identifiers to read off it.
+    discovery: Mutex<HashMap<ResourceId, Option<uops_profile::Discovery>>>,
     /// Devices whose failure has already been reported this reload window.
     reported: Mutex<HashSet<ResourceId>>,
     /// Failures not printed because the device had already been reported.
@@ -85,7 +84,7 @@ impl Runner {
             metrics,
             transports: Mutex::new(transports),
             devices: poll::Devices::new(),
-            name_from: Mutex::new(HashMap::new()),
+            discovery: Mutex::new(HashMap::new()),
             reported: Mutex::new(HashSet::new()),
             suppressed: std::sync::atomic::AtomicUsize::new(0),
             timeout,
@@ -116,17 +115,21 @@ impl Runner {
             }
         };
 
-        let name_from = self.name_from.lock().await.get(&device).cloned().flatten();
+        let rule = self.discovery.lock().await.get(&device).cloned().flatten();
+        // The profile's `resource_kind` is `uops_core::ResourceKind` already — a profile
+        // is validated against the same vocabulary the schema uses, so there is nothing
+        // to convert.
+        let kind = rule.as_ref().map(|r| r.creates.resource_kind);
         let ctx = poll::Context {
             transport: Arc::clone(&transport) as Arc<dyn uops_snmp::Transport>,
             devices: &self.devices,
             metrics: &self.metrics,
-            name_from,
+            discovery: rule,
             observed_at: tick_instant(),
         };
 
-        let written = match poll::run(&task, &ctx).await {
-            Ok(n) => n,
+        let polled = match poll::run(&task, &ctx).await {
+            Ok(p) => p,
             Err(e) => {
                 self.report(device, &e.to_string()).await;
                 return Err(());
@@ -134,14 +137,70 @@ impl Runner {
         };
 
         // A discovery that succeeded is also the moment the device's sysObjectID is
-        // known. Recorded here rather than inside `poll` because it is a write to
-        // PostgreSQL, and `poll` deliberately has no store: its failure is not a reason
-        // to fail the poll that produced the names.
+        // known, and the moment its interfaces become resources. Both are writes to
+        // PostgreSQL and both are here rather than inside `poll`, which deliberately has
+        // no store.
         if matches!(task.work, uops_poll::plan::Work::Discovery { .. }) {
             self.record_sysobjectid(&task, transport.as_ref()).await;
+            if let Some(kind) = kind {
+                self.record_discovery(&task, kind, &polled.discovered).await;
+            }
         }
 
-        Ok(written)
+        Ok(polled.rows)
+    }
+
+    /// Turn a discovery walk into child resources and `member_of` edges.
+    ///
+    /// Reported but not fatal. The walk that produced these also produced the interface
+    /// names, which are already remembered and are what the next interface poll needs;
+    /// failing the task because PostgreSQL was briefly unavailable would throw those away
+    /// and make the device walk for them again.
+    async fn record_discovery(
+        &self,
+        task: &Task,
+        kind: uops_core::ResourceKind,
+        found: &[poll::DiscoveredChild],
+    ) {
+        if found.is_empty() {
+            return;
+        }
+        let children: Vec<uops_store_pg::DiscoveredChild> = found
+            .iter()
+            .map(|child| uops_store_pg::DiscoveredChild {
+                name: child.name.clone(),
+                kind,
+                index: child
+                    .index
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("."),
+                identifiers: child.identifiers.clone(),
+            })
+            .collect();
+
+        let scope = TenantScope::collector(task.device.tenant);
+        match self
+            .store
+            .record_discovery(&scope, task.device.resource, &children)
+            .await
+        {
+            // Worth a line, and only when something is new: after the first pass a device
+            // rediscovers the same interfaces every fifteen minutes forever.
+            Ok(report) if report.created > 0 => println!(
+                "uops-poller: {} — {} new child resources, {} already known",
+                task.device.resource, report.created, report.seen
+            ),
+            Ok(_) => {}
+            Err(e) => {
+                self.report(
+                    task.device.resource,
+                    &format!("its interfaces could not be recorded: {e}"),
+                )
+                .await;
+            }
+        }
     }
 
     /// Fetch and persist the device's `sysObjectID`, if it has changed.
@@ -233,16 +292,10 @@ pub async fn reload(
     }
 
     {
-        let mut name_from = runner.name_from.lock().await;
-        name_from.clear();
+        let mut discovery = runner.discovery.lock().await;
+        discovery.clear();
         for (device, profile) in &loaded.devices {
-            name_from.insert(
-                device.resource,
-                profile
-                    .discovery
-                    .first()
-                    .map(|d| d.creates.name_from.clone()),
-            );
+            discovery.insert(device.resource, profile.discovery.first().cloned());
         }
     }
 

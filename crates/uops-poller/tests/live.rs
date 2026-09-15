@@ -38,7 +38,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use uops_core::{AuthProtocol, CredentialMaterial, OrgId, PrivProtocol, Secret, SiteId, TenantId};
+use uops_core::{
+    AuthProtocol, CredentialMaterial, OrgId, PrivProtocol, Secret, SiteId, TenantId, TenantScope,
+};
 use uops_poll::poller::Schedule;
 use uops_poll::{Executor, Limits};
 use uops_secrets::{CredentialMeta, KekRing, LocalVault};
@@ -344,6 +346,129 @@ async fn a_device_in_postgres_becomes_rows_in_clickhouse() {
         failed > 0,
         "the ICMP availability job must be counted as failing rather than silently \
          passing; if this is 0 the planner stopped scheduling it"
+    );
+
+    scratch.drop_database().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_agents_interfaces_become_child_resources_and_member_of_edges() {
+    // SPEC §M2's third acceptance criterion, against a real agent and a real database.
+    // The **and** is the part: a child with no edge is a resource unreachable from the
+    // device it belongs to, which the topology UI would render as a switch with no ports.
+    //
+    // The container's interfaces are whatever Docker gave it — `lo` and an `eth0`, on a
+    // default bridge — so this asserts the shape rather than the names. The names are the
+    // simulator's job; what only a real agent can prove is that `ifXTable::ifName` is
+    // populated at all, which it is not on every agent and which is why `generic-snmp`
+    // reads it rather than `ifDescr`.
+    let address = agent_or_skip!();
+    let scratch = Scratch::new().await;
+    let store = scratch.store.clone();
+    let (tenant, resource) = seed(&store, &address).await;
+
+    store
+        .seed_builtin_profiles(&uops_profile::builtin::all().expect("built-ins"))
+        .await
+        .expect("seed profiles");
+
+    let runner = Arc::new(Runner::new(
+        store.clone(),
+        metrics(),
+        Transports::new(vault(&store)),
+        Duration::from_secs(5),
+    ));
+    let mut schedule = Schedule::new();
+    run::reload(&runner, &mut schedule, 10_000)
+        .await
+        .expect("reload");
+
+    let executor = Executor::new(Limits {
+        global: 16,
+        per_device: 4,
+        device_budget: Duration::from_secs(5),
+    });
+    let mut due = Vec::new();
+    // Discovery runs on a fifteen-minute interval, so the wheel has to be driven further
+    // than for a metric. 1 000 slots is under seventeen minutes of schedule and costs
+    // only the polls it actually dispatches.
+    for _ in 0..1_000 {
+        run::tick_once(&runner, &executor, &mut schedule, &mut due).await;
+    }
+
+    let scope = TenantScope::collector(tenant);
+    let children = store.children_of(&scope, resource).await.expect("children");
+    assert!(
+        !children.is_empty(),
+        "the agent has interfaces and none of them became a resource"
+    );
+
+    // The container has an `eth0` on Docker's bridge and a loopback, which between them
+    // are exactly the two cases worth having a real agent for: one with a physical
+    // address and one without.
+    let names: Vec<&str> = children.iter().map(|(_, n)| n.as_str()).collect();
+    assert!(names.contains(&"lo"), "no loopback: {names:?}");
+    assert!(
+        names.iter().any(|n| n.starts_with("eth")),
+        "no ethernet interface: {names:?}"
+    );
+
+    // `lo` reports six zero bytes for ifPhysAddress, as every loopback does. Treating
+    // that as a MAC would have the first loopback in a tenant claim
+    // `00:00:00:00:00:00` — resource_identifier is unique on (tenant_id, kind, value) —
+    // and every other one silently attach to nothing.
+    let identifiers: Vec<(String, String)> = sqlx::query_as(
+        "SELECT r.name, i.value
+           FROM resource_identifier i
+           JOIN resource r ON r.id = i.resource_id AND r.tenant_id = i.tenant_id
+          WHERE i.tenant_id = $1 AND i.kind = 'mac'
+          ORDER BY r.name",
+    )
+    .bind(tenant.into_uuid())
+    .fetch_all(store.pool())
+    .await
+    .expect("mac identifiers");
+    assert!(
+        identifiers.iter().all(|(name, _)| name != "lo"),
+        "the loopback was given a MAC it does not have: {identifiers:?}"
+    );
+    assert!(
+        identifiers.iter().any(|(name, _)| name.starts_with("eth")),
+        "the ethernet interface has a real MAC and it was not recorded: {identifiers:?}"
+    );
+
+    let members = store.members_of(&scope, resource).await.expect("edges");
+    assert_eq!(
+        members.len(),
+        children.len(),
+        "every child must have its member_of edge: {children:?} vs {members:?}"
+    );
+    let ids: Vec<_> = children.iter().map(|(id, _)| *id).collect();
+    for member in &members {
+        assert!(ids.contains(member), "an edge points outside the children");
+    }
+
+    // Each child carries the index its samples are labelled with, so a row of telemetry
+    // and the resource it belongs to can be joined.
+    for (id, name) in &children {
+        let child = store.resource(&scope, *id).await.expect("child");
+        assert_eq!(child.parent_id, Some(resource));
+        assert_eq!(child.kind, uops_core::ResourceKind::Interface);
+        assert!(
+            child.attributes.get("network.interface.index").is_some(),
+            "{name} has no index to join its telemetry on"
+        );
+    }
+
+    // And the second walk finds the same interfaces rather than making new ones — the
+    // property that decides whether a device accumulates ports for ever.
+    for _ in 0..1_000 {
+        run::tick_once(&runner, &executor, &mut schedule, &mut due).await;
+    }
+    let again = store.children_of(&scope, resource).await.expect("children");
+    assert_eq!(
+        again, children,
+        "a second discovery pass created new interfaces instead of finding the old ones"
     );
 
     scratch.drop_database().await;

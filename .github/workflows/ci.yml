@@ -522,6 +522,47 @@ jobs:
           cp "$RUNNER_TEMP/executor.bak" "$F"
           echo "ok: a serialised fleet fails the suite"
 
+      # SPEC §M2 asks for child resources **and** member_of relationships. A child with
+      # no edge is a resource unreachable from the device it belongs to — which the
+      # topology UI renders as a switch with no ports, and which no test that only
+      # counted children would notice.
+      - name: The discovery tests fail when the edge is not a member_of
+        run: |
+          F=crates/uops-store-pg/src/discovery.rs
+          cp "$F" "$RUNNER_TEMP/discovery.bak"
+          sed -i "s|'member_of', 1.0|'hosts', 1.0|" "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-pg --test discovery > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/discovery.bak" "$F"
+            echo "::error::the discovery tests passed with children that are not members of anything"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/discovery.bak" "$F"
+          echo "ok: a child with no member_of edge fails the suite"
+
+      # Discovery runs every fifteen minutes for the life of a device. Without a key to
+      # match an already-discovered interface on, a 48-port switch accumulates 4 608
+      # interfaces a day, each holding a fraction of the telemetry.
+      - name: The discovery tests fail when rediscovery stops matching
+        run: |
+          F=crates/uops-store-pg/src/discovery.rs
+          cp "$F" "$RUNNER_TEMP/discovery.bak"
+          sed -i 's|ON CONFLICT (tenant_id, parent_id, kind, name) WHERE parent_id IS NOT NULL|ON CONFLICT (id)|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-pg --test discovery > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/discovery.bak" "$F"
+            echo "::error::the discovery tests passed with a key that never matches an existing child"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/discovery.bak" "$F"
+          echo "ok: rediscovery that duplicates fails the suite"
+
       # A KEK rotation computes a new wrapping from a DEK it read. If the credential is
       # rotated in between — `put` reuses the id, so the row gets a new DEK and a new
       # ciphertext — writing that wrapping back leaves the row wrapping the old DEK over

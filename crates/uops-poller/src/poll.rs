@@ -22,11 +22,11 @@
 //! retry: the next poll of that job is already scheduled, and a retry inside the budget
 //! is a second request competing with the first for the same device's attention.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use uops_core::ResourceId;
+use uops_core::{Identifier, ResourceId};
 use uops_poll::plan::{MetricRequest, Work};
 use uops_poll::poller::{InterfaceNames, Task};
 use uops_poll::sample::{self, Numeric, Reading};
@@ -176,10 +176,13 @@ pub struct Context<'a, S: Sink + ?Sized> {
     pub transport: Arc<dyn Transport>,
     pub devices: &'a Devices,
     pub metrics: &'a S,
-    /// The column a discovered interface's name is read from — the profile's
-    /// `discovery.creates.name_from`. `None` for a profile that discovers nothing, in
+    /// The profile's discovery rule. `None` for a profile that discovers nothing, in
     /// which case a discovery task cannot have been scheduled.
-    pub name_from: Option<Oid>,
+    ///
+    /// The whole rule rather than the name column alone: discovery also reads the
+    /// identifiers the rule declares, and a `Context` carrying only the name would make
+    /// those columns unreachable from the one function that needs them.
+    pub discovery: Option<uops_profile::Discovery>,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -189,33 +192,70 @@ impl<S: Sink + ?Sized> std::fmt::Debug for Context<'_, S> {
         // the one implementation holds a credential, and a trait object that could be
         // printed is a credential that could be printed by accident.
         f.debug_struct("Context")
-            .field("name_from", &self.name_from)
+            .field("discovery", &self.discovery.is_some())
             .field("observed_at", &self.observed_at)
             .finish_non_exhaustive()
     }
 }
 
-/// Run one task: ask the device, convert what it said, write the rows.
+/// What one task produced.
+#[derive(Debug, Default)]
+pub struct Polled {
+    /// Metric rows written.
+    pub rows: usize,
+    /// Rows of a discovery walk, for the caller to persist. Empty for every other kind
+    /// of task.
+    ///
+    /// Returned rather than written here because this module deliberately has no store —
+    /// [`Sink`] is the only thing it can write to, and that takes metric rows and nothing
+    /// else. Persisting a child resource is a `PostgreSQL` transaction and belongs with
+    /// the code that owns that connection.
+    pub discovered: Vec<DiscoveredChild>,
+}
+
+/// One row of a discovery walk, as the device reported it.
 ///
-/// Returns how many rows were written.
+/// `uops_store_pg::DiscoveredChild` is the same idea one layer down. They are separate
+/// types because this one is what SNMP said and that one is what the database takes;
+/// collapsing them would put a `ResourceKind` in the transport's vocabulary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveredChild {
+    /// The row's index within its table — `ifIndex`, as the walk's instance suffix.
+    pub index: Vec<u32>,
+    pub name: String,
+    /// What the rule's `identifiers` columns held for this row, already rendered.
+    pub identifiers: Vec<Identifier>,
+}
+
+/// Run one task: ask the device, convert what it said, write the rows.
 ///
 /// # Errors
 ///
 /// A transport or walk failure, a store failure, or work this binary does not do yet.
-pub async fn run<S: Sink + ?Sized>(task: &Task, ctx: &Context<'_, S>) -> Result<usize, PollError> {
+pub async fn run<S: Sink + ?Sized>(task: &Task, ctx: &Context<'_, S>) -> Result<Polled, PollError> {
     let target = Target {
         address: task.device.address,
     };
 
     match &task.work {
-        Work::Scalars { metrics } => scalars(task, ctx, &target, metrics).await,
-        Work::InterfaceColumns { metrics } => columns(task, ctx, &target, metrics).await,
+        Work::Scalars { metrics } => scalars(task, ctx, &target, metrics).await.map(rows_only),
+        Work::InterfaceColumns { metrics } => {
+            columns(task, ctx, &target, metrics).await.map(rows_only)
+        }
         Work::Discovery { table } => discovery(task, ctx, &target, table).await,
         // ICMP needs a raw socket, which needs a privilege this process should not have
         // by default; TCP needs a port the built-in profiles do not set. Both are real
         // work rather than a line of code, and counting them is the honest thing to do
         // until they exist. See STATUS.
         Work::Availability { .. } => Err(PollError::Unsupported("the availability check")),
+    }
+}
+
+/// A task that discovers nothing, as a [`Polled`].
+const fn rows_only(rows: usize) -> Polled {
+    Polled {
+        rows,
+        discovered: Vec::new(),
     }
 }
 
@@ -271,57 +311,153 @@ async fn columns<S: Sink + ?Sized>(
     write(ctx, &rows).await
 }
 
-/// The discovery walk: interface names, and the device's `sysObjectID`.
+/// The discovery walk: what rows the table has, what they are called, and what
+/// identifies them.
 ///
-/// Writes no metric rows. What it produces is the labelling every interface-scoped
-/// sample between now and the next discovery depends on, and the object id that decides
-/// which profile the device is polled under after a restart.
+/// Writes no metric rows. What it produces is two things with different lifetimes: the
+/// names, which label every interface-scoped sample until the next discovery, and the
+/// children, which the caller turns into resources and `member_of` edges.
+///
+/// # One walk per column, not one of the table
+///
+/// The rule names a table — `ifEntry` — and this walks the columns it actually reads
+/// instead. `ifTable` has twenty-two columns; a device with forty-eight ports would move
+/// a thousand varbinds to extract ninety-six. The table OID stays in the profile because
+/// it is what documents *what is being discovered*, and a future rule that needed a
+/// column this code does not know about would be read from there.
 async fn discovery<S: Sink + ?Sized>(
     task: &Task,
     ctx: &Context<'_, S>,
     target: &Target,
     table: &Oid,
-) -> Result<usize, PollError> {
-    let Some(name_from) = ctx.name_from.clone() else {
+) -> Result<Polled, PollError> {
+    let Some(rule) = ctx.discovery.clone() else {
         // Profile::validate refuses interface metrics with no discovery rule, and plan()
         // only schedules discovery when there is one — so this is a consistency check on
         // the caller rather than a case that arises.
         return Err(PollError::Unsupported(
-            "a discovery task with no name column",
+            "a discovery task with no discovery rule",
         ));
     };
+    debug_assert!(
+        rule.walk == *table,
+        "the scheduled table and the rule's table must be the same"
+    );
 
     let (mut tuning, _) = ctx.devices.snapshot(task.device.resource).await;
 
-    let rows = walk::walk(ctx.transport.as_ref(), target, &name_from, &mut tuning)
-        .await
-        .map_err(PollError::Walk)?;
+    let name_rows = walk::walk(
+        ctx.transport.as_ref(),
+        target,
+        &rule.creates.name_from,
+        &mut tuning,
+    )
+    .await
+    .map_err(PollError::Walk)?;
 
+    // Index → name. An index with no readable name simply has no entry, which is what
+    // `interface_columns` expects and why a nameless interface is still labelled.
     let mut names = InterfaceNames::new();
-    for vb in &rows {
-        // Both from the same walk, so an index with no readable name simply has no
-        // entry — which is what interface_columns expects.
-        if let (Some(index), Value::Bytes(bytes)) = (walk::index_of(&vb.oid, &name_from), &vb.value)
+    for vb in &name_rows {
+        if let (Some(index), Value::Bytes(bytes)) =
+            (walk::index_of(&vb.oid, &rule.creates.name_from), &vb.value)
         {
             // from_utf8_lossy, not from_utf8: an ifName with one bad byte is still the
             // name a person reads on a graph, and refusing it would label the interface
             // by index forever.
-            names.insert(index, String::from_utf8_lossy(bytes).into_owned());
+            let name = String::from_utf8_lossy(bytes).trim().to_owned();
+            if !name.is_empty() {
+                names.insert(index, name);
+            }
         }
     }
+
+    // One walk per declared identifier column, collected by index so each row gets its
+    // own. A column the device does not implement returns nothing and contributes
+    // nothing, which is the same tolerance a missing metric gets.
+    let mut identifiers: BTreeMap<Vec<u32>, Vec<Identifier>> = BTreeMap::new();
+    for source in &rule.creates.identifiers {
+        let found = walk::walk(ctx.transport.as_ref(), target, &source.oid, &mut tuning)
+            .await
+            .map_err(PollError::Walk)?;
+        for vb in &found {
+            let Some(index) = walk::index_of(&vb.oid, &source.oid) else {
+                continue;
+            };
+            if let Some(value) = identifier_value(source.kind, &vb.value) {
+                identifiers
+                    .entry(index)
+                    .or_default()
+                    .push(Identifier::new(source.kind, value));
+            }
+        }
+    }
+
     ctx.devices
-        .remember_names(task.device.resource, names)
+        .remember_names(task.device.resource, names.clone())
         .await;
     ctx.devices
         .remember_tuning(task.device.resource, tuning)
         .await;
 
-    // The table itself is walked for the child resources it becomes — see STATUS; that
-    // is the last M2 criterion and it is not here yet. Named so that a reader does not
-    // conclude `table` is unused by accident.
-    let _ = table;
+    // Keyed off the names: a row with no name has nothing to be called and nothing to
+    // match on across runs — see migration 0008 on why the name and not the index — so
+    // it cannot become a resource. It still produces telemetry, labelled by index.
+    let discovered = names
+        .into_iter()
+        .map(|(index, name)| DiscoveredChild {
+            identifiers: identifiers.remove(&index).unwrap_or_default(),
+            index,
+            name,
+        })
+        .collect();
 
-    Ok(0)
+    Ok(Polled {
+        rows: 0,
+        discovered,
+    })
+}
+
+/// Render a varbind as an identifier value, or `None` if it is not one.
+///
+/// Every identifier is a string by the time it reaches `resource_identifier`, and how a
+/// value becomes that string depends on what kind it is: a MAC is six raw bytes and a
+/// serial number is text, and both arrive as `OCTET STRING`.
+fn identifier_value(kind: uops_core::IdentifierKind, value: &Value) -> Option<String> {
+    let Value::Bytes(bytes) = value else {
+        // An identifier that is not an OCTET STRING is not one this code knows how to
+        // read. Skipped rather than guessed at — a number rendered as a serial would be
+        // an identifier that matches the wrong device.
+        return None;
+    };
+
+    if kind == uops_core::IdentifierKind::Mac {
+        return mac(bytes);
+    }
+    let text = String::from_utf8_lossy(bytes).trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Six bytes as `aa:bb:cc:dd:ee:ff`.
+///
+/// # Why an all-zero address is not an identifier
+///
+/// `ifPhysAddress` is all-zero on every interface that has no physical address — loopbacks,
+/// tunnels, VLAN interfaces, the null interface. That is most of the rows on a router.
+/// `resource_identifier` is unique on `(tenant_id, kind, value)`, so treating it as a MAC
+/// would mean the first loopback in a tenant claims it and every other one silently
+/// attaches to nothing. It is an absence, not an address.
+fn mac(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != 6 || bytes.iter().all(|b| *b == 0) {
+        return None;
+    }
+    Some(
+        bytes
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
 }
 
 /// Ask a device for its `sysObjectID`.

@@ -246,6 +246,14 @@ crates/uops-store-pg/src/identity.rs
    IdentityStore over PostgreSQL. Merge and split are one transaction each:
    half a merge orphans every row of telemetry under the old resource_id.
 
+crates/uops-store-pg/src/discovery.rs
+   What a discovery walk becomes: child resources and member_of edges, in one
+   transaction. Does NOT go through identity resolution — an interface's parent
+   is not in question, so resolving it would mean manufacturing a confidence
+   score for a fact and putting interfaces in the review queue because two
+   switches both have a Gi0/1. Identifiers are attached, because a flow record
+   or an LLDP neighbour arrives later with a MAC and nothing else.
+
 crates/uops-poller/
    The polling binary. main.rs is the order things happen in; the pieces are
    config (no default KEK — a poller that cannot open a credential polls
@@ -349,10 +357,17 @@ because it reads as covered.
       **Also not done:** a lease. Two pollers against one database would both schedule
       every device, doubling the load on the fleet and writing each sample twice. One
       process for now, said out loud in `main.rs`.
-   4. **Discovery — pick up here.** Each row of the interface walk becomes a child
-      resource plus a `member_of` edge. The walk already runs and its names are already
-      used to label samples; what does not exist is the write. It is the last M2
-      acceptance criterion with nothing behind it.
+   4. ~~Discovery.~~ Done. Each named row of the interface walk becomes a child
+      resource plus a `member_of` edge, in one transaction — a child with no edge is
+      unreachable from the device it belongs to, which is what the **and** in the
+      acceptance criterion is about. Matched across runs on the *name*, not `ifIndex`:
+      the MIB promises an index is stable only "between re-initializations", so an
+      index-keyed child would be re-created on every reboot. Migration 0008 is the
+      partial unique index that makes it repeatable.
+      **Not done:** an interface that stops appearing is left alone. Deleting it would
+      orphan the telemetry that references it, and one missed walk is not proof a port
+      was removed. `last_seen` stops advancing, which is the signal; acting on it is a
+      product decision.
 
 ## M2 acceptance criteria, where they actually stand
 
@@ -360,9 +375,9 @@ because it reads as covered.
 |---|---|
 | 1 000 simulated agents at 60s, p95 < 5 s, no missed cycles | Met in `uops-poll`'s fleet test, against the simulator. **Not** re-measured through the binary |
 | SNMPv3 authPriv SHA-256/AES-256 against a real device, credential through `SecretStore` with an access-log entry | Met. `tests/agent.rs` for the wire, `tests/live.rs` for the credential path. The access-log entry is written but the log is in-memory — the `credential_access` table is M3 |
-| Interface discovery creates child resources **and** `member_of` relationships | **Not met.** The walk runs; nothing is written. This is item 4 above |
+| Interface discovery creates child resources **and** `member_of` relationships | Met. Asserted against the real agent in `tests/live.rs` — the container's `eth0` and `lo` become resources with edges — and two CI mutations require the suite to fail: one writes the wrong edge kind, one breaks the rediscovery key |
 | A 32-bit counter wrap produces no negative rate in any query | `uops_poll::counter` is written and tested. **Not wired**: samples are stored raw and nothing computes a rate yet, so the criterion is neither met nor violated |
-| An unknown-vendor device gets interfaces and availability via `generic-snmp` | Half. Interfaces yes; availability is ICMP and is counted as unsupported |
+| An unknown-vendor device gets interfaces and availability via `generic-snmp` | Half, and now genuinely half: interfaces become resources under `generic-snmp` with no vendor profile involved. Availability is ICMP and is counted as unsupported |
 | Dead device does not delay healthy devices (measured, not assumed) | Met, measured, and guarded in CI by a mutation that serialises the executor |
 
 ## How to pick this up
