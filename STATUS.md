@@ -56,6 +56,7 @@ PostgreSQL.
 | **M2 · scheduler + counters** | ✅ Done — time wheel, jitter, wrap detection; 19 tests |
 | **M2 · SNMP walk + simulator** | ✅ Done — 19 tests, a 1 000-agent fleet in a Vec |
 | **M2 · v3 credential handling** | 🟡 protocols, policy, access context — 9 tests |
+| **M2 · net-snmp test agent** | ✅ Done — SHA-256/AES-256 authPriv, verified end to end |
 | M2 · the real transport | ⬜ **Next** |
 | M2 · the executor | ⬜ |
 | M2–M4 | ⬜ |
@@ -266,13 +267,11 @@ because it reads as covered.
 2. **No UI for the review queue.** `pending_reviews` exists and is tested; nothing
    surfaces it. Blocked on the above, since a queue you can only agree with is worse
    than no queue.
-3. **M2 · "against a real device".** The credential half of that criterion is done —
-   protocols, strength policy, access context. The other half is in its wording: SPEC
-   asks for authPriv against real hardware, which a simulator cannot satisfy. The
-   cheapest honest answer is a containerised `net-snmp` agent in the compose file with
-   a v3 user configured, run as its own CI job; a real switch is better and needs kit.
-   **This is a decision to make before the transport is written**, because it decides
-   what "it works" is tested against.
+3. **M2 · the `snmp2`-backed transport.** Everything it needs now exists: the
+   `Transport` trait, a real agent to talk to, and a credential type that carries its
+   protocols. What it still needs is a socket-reuse decision — one UDP socket per
+   poller or one per device — which is a per-device concurrency question and so belongs
+   with the executor rather than ahead of it.
 4. **M2 · the real transport.** `Transport` has one implementation and it is the
    simulator. The `snmp2`-backed one is next to it and small; what it needs first is a
    decision about socket reuse — one UDP socket per poller or one per device — which is
