@@ -2233,11 +2233,15 @@ dependencies = [
 name = "uops-poll"
 version = "0.0.1"
 dependencies = [
+ "chrono",
+ "futures-util",
  "thiserror 2.0.20",
  "tokio",
  "uops-core",
  "uops-profile",
  "uops-snmp",
+ "uops-store-ch",
+ "uuid",
 ]
 
 [[package]]

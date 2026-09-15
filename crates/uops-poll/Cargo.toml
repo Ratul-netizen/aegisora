@@ -12,8 +12,12 @@ authors.workspace = true
 [dependencies]
 uops-core.workspace = true
 uops-profile.workspace = true
+uops-store-ch.workspace = true
 
+chrono.workspace = true
+futures-util.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 
 [dev-dependencies]

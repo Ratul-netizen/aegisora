@@ -12,8 +12,12 @@
 pub mod counter;
 pub mod executor;
 pub mod plan;
+pub mod poller;
+pub mod sample;
 pub mod wheel;
 
 pub use executor::{Completed, Executor, Limits, Outcome};
 pub use plan::{Device, Job, MetricRequest, Work, plan};
+pub use poller::{Schedule, Task, TickReport};
+pub use sample::{Batch, Numeric, Reading, Subject};
 pub use wheel::{Wheel, WheelError};
