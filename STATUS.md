@@ -245,6 +245,14 @@ crates/uops-api/
 crates/uops-store-pg/src/identity.rs
    IdentityStore over PostgreSQL. Merge and split are one transaction each:
    half a merge orphans every row of telemetry under the old resource_id.
+
+crates/uops-store-pg/src/sealed.rs
+   SealedStore over the credential table. Until now every credential in the
+   system lived in MemorySealedStore and did not survive a restart, which the
+   poller cannot work with. Sees no plaintext: the wrapping is LocalVault's and
+   the KEK is KekRing's, neither reachable from this file. SealedStore is
+   synchronous and sqlx is not, so exactly one file pays for the bridge
+   (block_in_place), in the place that chose it.
 ```
 
 CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails the build
@@ -288,6 +296,10 @@ because it reads as covered.
    1. ~~Load profiles.~~ Done: `seed_builtin_profiles`, `profiles_for`, `put_profile`.
    2. ~~The loop.~~ Done: `uops_poll::poller::{Schedule, tasks, run_tick}`.
    3. ~~Samples.~~ Done: `uops_poll::sample::{scalars, interface_columns}`.
+   3a. ~~Credentials that survive a restart.~~ Done: `PgSealedStore`. Found while
+      starting the binary — the `credential` table and the `SealedStore` trait both
+      existed, but nothing joined them, so the poller could not have read a real
+      credential.
    3b. **The binary.** What is left is the process that owns all of it: connect, seed
       profiles, load devices on an interval, tick once a second, and wire a task to
       `UdpTransport` + `walk` + `sample` + `ChStore::insert_metrics`. Every part it
@@ -321,6 +333,7 @@ M1 is where they start.
 |---|---|---|
 | **Shared-database contamination** | intermittent local failures | The scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
+| **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |

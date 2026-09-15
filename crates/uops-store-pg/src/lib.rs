@@ -51,6 +51,7 @@ pub mod page;
 pub mod pollable;
 pub mod profile;
 pub mod resource;
+pub mod sealed;
 pub mod store;
 
 pub use audit::{AccessEntry, AuditEntry};
@@ -63,4 +64,5 @@ pub use catalog::PgCatalog;
 pub use page::{Cursor, DEFAULT_PAGE, MAX_PAGE, Page};
 pub use pollable::{PollableDevice, SYSOBJECTID_KEY};
 pub use resource::{NewResource, ResourceFilter};
+pub use sealed::PgSealedStore;
 pub use store::{Config, PgStore};
