@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE resource\n               SET attributes = attributes || jsonb_build_object($3::text, $4::text),\n                   updated_at = now()\n             WHERE tenant_id = $1 AND id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dd7d51f32d5105d94625796b31fbb8f6276c0f2aecfbd61325df2cfd81840171"
+}
