@@ -48,15 +48,95 @@ pub struct Compiled {
 /// Compile a query. The only way to produce telemetry SQL.
 pub fn compile(q: &Query, scope: &TenantScope, resources: &ResolvedResources) -> Result<Compiled> {
     let mut cx = Cx::start(q, scope, resources)?;
+    let rate = rate_usage(q)?;
+    if rate && cx.plan.kind != TableKind::Base {
+        // The window forced a rollup, and a rollup stores the *average* of a counter in
+        // each bucket. The difference between two averages of a monotonic counter is a
+        // number and it is not a rate of anything.
+        //
+        // This has to be checked here rather than in `column_of`, which never sees the
+        // field: a rollup aggregation is chosen by its *function* — `avg` becomes
+        // `avgMerge(avg_v)` whatever it was asked to average — so without this the query
+        // compiled to an average of the rollup column over a rate subquery, and returned
+        // a plausible number. Found by the test that expected it to be refused.
+        return Err(Error::RollupCannotServe {
+            what: "a counter rate".into(),
+            table: cx.plan.table,
+            why: "a rollup stores averages of the counter, and the difference between two                   averages is not a rate; ask over a window short enough to read raw points",
+        });
+    }
 
     cx.select_list(q)?;
-    cx.from();
-    cx.where_clause(q, scope, resources)?;
+    if rate {
+        // The table is wrapped in a subquery that turns each series into rates, and the
+        // predicates go *inside* it — see `rate_source`.
+        cx.rate_source(q, scope, resources)?;
+    } else {
+        cx.from();
+        cx.where_clause(q, scope, resources)?;
+    }
     cx.group_by(q)?;
     cx.order_by(q)?;
     cx.limit(q.limit, MAX_LIMIT, q.offset);
 
     Ok(cx.finish())
+}
+
+/// Whether this query asks for a rate, and whether it asks for it somewhere legal.
+///
+/// [`Field::Rate`] is allowed only as an aggregation's field. The other positions are
+/// refused rather than quietly ignored, and each for its own reason:
+///
+/// * **`GROUP BY rate`** would make one bucket per distinct floating-point rate, which
+///   is a group per sample and never what anybody meant.
+/// * **A filter on `rate`** would have to run before the rate exists — the predicates go
+///   inside the window subquery, where the column is not yet computed. It could be made
+///   to work with a second layer of nesting; it has no caller yet, and a query language
+///   that accepts something it handles subtly differently from how it reads is worse
+///   than one that says no.
+/// * **`ORDER BY rate` as a field** is the same problem. Ordering by an *alias* of an
+///   aggregation over a rate works, because that is an output column.
+fn rate_usage(q: &Query) -> Result<bool> {
+    let refused = |where_: &'static str| {
+        Err(Error::Invalid(format!(
+            "rate can only be aggregated, not used {where_};              ask for avg(rate) or max(rate) over a time bucket"
+        )))
+    };
+
+    if q.group_by.contains(&Field::Rate) {
+        return refused("as a group key");
+    }
+    if q.order_by
+        .iter()
+        .any(|s| matches!(&s.key, SortKey::Field { field } if *field == Field::Rate))
+    {
+        return refused("as a sort key");
+    }
+    if q.filter.as_ref().is_some_and(mentions_rate) {
+        return refused("in a filter");
+    }
+
+    let used = q
+        .aggregations
+        .iter()
+        .any(|a| a.field.as_ref() == Some(&Field::Rate));
+    if used && q.signal != SignalType::Metric {
+        return Err(Error::FieldNotAvailable {
+            field: Field::Rate.label(),
+            signal: q.signal.as_str(),
+        });
+    }
+    Ok(used)
+}
+
+fn mentions_rate(e: &Expr) -> bool {
+    match e {
+        Expr::Compare { field, .. } | Expr::Text { field, .. } | Expr::Exists { field } => {
+            *field == Field::Rate
+        }
+        Expr::And { of } | Expr::Or { of } => of.iter().any(mentions_rate),
+        Expr::Not { of } => mentions_rate(of),
+    }
 }
 
 /// The live tail — SPEC §M0.5 requirement 3, which keeps it off the normal path.
@@ -302,6 +382,85 @@ impl Cx {
     fn from(&mut self) {
         self.b.push(" FROM ");
         self.b.push(self.plan.table);
+    }
+
+    /// `FROM (…)` — the table wrapped in a subquery that turns each series into rates.
+    ///
+    /// # What the SQL does, and why it is exactly this
+    ///
+    /// SPEC §M2 requires that *"a 32-bit counter wrap produces no negative rate in any
+    /// query"*. `uops_poll::counter` states the rule and explains it at length; reading
+    /// it closely gives one simplification worth having, because it is the whole of the
+    /// SQL below:
+    ///
+    /// > Width and the timing window decide only what a backwards step is *called* —
+    /// > `Wrapped` or `Reset`. Neither ever produces a number. So the condition a query
+    /// > needs is simply: forwards, or nothing.
+    ///
+    /// That is why nothing here knows whether a counter is 32-bit. It does not need to.
+    /// A wrap cannot be repaired — on a 10 Gbps link a 32-bit byte counter goes round
+    /// seventeen times in a minute, and `2^32 - previous + current` assumes exactly once
+    /// — so the honest answer to a backwards step is `NULL`, which `ClickHouse`'s
+    /// aggregates skip. A gap in the line, which an operator can see and ask about,
+    /// rather than a wrong point, which they cannot.
+    ///
+    /// # Why the predicates go inside
+    ///
+    /// The tenant predicate, the time range and the resource set all belong in the inner
+    /// query. Outside, they would filter rows *after* the window had run over the whole
+    /// table — the tenant predicate is what prunes the primary key, so hoisting it out
+    /// turns a granule scan into a full scan and, far worse, computes one customer's
+    /// window frames over another's rows.
+    ///
+    /// # Why the first row of a series has no rate
+    ///
+    /// `lagInFrame` returns the column's default when there is no previous row — zero
+    /// for a `Float64`, the epoch for a `DateTime64`. Both are values the arithmetic
+    /// would accept, and the result would be a plausible-looking rate over fifty-six
+    /// years. `row_number() > 1` is the guard, and it is the reason it is here rather
+    /// than a comparison against the epoch.
+    fn rate_source(
+        &mut self,
+        q: &Query,
+        scope: &TenantScope,
+        resources: &ResolvedResources,
+    ) -> Result<()> {
+        // Every column the outer query could name. Listed rather than `*` for the reason
+        // the select list is: a `Map` column decompresses in full per row, so projecting
+        // what is not read is paid for on every row. `ingested_at` and `tenant_id` are
+        // here because `column_of` can emit them and a subquery that omitted one would
+        // fail at runtime rather than at compile time.
+        // Every column the outer query could name. Listed rather than `*` for the same
+        // reason the select list is: a `Map` column decompresses in full per row, so
+        // projecting what is not read is paid for on every row. `ingested_at` and
+        // `tenant_id` are here because `column_of` can emit them, and a subquery that
+        // omitted one would fail at runtime rather than at compile time.
+        const CARRIED: &str = "tenant_id, resource_id, site_id, metric, observed_at, ingested_at, value, unit, labels";
+
+        // The rate itself. `NULL` for anything that is not a step forwards in time and
+        // in value — see the doc comment.
+        const RATE: &str = ", if(rn > 1 AND observed_at > prev_at AND value >= prev_value, (value - prev_value) / ((toUnixTimestamp64Milli(observed_at) - toUnixTimestamp64Milli(prev_at)) / 1000), NULL) AS rate";
+
+        // The previous sample in the same series, and which row this is within it.
+        const LAGS: &str = ", lagInFrame(value) OVER w AS prev_value, lagInFrame(observed_at) OVER w AS prev_at, row_number() OVER w AS rn";
+
+        // A series is one resource's one metric with one set of labels — an interface is
+        // distinguished from its siblings by `network.interface.index` and by nothing
+        // else in the row. Partitioning by less would difference two interfaces'
+        // counters against each other, which produces a number rather than an error.
+        const WINDOW: &str = " WINDOW w AS (PARTITION BY resource_id, metric, labels ORDER BY observed_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)))";
+
+        self.b.push(" FROM (SELECT ");
+        self.b.push(CARRIED);
+        self.b.push(RATE);
+        self.b.push(" FROM (SELECT ");
+        self.b.push(CARRIED);
+        self.b.push(LAGS);
+        self.b.push(" FROM ");
+        self.b.push(self.plan.table);
+        self.where_clause(q, scope, resources)?;
+        self.b.push(WINDOW);
+        Ok(())
     }
 
     /// The tenant predicate leads, always, on every statement this crate emits.

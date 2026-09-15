@@ -522,6 +522,48 @@ jobs:
           cp "$RUNNER_TEMP/executor.bak" "$F"
           echo "ok: a serialised fleet fails the suite"
 
+      # SPEC §M2: "a 32-bit counter wrap produces no negative rate in any query". The
+      # rule lives in uops_poll::counter and is well tested there, but nothing runs that
+      # Rust on a query path — the rate is computed in ClickHouse. Without the
+      # forwards-only guard the wrap fixture reports -71 582 754 B/s, which is what an
+      # operator would see on a graph.
+      - name: The telemetry tests fail when a wrap can produce a negative rate
+        run: |
+          F=crates/uops-query/src/compile.rs
+          cp "$F" "$RUNNER_TEMP/compile.bak"
+          sed -i 's|if(rn > 1 AND observed_at > prev_at AND value >= prev_value, |if(rn > 1 AND observed_at > prev_at, |' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-ch --test telemetry > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/compile.bak" "$F"
+            echo "::error::the telemetry tests passed with a counter wrap producing a negative rate"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/compile.bak" "$F"
+          echo "ok: a negative rate fails the suite"
+
+      # A series is one resource's one metric with one set of labels. Partition by less
+      # and two interfaces' counters are differenced against each other — which produces
+      # a number rather than an error, and a plausible-looking one.
+      - name: The telemetry tests fail when two interfaces share a series
+        run: |
+          F=crates/uops-query/src/compile.rs
+          cp "$F" "$RUNNER_TEMP/compile.bak"
+          sed -i 's|PARTITION BY resource_id, metric, labels |PARTITION BY resource_id, metric |' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-ch --test telemetry > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/compile.bak" "$F"
+            echo "::error::the telemetry tests passed with two interfaces in one series"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/compile.bak" "$F"
+          echo "ok: mixing two interfaces' counters fails the suite"
+
       # SPEC §M2 asks for child resources **and** member_of relationships. A child with
       # no edge is a resource unreachable from the device it belongs to — which the
       # topology UI renders as a switch with no ports, and which no test that only

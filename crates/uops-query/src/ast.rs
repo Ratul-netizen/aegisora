@@ -136,6 +136,14 @@ pub enum Field {
     TimeBucket {
         seconds: u32,
     },
+    /// The per-second rate of a counter series. Metrics only, and only as an
+    /// aggregation's field — see the compiler.
+    ///
+    /// Counters are stored raw, always: SPEC §M2 says rates are computed at query time
+    /// because a stored rate cannot be recomputed over a different window, cannot be
+    /// re-derived after a bug is found, and silently bakes in whatever wrap handling was
+    /// current when it was written. This is that computation.
+    Rate,
 }
 
 impl Field {
@@ -163,6 +171,7 @@ impl Field {
             Self::CurrentStatus => "current_status".into(),
             Self::Attr { key } => format!("attributes[{key}]"),
             Self::TimeBucket { seconds } => format!("time_bucket({seconds}s)"),
+            Self::Rate => "rate".into(),
         }
     }
 }

@@ -552,3 +552,236 @@ async fn a_query_the_compiler_refuses_never_reaches_the_server() {
     let mapped: uops_core::Error = err.into();
     assert_eq!(mapped.status_code(), 400, "{mapped}");
 }
+
+/// One counter reading on a named interface.
+fn counter_row(
+    tenant: TenantId,
+    resource: ResourceId,
+    interface: &str,
+    minute: i64,
+    value: f64,
+) -> MetricRow {
+    let mut labels = BTreeMap::new();
+    labels.insert("network.interface.index".to_owned(), interface.to_owned());
+    MetricRow {
+        tenant_id: tenant,
+        resource_id: resource,
+        site_id: SiteId::nil(),
+        metric: "network.io.receive".to_owned(),
+        observed_at: window().start + Duration::minutes(minute),
+        ingested_at: window().start,
+        value,
+        unit: "By".to_owned(),
+        labels,
+    }
+}
+
+/// Ask for the per-bucket rate of `network.io.receive`, as a dashboard panel would.
+fn rate_query(bucket_seconds: u32) -> Query {
+    let mut q = Query::new(SignalType::Metric, window());
+    q.filter = Some(Expr::Compare {
+        field: Field::Metric,
+        cmp: uops_query::CompareOp::Eq,
+        value: uops_query::Value::Str("network.io.receive".into()),
+    });
+    q.aggregations = vec![
+        Aggregation {
+            func: AggFunc::Avg,
+            field: Some(Field::Rate),
+            alias: "bps".into(),
+        },
+        Aggregation {
+            func: AggFunc::Min,
+            field: Some(Field::Rate),
+            alias: "low".into(),
+        },
+    ];
+    q.group_by = vec![Field::TimeBucket {
+        seconds: bucket_seconds,
+    }];
+    q.limit = 100;
+    q
+}
+
+#[tokio::test]
+async fn a_counter_wrap_produces_no_negative_rate() {
+    // SPEC section M2's fourth acceptance criterion, in the place it has to hold: "a
+    // 32-bit counter wrap produces no negative rate in any query". `uops_poll::counter`
+    // states the rule in Rust and is thoroughly tested; nothing executes that Rust on a
+    // query path, so this is the assertion that the criterion is actually met.
+    //
+    // A 32-bit counter near its ceiling, wrapping between two consecutive polls — which
+    // on a 1 Gbps link with a 32-bit ifInOctets happens about every 34 seconds.
+    let store = store();
+    let tenant = TenantId::new();
+    let resource = ResourceId::new();
+    let scope = scope_for(tenant);
+
+    let ceiling = f64::from(u32::MAX);
+    let rows = vec![
+        counter_row(tenant, resource, "1", 0, ceiling - 3_000.0),
+        counter_row(tenant, resource, "1", 1, ceiling - 1_000.0), // +2 000, forwards
+        counter_row(tenant, resource, "1", 2, 1_000.0),           // wrapped
+        counter_row(tenant, resource, "1", 3, 3_000.0),           // +2 000, forwards
+    ];
+    store.insert_metrics(&rows).await.unwrap();
+
+    // One bucket per sample, so each pair is visible on its own.
+    let result = store
+        .query(
+            &rate_query(60),
+            &scope,
+            &ResolvedResources::whole_tenant(&scope),
+        )
+        .await
+        .unwrap();
+
+    let rates: Vec<Option<f64>> = result.rows.iter().map(|row| number(&row[1])).collect();
+    assert!(
+        rates.iter().flatten().all(|r| *r >= 0.0),
+        "a wrap produced a negative rate: {rates:?}"
+    );
+
+    // And the minimum, which is where a negative would show up first.
+    let lows: Vec<Option<f64>> = result.rows.iter().map(|row| number(&row[2])).collect();
+    assert!(
+        lows.iter().flatten().all(|r| *r >= 0.0),
+        "a wrap produced a negative minimum: {lows:?}"
+    );
+
+    // Not vacuous: the forward pairs must have produced real numbers. 2 000 bytes over
+    // 60 seconds is 33.3 B/s.
+    let real: Vec<f64> = rates.iter().flatten().copied().collect();
+    assert_eq!(
+        real.len(),
+        2,
+        "two of the three pairs step forwards and must each yield a rate: {rates:?}"
+    );
+    for r in real {
+        assert!(
+            (r - 2_000.0 / 60.0).abs() < 0.001,
+            "expected 33.3 B/s, got {r}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_wrap_is_a_gap_rather_than_a_repaired_number() {
+    // The other half of the criterion, and the one a "fix" would break. The obvious
+    // repair is 2^32 - previous + current; it is right exactly once, and on a 10 Gbps
+    // link a 32-bit byte counter goes round seventeen times a minute, so it would report
+    // one seventeenth of the traffic with total confidence.
+    //
+    // So the wrapped pair must yield *nothing* — not a large number and not a small one.
+    let store = store();
+    let tenant = TenantId::new();
+    let resource = ResourceId::new();
+    let scope = scope_for(tenant);
+
+    let ceiling = f64::from(u32::MAX);
+    store
+        .insert_metrics(&[
+            counter_row(tenant, resource, "1", 0, ceiling - 1_000.0),
+            counter_row(tenant, resource, "1", 1, 1_000.0),
+        ])
+        .await
+        .unwrap();
+
+    let result = store
+        .query(
+            &rate_query(60),
+            &scope,
+            &ResolvedResources::whole_tenant(&scope),
+        )
+        .await
+        .unwrap();
+
+    let real: Vec<f64> = result
+        .rows
+        .iter()
+        .filter_map(|row| number(&row[1]))
+        .collect();
+    assert!(
+        real.is_empty(),
+        "the only pair in this series wrapped; nothing should have been reported: {real:?}"
+    );
+}
+
+#[tokio::test]
+async fn two_interfaces_counters_are_not_differenced_against_each_other() {
+    // A series is one resource, one metric, one set of labels. Partition by less and
+    // interface 2 gets subtracted from interface 1 — which produces a number rather than
+    // an error, and a plausible-looking one.
+    let store = store();
+    let tenant = TenantId::new();
+    let resource = ResourceId::new();
+    let scope = scope_for(tenant);
+
+    // Interface 1 climbs slowly, interface 2 is far ahead and climbs at the same rate.
+    // Interleaved in time, so a query ignoring the labels would see the sequence
+    // 1 000, 900 000, 2 000, 901 000 and report enormous alternating rates.
+    store
+        .insert_metrics(&[
+            counter_row(tenant, resource, "1", 0, 1_000.0),
+            counter_row(tenant, resource, "2", 0, 900_000.0),
+            counter_row(tenant, resource, "1", 1, 2_000.0),
+            counter_row(tenant, resource, "2", 1, 901_000.0),
+        ])
+        .await
+        .unwrap();
+
+    let result = store
+        .query(
+            &rate_query(3600),
+            &scope,
+            &ResolvedResources::whole_tenant(&scope),
+        )
+        .await
+        .unwrap();
+
+    // Both interfaces moved 1 000 bytes in 60 seconds: 16.67 B/s each, so the average
+    // over the two is the same number.
+    let rates: Vec<f64> = result
+        .rows
+        .iter()
+        .filter_map(|row| number(&row[1]))
+        .collect();
+    assert_eq!(rates.len(), 1, "one bucket: {rates:?}");
+    assert!(
+        (rates[0] - 1_000.0 / 60.0).abs() < 0.001,
+        "expected 16.67 B/s per interface; got {} — the series were mixed",
+        rates[0]
+    );
+}
+
+#[tokio::test]
+async fn the_first_sample_of_a_series_has_no_rate() {
+    // `lagInFrame` returns the column default when there is no previous row — zero for a
+    // Float64, the epoch for a DateTime64 — and the arithmetic would accept both,
+    // yielding a plausible rate over fifty-six years. A single sample is not a rate.
+    let store = store();
+    let tenant = TenantId::new();
+    let resource = ResourceId::new();
+    let scope = scope_for(tenant);
+
+    store
+        .insert_metrics(&[counter_row(tenant, resource, "1", 0, 5_000.0)])
+        .await
+        .unwrap();
+
+    let result = store
+        .query(
+            &rate_query(3600),
+            &scope,
+            &ResolvedResources::whole_tenant(&scope),
+        )
+        .await
+        .unwrap();
+
+    let real: Vec<f64> = result
+        .rows
+        .iter()
+        .filter_map(|row| number(&row[1]))
+        .collect();
+    assert!(real.is_empty(), "one sample is not a rate: {real:?}");
+}

@@ -292,6 +292,16 @@ pub(crate) fn column_of(f: &Field, p: &TablePlan, warnings: &mut Vec<QueryWarnin
             (S::Metric, Field::Unit) => Col::Plain("unit"),
             _ => return unavailable(),
         },
+
+        // A column of the rate subquery the compiler wraps the table in — see
+        // `compile::rate_source`. It is only ever reachable on the base metrics table:
+        // the branch above this one already refused every pre-aggregate, which is right,
+        // because a rollup holds averages of a counter and the difference between two
+        // averages is not a rate of anything.
+        Field::Rate => match p.signal {
+            S::Metric => Col::Plain("rate"),
+            _ => return unavailable(),
+        },
         Field::EventCategory | Field::EventType => match (p.signal, f) {
             (S::Event, Field::EventCategory) => Col::Plain("event_category"),
             (S::Event, Field::EventType) => Col::Plain("event_type"),

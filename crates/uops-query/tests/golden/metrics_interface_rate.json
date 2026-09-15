@@ -1,0 +1,53 @@
+{
+  "signal": "metric",
+  "time": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-09-01T06:00:00Z"
+  },
+  "resources": {
+    "type": "all"
+  },
+  "filter": {
+    "op": "compare",
+    "field": {
+      "field": "metric"
+    },
+    "cmp": "eq",
+    "value": "network.io.receive"
+  },
+  "aggregations": [
+    {
+      "func": "avg",
+      "field": {
+        "field": "rate"
+      },
+      "alias": "bytes_per_second"
+    },
+    {
+      "func": "max",
+      "field": {
+        "field": "rate"
+      },
+      "alias": "peak"
+    }
+  ],
+  "group_by": [
+    {
+      "field": "time_bucket",
+      "seconds": 300
+    },
+    {
+      "field": "resource_id"
+    }
+  ],
+  "order_by": [
+    {
+      "key": {
+        "by": "alias",
+        "alias": "peak"
+      },
+      "desc": true
+    }
+  ],
+  "limit": 100
+}

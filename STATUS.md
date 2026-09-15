@@ -48,13 +48,13 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | web shell | ✅ shell, auth, tenant switcher, inventory, detail, explorer |
 | 10 000-resource p95 | ✅ measured through the router, worst 75 ms |
 | `docker compose up` | ✅ one 30 MB image, migrations as their own step, CI-verified |
-| **M2 — 4 of 6 acceptance criteria met** | 🟡 |
+| **M2 — 5 of 6 acceptance criteria met** | 🟡 |
 | `uops-profile` | ✅ 40 — 5 built-ins, schema, resolution |
 | `uops-poll` | ✅ 56 — wheel, jitter, counters, executor, planner, samples |
 | `uops-snmp` | ✅ 42 — walk, simulator, `snmp2` over UDP, real net-snmp |
 | `uops-poller` | ✅ 32 — the binary, end to end against real everything |
 | interface discovery | ✅ children + `member_of`, matched on name |
-| counter wrap → no negative rate | ⬜ module written, nothing computes rates |
+| counter wrap → no negative rate | ✅ computed in `ClickHouse` at query time |
 | ICMP availability | ⬜ needs a raw-socket privilege decision |
 | p95 through the binary | ⬜ measured in the library only |
 | M3–M4 | ⬜ |
@@ -270,6 +270,37 @@ if `.expose()` appears inside a logging macro; a grep that fails if a crypto pri
 used outside `uops-secrets`; `cargo-deny`; a CycloneDX SBOM; and a matrix building **both**
 the standard and FIPS crypto artifacts.
 
+### Rates are computed in `ClickHouse`, not in Rust
+
+`uops_poll::counter` states the wrap rule and is thoroughly tested, and nothing executes
+it on a query path — which is why the criterion sat unmet while looking done. SPEC says
+rates are computed at query time from the raw series, and doing that in Rust would mean
+shipping every raw point to the API: a 30-day dashboard panel is millions of rows to
+compute a few hundred. So `Field::Rate` compiles to a window function.
+
+Reading `counter.rs` closely gives the simplification the SQL is built on: **width and
+the timing window decide only what a backwards step is called** — `Wrapped` or `Reset` —
+and neither ever produces a number. So the condition a query needs is just "forwards, or
+nothing", and nothing in the SQL has to know whether a counter is 32-bit.
+
+Three things that are easy to get wrong and are each asserted:
+
+* A series is one resource's one metric with **one set of labels**. Partition by less and
+  two interfaces' counters are differenced against each other, which produces a
+  plausible number rather than an error.
+* The predicates go **inside** the window subquery. Outside, the window would run over
+  the whole table before filtering — and would compute one customer's frames over
+  another's rows.
+* The **first row of a series** has no rate. `lagInFrame` returns the column default when
+  there is no previous row — zero for a `Float64`, the epoch for a `DateTime64` — and the
+  arithmetic accepts both, giving a plausible rate over fifty-six years.
+
+A rate over a rollup is refused. A rollup stores the *average* of a counter per bucket,
+and the difference between two averages of a monotonic counter is a number that is not a
+rate of anything. That one was found by a test written expecting the refusal: rollup
+aggregations are chosen by function, so `avg` became `avgMerge(avg_v)` and the field was
+never consulted.
+
 ### Two found by the test suite racing itself
 
 **A KEK rotation could destroy a credential.** `rotate_kek` read a row, unwrapped its
@@ -367,7 +398,7 @@ because it reads as covered.
 | 1 000 simulated agents at 60s, p95 < 5 s, no missed cycles | Met in `uops-poll`'s fleet test, against the simulator. **Not** re-measured through the binary |
 | SNMPv3 authPriv SHA-256/AES-256 against a real device, credential through `SecretStore` with an access-log entry | Met. `tests/agent.rs` for the wire, `tests/live.rs` for the credential path. The access-log entry is written but the log is in-memory — the `credential_access` table is M3 |
 | Interface discovery creates child resources **and** `member_of` relationships | Met. Asserted against the real agent in `tests/live.rs` — the container's `eth0` and `lo` become resources with edges — and two CI mutations require the suite to fail: one writes the wrong edge kind, one breaks the rediscovery key |
-| A 32-bit counter wrap produces no negative rate in any query | `uops_poll::counter` is written and tested. **Not wired**: samples are stored raw and nothing computes a rate yet, so the criterion is neither met nor violated |
+| A 32-bit counter wrap produces no negative rate in any query | Met. `Field::Rate` compiles to a window over each series in `ClickHouse`; a backwards step yields `NULL`, which the aggregates skip. Asserted against real `ClickHouse` with a real wrap, and CI breaks the guard and requires the suite to fail — unguarded, the fixture reports −71 582 754 B/s |
 | An unknown-vendor device gets interfaces and availability via `generic-snmp` | Half, and now genuinely half: interfaces become resources under `generic-snmp` with no vendor profile involved. Availability is ICMP and is counted as unsupported |
 | Dead device does not delay healthy devices (measured, not assumed) | Met, measured, and guarded in CI by a mutation that serialises the executor |
 

@@ -435,4 +435,162 @@ mod tests {
             out.sql.text()
         );
     }
+
+    /// A metric query asking for `avg(rate)`.
+    fn rate_over(seconds: u32) -> Query {
+        let mut q = Query::new(
+            SignalType::Metric,
+            TimeRange::new(
+                Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                Utc.timestamp_opt(1_700_003_600, 0).unwrap(),
+            ),
+        );
+        q.aggregations = vec![Aggregation {
+            func: AggFunc::Avg,
+            field: Some(Field::Rate),
+            alias: "bps".into(),
+        }];
+        q.group_by = vec![Field::TimeBucket { seconds }];
+        q
+    }
+
+    #[test]
+    fn a_rate_wraps_the_table_in_a_window_and_keeps_the_predicates_inside() {
+        // Where the predicates sit is not cosmetic. The tenant predicate is what prunes
+        // the primary key, so hoisting it outside the subquery turns a granule scan into
+        // a full scan — and, far worse, computes one customer's window frames over
+        // another customer's rows before filtering them away.
+        let s = scope();
+        let out = compile(&rate_over(300), &s, &all(&s)).unwrap();
+        let sql = out.sql.text();
+
+        let subquery = sql
+            .find(" FROM (SELECT")
+            .expect("the table must be wrapped");
+        let tenant = sql.find("tenant_id = {p0:UUID}").expect("tenant predicate");
+        assert!(
+            tenant > subquery,
+            "the tenant predicate must be inside the window subquery:\n{sql}"
+        );
+
+        // And the guard that is the whole of the criterion.
+        assert!(
+            sql.contains("value >= prev_value"),
+            "a rate must be computed only where the counter moved forwards:\n{sql}"
+        );
+        assert!(
+            sql.contains("PARTITION BY resource_id, metric, labels"),
+            "a series is one resource's one metric with one set of labels:\n{sql}"
+        );
+        assert_eq!(out.table, "metrics");
+    }
+
+    #[test]
+    fn a_rate_cannot_be_grouped_filtered_or_sorted_by() {
+        // Each refused for its own reason, and refused rather than quietly ignored — a
+        // query language that accepts something it handles differently from how it reads
+        // is worse than one that says no. See `rate_usage`.
+        let s = scope();
+
+        let mut grouped = rate_over(300);
+        grouped.group_by.push(Field::Rate);
+        let err = compile(&grouped, &s, &all(&s)).unwrap_err();
+        assert!(err.to_string().contains("group key"), "{err}");
+
+        let mut sorted = rate_over(300);
+        sorted.order_by = vec![Sort {
+            key: SortKey::Field { field: Field::Rate },
+            desc: true,
+        }];
+        let err = compile(&sorted, &s, &all(&s)).unwrap_err();
+        assert!(err.to_string().contains("sort key"), "{err}");
+
+        let mut filtered = rate_over(300);
+        filtered.filter = Some(Expr::Compare {
+            field: Field::Rate,
+            cmp: CompareOp::Gt,
+            value: Value::Float(1.0),
+        });
+        let err = compile(&filtered, &s, &all(&s)).unwrap_err();
+        assert!(err.to_string().contains("filter"), "{err}");
+
+        // Nested, because a filter tree is where a check like this gets forgotten.
+        let mut nested = rate_over(300);
+        nested.filter = Some(Expr::Not {
+            of: Box::new(Expr::Or {
+                of: vec![Expr::Compare {
+                    field: Field::Rate,
+                    cmp: CompareOp::Gt,
+                    value: Value::Float(1.0),
+                }],
+            }),
+        });
+        let err = compile(&nested, &s, &all(&s)).unwrap_err();
+        assert!(err.to_string().contains("filter"), "{err}");
+    }
+
+    #[test]
+    fn ordering_by_an_aggregate_of_a_rate_is_fine() {
+        // The alias is an output column, so there is nothing to refuse. Asserted because
+        // the refusal above is easy to write too broadly, and a dashboard sorting its
+        // top-N panel by throughput is the normal case.
+        let s = scope();
+        let mut q = rate_over(300);
+        q.order_by = vec![Sort {
+            key: SortKey::Alias {
+                alias: "bps".into(),
+            },
+            desc: true,
+        }];
+        let out = compile(&q, &s, &all(&s)).unwrap();
+        assert!(out.sql.text().contains("ORDER BY bps DESC"));
+    }
+
+    #[test]
+    fn a_rate_is_refused_on_signals_that_have_no_counters() {
+        // Logs have no `value` column to difference. The error names the field and the
+        // signal rather than failing later in ClickHouse with a column that is not there.
+        let s = scope();
+        let mut logs = Query::new(
+            SignalType::Log,
+            TimeRange::new(
+                Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                Utc.timestamp_opt(1_700_003_600, 0).unwrap(),
+            ),
+        );
+        logs.aggregations = vec![Aggregation {
+            func: AggFunc::Avg,
+            field: Some(Field::Rate),
+            alias: "bps".into(),
+        }];
+        let err = compile(&logs, &s, &all(&s)).unwrap_err();
+        assert!(err.to_string().contains("rate"), "{err}");
+        assert!(err.to_string().contains("log"), "{err}");
+    }
+
+    #[test]
+    fn a_rate_over_a_rollup_is_refused_rather_than_computed_from_averages() {
+        // A long window forces a rollup, and a rollup holds the *average* of a counter
+        // in each bucket. The difference between two averages of a monotonic counter is
+        // a number, and it is not a rate of anything — it would be quietly wrong, which
+        // is the worst way for a dashboard to be wrong.
+        let s = scope();
+        let start = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let mut long = Query::new(
+            SignalType::Metric,
+            TimeRange::new(start, start + chrono::Duration::days(60)),
+        );
+        long.aggregations = vec![Aggregation {
+            func: AggFunc::Avg,
+            field: Some(Field::Rate),
+            alias: "bps".into(),
+        }];
+        long.group_by = vec![Field::TimeBucket { seconds: 3600 }];
+
+        let err = compile(&long, &s, &all(&s)).unwrap_err();
+        assert!(
+            err.to_string().contains("rate"),
+            "a rate off a rollup must be refused: {err}"
+        );
+    }
 }
