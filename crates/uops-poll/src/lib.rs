@@ -11,7 +11,9 @@
 
 pub mod counter;
 pub mod executor;
+pub mod plan;
 pub mod wheel;
 
 pub use executor::{Completed, Executor, Limits, Outcome};
+pub use plan::{Device, Job, MetricRequest, Work, plan};
 pub use wheel::{Wheel, WheelError};

@@ -80,6 +80,17 @@ cmd_sweep() {
     psql_run -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" > /dev/null
     echo "dropped scratch database $db"
   done
+
+  # The scale test seeds ten thousand resources. It removes them itself now, but a run
+  # that panicked before it got there leaves them, and ten thousand rows change what the
+  # planner chooses for every other suite sharing this database.
+  local bulk
+  bulk=$(psql_run -tAc     "DELETE FROM resource WHERE tenant_id IN
+       (SELECT id FROM tenant WHERE slug LIKE 'scale-%')
+     RETURNING 1" | grep -c 1 || true)
+  if [ "${bulk:-0}" -gt 0 ]; then
+    echo "removed $bulk resource(s) left by an interrupted scale test"
+  fi
 }
 
 cmd_reset() {

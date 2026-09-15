@@ -169,6 +169,23 @@ async fn sign_in(store: &PgStore, email: &str) -> (String, String) {
 }
 
 impl Fixture {
+    /// Remove everything this test seeded.
+    ///
+    /// Every other suite shares this database and stays out of the way by creating its
+    /// own organization — which is enough when a fixture makes a handful of rows. Ten
+    /// thousand is different: a suite that leaves them behind changes what every later
+    /// query plans against, and the planner's choices at 10 000 rows are not the ones
+    /// it makes at 50.
+    ///
+    /// Called at the end rather than in `Drop`, which cannot await.
+    async fn clean_up(&self) {
+        sqlx::query("DELETE FROM resource WHERE tenant_id = $1")
+            .bind(self.tenant.into_uuid())
+            .execute(self.store.pool())
+            .await
+            .expect("remove the seeded resources");
+    }
+
     fn request(&self, method: &str, path: &str, body: Option<&str>) -> Request<Body> {
         let mut builder = Request::builder()
             .method(method)
@@ -398,4 +415,6 @@ async fn resource_crud_and_pagination_over_ten_thousand() {
         final_page < median_page * 3,
         "the last page of {SEEDED} cost {final_page:?} against a median page of          {median_page:?}; pagination is not keyset"
     );
+
+    f.clean_up().await;
 }
