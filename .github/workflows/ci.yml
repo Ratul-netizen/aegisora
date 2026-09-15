@@ -542,3 +542,111 @@ jobs:
             exit 1
           fi
           echo "ok"
+
+  # SPEC §M1 acceptance: "docker compose up gives a working stack from a clean checkout
+  # on a clean machine". A CI runner is literally that, every time, which makes this the
+  # only place the claim can be tested rather than asserted.
+  #
+  # The slowest job here by a wide margin — it is a release build of the workspace plus
+  # a production web build. It earns it: everything else in this file tests the code,
+  # and this tests whether a person who has just cloned the repository can run it.
+  stack:
+    name: docker compose up
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # BuildKit's cache is what makes a rebuild seconds rather than minutes. Scoped to
+      # this job so it cannot be poisoned by another, and capped by GitHub's own cache
+      # eviction rather than growing forever.
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          tags: uops:dev
+          load: true
+          cache-from: type=gha,scope=stack
+          cache-to: type=gha,scope=stack,mode=max
+
+      - name: Bring the stack up
+        run: docker compose -f deploy/docker-compose.yml up -d
+
+      - name: Wait for the server to report healthy
+        run: |
+          for i in $(seq 1 60); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' uops-server 2>/dev/null || echo starting)
+            if [ "$state" = "healthy" ]; then
+              echo "healthy after ${i}0s"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::the server never became healthy"
+          docker compose -f deploy/docker-compose.yml logs
+          exit 1
+
+      # Migrations are a separate service that must run to completion. If it did not,
+      # `server` would not have started at all — but a green `up` with a silently
+      # skipped migration is exactly the failure this criterion is about.
+      - name: Migrations ran, and ran to completion
+        run: |
+          docker compose -f deploy/docker-compose.yml logs migrate
+          docker compose -f deploy/docker-compose.yml logs migrate | grep -q "schema is up to date"
+          docker compose -f deploy/docker-compose.yml logs migrate | grep -qE "applied [0-9]+ migration"
+
+      - name: The stack answers, and answers as itself
+        run: |
+          set -e
+
+          # The API, unauthenticated, reporting both stores reachable.
+          health=$(curl -fsS http://localhost:8080/api/v1/health)
+          echo "$health"
+          echo "$health" | grep -q '"ok":true'
+
+          # The web app, from the same origin as the API. That is the property the
+          # session cookie depends on, and here it is structural rather than configured.
+          curl -fsS http://localhost:8080/ | grep -qi "<title>"
+
+          # A client-side route on a hard reload must reach the app, not a 404.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/resources/whatever)" = 200
+
+          # And a mistyped API path must not fall through to it. 200 and a page of HTML
+          # is a client parsing failure reported as something other than "no such route".
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/v1/no-such-endpoint)
+          test "$code" = 404
+
+      - name: The first-run credential is printed, once, and it works
+        run: |
+          set -e
+          password=$(docker compose -f deploy/docker-compose.yml logs server \
+                     | grep -E '^\S+\s+\|\s+password\s+' | awk '{print $NF}')
+          test -n "$password"
+
+          # The whole point of the first-run design: the credential on the terminal is
+          # one the login handler accepts. A bootstrap that made an account nobody can
+          # authenticate as passes every other check in this job.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -c /tmp/jar \
+                 -H 'Content-Type: application/json' \
+                 -d "{\"email\":\"admin@example.invalid\",\"password\":\"$password\"}" \
+                 http://localhost:8080/api/v1/auth/login)
+          test "$code" = 204
+
+          curl -fsS -b /tmp/jar http://localhost:8080/api/v1/me | grep -q 'admin@example.invalid'
+
+      - name: A restart re-migrates nothing and prints no second password
+        run: |
+          set -e
+          docker compose -f deploy/docker-compose.yml restart server migrate
+          sleep 20
+          # Exactly one banner across both boots. A second would mean a second admin,
+          # and the operator has no way to tell which password belongs to which account.
+          banners=$(docker compose -f deploy/docker-compose.yml logs server | grep -c 'First run' || true)
+          test "$banners" = "1"
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v

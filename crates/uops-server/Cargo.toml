@@ -17,6 +17,7 @@ uops-store-ch.workspace = true
 uops-store-pg.workspace = true
 
 axum.workspace = true
+tower-http.workspace = true
 # "net" for the listener, "signal" for graceful shutdown, "rt-multi-thread" because a
 # server that answers one request at a time is not a server.
 tokio = { workspace = true, features = ["net", "signal", "rt-multi-thread"] }

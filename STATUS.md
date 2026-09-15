@@ -50,6 +50,7 @@ PostgreSQL.
 | **M1 · `uops-server`** | ✅ Done — it runs, and you can log into it |
 | **M1 · web shell** | ✅ Done — shell, auth, switcher, inventory, detail, explorer |
 | **M1 · cross-tenant acceptance test** | ✅ Done — 5 tests over every route, 2 mutation guards |
+| **M1 · `docker compose up`** | ✅ Done — one 30 MB image, migrations as their own step, CI-verified |
 | M2–M4 | ⬜ |
 
 ## Resume in three commands
@@ -248,11 +249,7 @@ because it reads as covered.
 
 ## Next, in dependency order
 
-1. **`docker compose up` from a clean checkout** — the last M1 acceptance criterion
-   with nothing written for it. Needs the web build served alongside the API, which
-   means either a static-file route in `uops-server` or a reverse proxy in the compose
-   file. The second is closer to how this is actually deployed.
-2. **Identity resolution end to end** — the remaining M1 criterion: two sources
+1. **Identity resolution end to end** — the remaining M1 criterion: two sources
    resolving to one resource, a 0.60–0.95 case reaching the review queue, a merge, and
    a split that reverts it. Every piece exists and is tested in `uops-identity` and
    `uops-store-pg`; what does not exist is the sequence run as one scenario, or any UI

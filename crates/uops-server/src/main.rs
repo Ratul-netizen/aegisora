@@ -32,7 +32,7 @@
 //! current route table rather than of the design. Binding last removes the window
 //! instead of arguing about what is in it.
 
-use uops_server::{config, firstrun, shutdown};
+use uops_server::{config, firstrun, shutdown, web};
 
 use std::net::SocketAddr;
 use std::process::ExitCode;
@@ -90,6 +90,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         AppState::new(store, telemetry).allowing_insecure_cookies()
     };
 
+    let mut app = router(state);
+    if let Some(root) = web::root_from_env() {
+        app = web::serve(app, &root)?;
+        println!("serving the web app from {}", root.display());
+    }
+
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
         .map_err(|e| format!("cannot bind {}: {e}", config.bind))?;
@@ -101,7 +107,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // with_connect_info, so the audit layer can fall back to the socket's peer address
     // when there is no X-Forwarded-For. Without it a directly exposed server records no
     // client address at all, and the audit log's ip column is uniformly empty.
-    let service = router(state).into_make_service_with_connect_info::<SocketAddr>();
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown::signal())
         .await

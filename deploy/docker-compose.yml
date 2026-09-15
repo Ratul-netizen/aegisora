@@ -1,13 +1,35 @@
-
-# Development stack: the two storage engines. The server itself joins once there is a
-# binary to run.
+# The whole stack, from a clean checkout.
 #
-#     docker compose -f deploy/docker-compose.yml up -d
-#     bash scripts/db.sh migrate && bash scripts/db.sh test
-#     cargo run -p uops-ch-migrate -- apply
+#     docker compose -f deploy/docker-compose.yml up --build
+#     open http://localhost:8080          # the password is in the `server` logs, once
+#
+# SPEC §M1 acceptance: "docker compose up gives a working stack from a clean checkout on
+# a clean machine". Four services and one image: the two storage engines, a migration
+# step that runs to completion, and the server.
+#
+# Developing against it instead of in it:
+#
+#     docker compose -f deploy/docker-compose.yml up -d postgres clickhouse
+#     bash scripts/db.sh migrate && bash scripts/ch.sh apply
+#     bash scripts/serve.sh                     # cargo run, on :8080
+#     cd web && npm run dev                     # vite, on :5173, proxying to :8080
 #
 # Credentials here are development defaults and are meant to be obvious. A deployment
-# that reaches production with these is a deployment that never read this file.
+# that reaches production with them is a deployment that never read this file.
+#
+# Disk
+# ----
+# The shipped image is around 30 MB — a multi-stage build, so the Rust and Node
+# toolchains do not travel with it. What is large is BuildKit's cache, which holds the
+# cargo registry and the release target directory and reaches roughly 4.5 GB. It is
+# what makes a rebuild take seconds instead of ten minutes, and it is pure cache:
+#
+#     docker builder prune -f       # reclaims all of it, costs a full rebuild next time
+#     docker compose down -v        # also drops the database volumes
+#
+# Worth knowing on Docker Desktop: reclaiming space inside the VM does not shrink the
+# VM's disk image on the host. That needs Settings → Resources → Disk image size, or
+# `wsl --manage docker-desktop-data --set-sparse true`.
 
 services:
   postgres:
@@ -56,6 +78,78 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # Migrations are their own step, not something the server does on boot. A server that
+  # applies its own DDL is N replicas racing on a rolling deploy and a rollback that has
+  # quietly become a data migration. This runs to completion and exits; the server waits
+  # for that exit to be a success.
+  #
+  # Both runners are idempotent, so restarting the stack re-runs this and it does
+  # nothing — which is the property that makes `up` safe to type twice.
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: uops:dev
+    container_name: uops-migrate
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://uops:uops@postgres:5432/uops
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: uops
+      CLICKHOUSE_USER: uops
+      CLICKHOUSE_PASSWORD: uops
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        uops-pg-migrate
+        uops-ch-migrate apply --dir /srv/ch-migrations
+    restart: "no"
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: uops:dev
+    container_name: uops-server
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://uops:uops@postgres:5432/uops
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: uops
+      CLICKHOUSE_USER: uops
+      CLICKHOUSE_PASSWORD: uops
+      # Bound to every interface *inside the container*; what is reachable from outside
+      # is the port mapping above. The binary's own default is loopback, which in a
+      # container would be reachable by nothing at all.
+      UOPS_BIND: 0.0.0.0:8080
+      # Plain HTTP on localhost. A browser silently discards a Secure cookie over http,
+      # so without this the app would appear to accept a password and then fail to stay
+      # signed in, for a reason nothing logs. Anything serving this over a network puts
+      # TLS in front and removes this line.
+      UOPS_INSECURE_COOKIES: "1"
+      UOPS_ORG_NAME: "Example organization"
+      UOPS_TENANT_NAME: "Example tenant"
+      UOPS_ADMIN_EMAIL: admin@example.invalid
+    healthcheck:
+      # The route is unauthenticated precisely so this can read it. `ok` is false when a
+      # store is unreachable, and that is still a 200 — a restart does not fix somebody
+      # else's database, so this checks that the server is answering, not that its
+      # dependencies are well.
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    # The first boot prints an administrator password exactly once, to stdout. It is not
+    # stored anywhere and cannot be asked for again: `docker compose logs server`.
+    restart: unless-stopped
 
 volumes:
   pg-data:

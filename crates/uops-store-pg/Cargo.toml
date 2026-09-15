@@ -20,6 +20,9 @@ serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+# For the uops-pg-migrate binary only. sqlx already requires a tokio runtime at run
+# time, so this adds two features rather than a dependency.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 uuid.workspace = true
 
 [dev-dependencies]

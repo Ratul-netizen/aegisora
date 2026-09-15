@@ -8,3 +8,4 @@
 pub mod config;
 pub mod firstrun;
 pub mod shutdown;
+pub mod web;

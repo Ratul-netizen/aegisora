@@ -45,7 +45,7 @@ wait_ready() {
 }
 
 cmd_up() {
-  docker compose -f "$COMPOSE" up -d
+  docker compose -f "$COMPOSE" up -d postgres clickhouse
   wait_ready
 }
 

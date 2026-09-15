@@ -12,10 +12,11 @@ pub mod health;
 pub mod query;
 pub mod resources;
 
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{any, delete, get, patch, post};
 use axum::{Router, middleware};
 
 use crate::audit;
+use crate::error::ApiError;
 use crate::state::AppState;
 
 /// Everything under `/api/v1`.
@@ -41,9 +42,23 @@ pub fn router(state: AppState) -> Router {
         // nobody reads. It establishes no scope, so the layer skips it anyway — this
         // route is simply where that stops being an accident.
         .route("/api/v1/health", get(health::health))
+        // Anything else under /api is a 404 in problem+json, like every other error
+        // here. It exists because uops-server may serve the web build as a fallback for
+        // unmatched paths, and without this a mistyped API path would answer 200 with
+        // an HTML page — which a client parses as JSON, fails on, and reports as
+        // something other than "that endpoint does not exist".
+        //
+        // Static segments win over a wildcard in axum's router, so this never shadows a
+        // real route.
+        .route("/api/{*rest}", any(no_such_endpoint))
         // Wrapped around everything rather than a chosen list of routes: a request that
         // never establishes a scope leaves nothing to record and is skipped, so this
         // cannot be forgotten when a route is added. See crate::audit.
         .layer(middleware::from_fn_with_state(state.clone(), audit::layer))
         .with_state(state)
+}
+
+/// Every unmatched path under `/api`.
+async fn no_such_endpoint() -> ApiError {
+    ApiError::NotFound
 }

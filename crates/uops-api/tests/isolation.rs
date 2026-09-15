@@ -59,7 +59,11 @@ enum Expectation {
 }
 
 struct RouteCase {
+    /// As registered in the router. Matched against the source scan.
     path: &'static str,
+    /// What to actually request, when the registered path is not a URL — a wildcard
+    /// route is matched, not typed. `None` means the path itself.
+    probe: Option<&'static str>,
     method: &'static str,
     expectation: Expectation,
     /// A body, for the methods that need one.
@@ -72,60 +76,79 @@ struct RouteCase {
 const CASES: &[RouteCase] = &[
     RouteCase {
         path: "/api/v1/auth/login",
+        probe: None,
         method: "POST",
         expectation: Expectation::Unscoped,
         body: Some(r#"{"email":"nobody@example.invalid","password":"x"}"#),
     },
     RouteCase {
         path: "/api/v1/auth/logout",
+        probe: None,
         method: "POST",
         expectation: Expectation::Unscoped,
         body: None,
     },
     RouteCase {
         path: "/api/v1/me",
+        probe: None,
         method: "GET",
         expectation: Expectation::Unscoped,
         body: None,
     },
     RouteCase {
         path: "/api/v1/health",
+        probe: None,
         method: "GET",
         expectation: Expectation::Unscoped,
         body: None,
     },
     RouteCase {
         path: "/api/v1/resources",
+        probe: None,
         method: "GET",
         expectation: Expectation::Scoped,
         body: None,
     },
     RouteCase {
         path: "/api/v1/resources",
+        probe: None,
         method: "POST",
         expectation: Expectation::Scoped,
         body: Some(r#"{"kind":"host","name":"intruder","attributes":{}}"#),
     },
     RouteCase {
         path: "/api/v1/resources/{id}",
+        probe: None,
         method: "GET",
         expectation: Expectation::Scoped,
         body: None,
     },
     RouteCase {
         path: "/api/v1/resources/{id}",
+        probe: None,
         method: "DELETE",
         expectation: Expectation::Scoped,
         body: None,
     },
     RouteCase {
         path: "/api/v1/resources/{id}/status",
+        probe: None,
         method: "PATCH",
         expectation: Expectation::Scoped,
         body: Some(r#"{"status":"down"}"#),
     },
     RouteCase {
+        // Every unmatched path under /api. Unscoped because it is a 404 for everyone,
+        // including the caller's own tenant — there is nothing behind it to leak.
+        path: "/api/{*rest}",
+        probe: Some("/api/v1/no-such-endpoint"),
+        method: "GET",
+        expectation: Expectation::Unscoped,
+        body: None,
+    },
+    RouteCase {
         path: "/api/v1/query",
+        probe: None,
         method: "POST",
         expectation: Expectation::Scoped,
         body: Some(
@@ -279,7 +302,10 @@ async fn attempt(
     victim_resource: ResourceId,
     case: &RouteCase,
 ) -> (StatusCode, String) {
-    let path = case.path.replace("{id}", &victim_resource.to_string());
+    let path = case
+        .probe
+        .unwrap_or(case.path)
+        .replace("{id}", &victim_resource.to_string());
 
     let mut builder = Request::builder()
         .method(case.method)
@@ -456,6 +482,7 @@ async fn the_tenant_list_a_user_is_shown_contains_only_their_own() {
         b.resource,
         &RouteCase {
             path: "/api/v1/me",
+            probe: None,
             method: "GET",
             expectation: Expectation::Unscoped,
             body: None,
@@ -484,7 +511,10 @@ async fn an_unauthenticated_request_reaches_nothing_scoped() {
             continue;
         }
 
-        let path = case.path.replace("{id}", &b.resource.to_string());
+        let path = case
+            .probe
+            .unwrap_or(case.path)
+            .replace("{id}", &b.resource.to_string());
         let mut builder = Request::builder()
             .method(case.method)
             .uri(&path)
