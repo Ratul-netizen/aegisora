@@ -271,6 +271,36 @@ if `.expose()` appears inside a logging macro; a grep that fails if a crypto pri
 used outside `uops-secrets`; `cargo-deny`; a CycloneDX SBOM; and a matrix building **both**
 the standard and FIPS crypto artifacts.
 
+### Two found by the test suite racing itself
+
+**A KEK rotation could destroy a credential.** `rotate_kek` read a row, unwrapped its
+DEK, re-wrapped it under the new key and wrote the wrapping back — unconditionally. If
+the credential was rotated in between (`put` reuses the id, so a rotation replaces the
+row's DEK and ciphertext), the row ended up wrapping the *old* DEK over the *new*
+ciphertext. Unwrapping yields a key that decrypts nothing, and the credential is
+permanently unopenable with no error anywhere until somebody tries to use it.
+
+Found as an intermittent `Open` in a test that had nothing to do with KEK rotation: the
+rotation test re-wraps every row in the database, deliberately, and raced the credential
+rotation in a neighbouring test. `replace_wrapping` is a compare-and-set now — one
+statement, `WHERE id = $1 AND wrapped_dek = $5`, so there is no window between the check
+and the write — and returns `Rewrapped::Superseded` rather than pretending it wrote.
+Counted separately from `failed` in the report, because nothing went wrong: the row is
+newer than the rotation, and the next rotation picks it up.
+
+**Fixtures outside the retention TTL.** `the_explorer_histogram_is_served_from_the_pre_aggregate`
+failed about one run in fifteen with an empty result. The ClickHouse fixtures were dated
+`1_700_000_000` — 2023-11-14 — and every table they write to has a retention TTL
+(`metrics` 30 days, the rest 365). The rows were inserted and then removed by a
+background TTL merge, so whether a test passed depended on whether that merge had run
+against its part yet. A `SELECT` at the time found 335 rows still in `logs` for that
+window and zero in `logs_counts_5m`.
+
+Both fixtures are anchored to now and truncated to a five-minute boundary, and each file
+carries `the_fixtures_are_inside_every_retention_window` — a plain assertion with no
+timing in it, so the day somebody writes a fixed timestamp again it fails on the first
+run rather than once a fortnight.
+
 ### Trap worth remembering
 
 The `compile_fail` doctests asserting `Secret<T>` is not serialisable were initially
@@ -354,7 +384,6 @@ M1 is where they start.
 |---|---|---|
 | **Shared-database contamination** | intermittent local failures | **Recurred, larger.** The development database had accumulated **2 608 tenants** from every integration test that ever panicked before its clean-up. Harmless until the poller existed; now a reload reads *every* tenant and issues two queries each, so an unswept database turned one reload into five thousand round trips and the live poller test from 2.6 s into 29 s. `db.sh sweep` now removes every tenant but `default` and everything under it, and the poller's live test takes its own scratch database rather than sharing. Earlier instance: the scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
-| **`the_explorer_histogram_is_served_from_the_pre_aggregate` is flaky** | a trustworthy CI signal | Roughly 1 run in 15, standalone, on a clean database. Fails with `rows: []` — the pre-aggregate returns nothing at all rather than one row of two. Not a clock race: the window is a fixed pair of 2023 timestamps and the test uses its own tenant, so it is not contamination either. Found while stabilising the poller's suite; pre-existing and unrelated to it. The suspicion is the materialised view not being visible to the `SELECT` that immediately follows the `INSERT`, which would make it a property of how `insert_logs` writes rather than of the query planner — but that is a suspicion, not a diagnosis |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |

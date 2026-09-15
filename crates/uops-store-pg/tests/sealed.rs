@@ -8,7 +8,7 @@
 //! after a restart.
 
 use uops_core::{AuthProtocol, CredentialMaterial, OrgId, PrivProtocol, Secret, TenantId};
-use uops_secrets::{AccessContext, CredentialMeta, KekRing, LocalVault};
+use uops_secrets::{AccessContext, CredentialMeta, KekRing, LocalVault, SealedStore};
 use uops_store_pg::{Config, PgSealedStore, PgStore};
 
 async fn store() -> PgStore {
@@ -308,6 +308,78 @@ async fn rotating_the_kek_rewraps_without_touching_the_ciphertext() {
     let opened = v.get(tenant, id, &ctx()).expect("open after rekey");
     match opened.expose() {
         CredentialMaterial::SnmpV3 { auth_key, .. } => assert_eq!(auth_key, "survives-rekey"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_credential_rotated_mid_kek_rotation_is_not_destroyed() {
+    // The same property `uops-secrets` asserts against the memory store, against the
+    // statement that actually has to enforce it. Worth having twice: the memory store
+    // checks with an `if` and this checks with a `WHERE` clause, and a predicate dropped
+    // from the SQL would leave the unit test passing.
+    //
+    // This was not a hypothesis. The suite found it as an intermittent `Open` — a
+    // decryption failure — in `a_rotation_supersedes_the_previous_version`, because the
+    // KEK-rotation test in this file re-wraps every row in the database and raced the
+    // credential rotation in that one.
+    let store = store().await;
+    let tenant = tenant(&store, "cas").await;
+    let dir = std::env::temp_dir();
+    let v = vault(&store, fixed_kek(&dir));
+
+    let id = v
+        .put(tenant, snmpv3("first-key"), &CredentialMeta::new("cas"))
+        .expect("v1");
+
+    // What a KEK rotation holds after reading the row, before it writes anything.
+    let stale: Vec<u8> = sqlx::query_scalar("SELECT wrapped_dek FROM credential WHERE id = $1")
+        .bind(id.into_uuid())
+        .fetch_one(store.pool())
+        .await
+        .expect("the wrapping as read");
+
+    // The credential is rotated underneath it: same id, new DEK, new ciphertext.
+    let mut rotation = CredentialMeta::new("cas");
+    rotation.supersedes = Some(id);
+    v.put(tenant, snmpv3("second-key"), &rotation).expect("v2");
+
+    let current: Vec<u8> = sqlx::query_scalar("SELECT wrapped_dek FROM credential WHERE id = $1")
+        .bind(id.into_uuid())
+        .fetch_one(store.pool())
+        .await
+        .expect("the wrapping now");
+    assert_ne!(
+        current, stale,
+        "the fixture is wrong: a credential rotation must produce a new wrapped DEK"
+    );
+
+    // The stale re-wrap arrives late. It must not be written.
+    let outcome = PgSealedStore::new(store.clone())
+        .replace_wrapping(
+            id,
+            uops_secrets::record::KeyId("test-kek-2".to_owned()),
+            b"a wrapping computed from the DEK that is no longer there".to_vec(),
+            [7u8; 12],
+            &stale,
+        )
+        .expect("the store must answer rather than fail");
+    assert_eq!(outcome, uops_secrets::Rewrapped::Superseded);
+
+    let after: Vec<u8> = sqlx::query_scalar("SELECT wrapped_dek FROM credential WHERE id = $1")
+        .bind(id.into_uuid())
+        .fetch_one(store.pool())
+        .await
+        .expect("the wrapping after");
+    assert_eq!(after, current, "nothing may have been written");
+
+    // The assertion that matters: the credential still opens. Without the predicate the
+    // row holds a wrapping for a DEK its ciphertext does not use, and this is `Open`.
+    let opened = v
+        .get(tenant, id, &ctx())
+        .expect("the credential must still open");
+    match opened.expose() {
+        CredentialMaterial::SnmpV3 { auth_key, .. } => assert_eq!(auth_key, "second-key"),
         other => panic!("{other:?}"),
     }
 }

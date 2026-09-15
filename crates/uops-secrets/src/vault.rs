@@ -15,7 +15,7 @@ use crate::aead::{AeadProvider, Key, Nonce};
 use crate::audit::{AccessContext, AccessLog, AccessOutcome};
 use crate::error::{Error, Result};
 use crate::kek::KekRing;
-use crate::record::{CredentialMeta, KeyId, RotationReport, SealedCredential};
+use crate::record::{CredentialMeta, KeyId, Rewrapped, RotationReport, SealedCredential};
 use crate::serialize::{deserialize_material, serialize_material};
 
 /// Persistence for sealed rows. Holds no key material and can decrypt nothing.
@@ -29,13 +29,24 @@ pub trait SealedStore: Send + Sync {
     /// Highest non-revoked version for a credential name within a tenant.
     fn latest_by_name(&self, tenant: TenantId, name: &str) -> Result<SealedCredential>;
     fn list_all(&self) -> Result<Vec<SealedCredential>>;
+    /// Replace a row's wrapping, but only if it still holds `expected_wrapped_dek`.
+    ///
+    /// Conditional, and that is the whole point — see [`crate::record::Rewrapped`]. The
+    /// caller computed the new wrapping from a DEK it unwrapped out of a row it read; if
+    /// that row has since been replaced, the new wrapping is for a DEK the row no longer
+    /// contains and writing it would destroy the credential.
+    ///
+    /// `expected_wrapped_dek` is sufficient on its own: it is a ciphertext sealed under a
+    /// freshly generated nonce, so any change to the DEK *or* to the KEK produces
+    /// different bytes.
     fn replace_wrapping(
         &self,
         id: CredentialRef,
         kek_id: KeyId,
         wrapped_dek: Vec<u8>,
         dek_nonce: [u8; crate::aead::NONCE_LEN],
-    ) -> Result<()>;
+        expected_wrapped_dek: &[u8],
+    ) -> Result<Rewrapped>;
     fn revoke(&self, tenant: TenantId, id: CredentialRef) -> Result<()>;
 }
 
@@ -58,8 +69,9 @@ impl<T: SealedStore> SealedStore for std::sync::Arc<T> {
         kek_id: KeyId,
         wrapped_dek: Vec<u8>,
         dek_nonce: [u8; crate::aead::NONCE_LEN],
-    ) -> Result<()> {
-        (**self).replace_wrapping(id, kek_id, wrapped_dek, dek_nonce)
+        expected_wrapped_dek: &[u8],
+    ) -> Result<Rewrapped> {
+        (**self).replace_wrapping(id, kek_id, wrapped_dek, dek_nonce, expected_wrapped_dek)
     }
     fn revoke(&self, tenant: TenantId, id: CredentialRef) -> Result<()> {
         (**self).revoke(tenant, id)
@@ -257,13 +269,19 @@ impl<A: AeadProvider, S: SealedStore, L: AccessLog> LocalVault<A, S, L> {
                 continue;
             };
 
+            // `row.wrapped_dek` is what this re-wrap was computed from. Passing it makes
+            // the write conditional on the row not having moved underneath — a credential
+            // rotation between the read above and this write would otherwise leave the
+            // row wrapped for a DEK its ciphertext no longer uses.
             match self.store.replace_wrapping(
                 row.id,
                 active_id.clone(),
                 rewrapped,
                 *new_nonce.as_bytes(),
+                &row.wrapped_dek,
             ) {
-                Ok(()) => report.rewrapped += 1,
+                Ok(Rewrapped::Replaced) => report.rewrapped += 1,
+                Ok(Rewrapped::Superseded) => report.superseded += 1,
                 Err(_) => report.failed += 1,
             }
         }

@@ -26,7 +26,7 @@
 //! deadlocking, which is the failure mode to prefer.
 
 use uops_core::{CredentialRef, TenantId};
-use uops_secrets::record::{KeyId, SealedCredential};
+use uops_secrets::record::{KeyId, Rewrapped, SealedCredential};
 use uops_secrets::{Error as SecretError, Result as SecretResult, SealedStore};
 
 use crate::store::PgStore;
@@ -242,11 +242,19 @@ impl SealedStore for PgSealedStore {
         kek_id: KeyId,
         wrapped_dek: Vec<u8>,
         dek_nonce: [u8; 12],
-    ) -> SecretResult<()> {
+        expected_wrapped_dek: &[u8],
+    ) -> SecretResult<Rewrapped> {
         blocking(async {
             // Only the wrapping changes. The ciphertext is untouched, which is the point
             // of envelope encryption: rotating the KEK re-wraps a 32-byte key per row
             // rather than re-encrypting every credential.
+            //
+            // The `wrapped_dek = $5` predicate is a compare-and-set, and it is the whole
+            // of the fix for a race that silently destroyed credentials: a KEK rotation
+            // computes a new wrapping from a DEK it read, and if the credential is
+            // rotated in between, that wrapping is for a DEK the row no longer holds.
+            // One statement, so there is no window between the check and the write and
+            // no transaction to get wrong.
             //
             // tenant-exempt: addressed by credential id, which is globally unique, and
             // reached only from KEK rotation — a platform operation across every tenant
@@ -255,21 +263,26 @@ impl SealedStore for PgSealedStore {
             let affected = sqlx::query(
                 "UPDATE credential
                     SET kek_id = $2, wrapped_dek = $3, dek_nonce = $4
-                  WHERE id = $1",
+                  WHERE id = $1 AND wrapped_dek = $5",
             )
             .bind(id.into_uuid())
             .bind(&kek_id.0)
             .bind(&wrapped_dek)
             .bind(dek_nonce.as_slice())
+            .bind(expected_wrapped_dek)
             .execute(self.store.pool())
             .await
             .map_err(|e| SecretError::Storage(e.to_string()))?
             .rows_affected();
 
             if affected == 0 {
-                return Err(SecretError::NotFound);
+                // Either the row is gone or its wrapping moved. Not distinguished, and
+                // deliberately: both mean "this rotation has nothing to write here", and
+                // a second query to tell them apart would be a second chance to race.
+                // The next rotation finds whatever is actually there.
+                return Ok(Rewrapped::Superseded);
             }
-            Ok(())
+            Ok(Rewrapped::Replaced)
         })
     }
 

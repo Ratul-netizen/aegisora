@@ -10,7 +10,7 @@ use uops_core::{CredentialRef, TenantId};
 
 use crate::aead::NONCE_LEN;
 use crate::error::{Error, Result};
-use crate::record::{KeyId, SealedCredential};
+use crate::record::{KeyId, Rewrapped, SealedCredential};
 use crate::vault::SealedStore;
 
 #[derive(Debug, Default)]
@@ -97,13 +97,23 @@ impl SealedStore for MemorySealedStore {
         kek_id: KeyId,
         wrapped_dek: Vec<u8>,
         dek_nonce: [u8; NONCE_LEN],
-    ) -> Result<()> {
+        expected_wrapped_dek: &[u8],
+    ) -> Result<Rewrapped> {
         self.with(|r| {
             let row = r.get_mut(&id).ok_or(Error::NotFound)?;
+            // The condition, and the only reason this method takes six arguments. See
+            // the trait: writing unconditionally would leave a row wrapped for a DEK its
+            // ciphertext no longer uses. A map behind a lock can race exactly as a
+            // database can, so this implementation checks too — one that did not would
+            // make the memory store the place the bug still lives, which is also the
+            // store every other crate's tests use.
+            if row.wrapped_dek != expected_wrapped_dek {
+                return Ok(Rewrapped::Superseded);
+            }
             row.kek_id = kek_id;
             row.wrapped_dek = wrapped_dek;
             row.dek_nonce = dek_nonce;
-            Ok(())
+            Ok(Rewrapped::Replaced)
         })
     }
 

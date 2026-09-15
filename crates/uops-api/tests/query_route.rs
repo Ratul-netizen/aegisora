@@ -48,10 +48,79 @@ async fn control_plane() -> PgStore {
     .expect("connect")
 }
 
+/// The five-minute boundary `secs_ago` seconds in the past.
+///
+/// # Why these fixtures are not at a fixed instant
+///
+/// They used to be, at `1_700_000_000` — 2023-11-14. Every table these tests write to
+/// carries a retention TTL (`logs` and the pre-aggregates 365 days, `metrics` 30), so by
+/// the time this was found the fixtures were nearly three years past retention: the rows
+/// were inserted and then removed by a background TTL merge. Whether a test passed
+/// depended on whether that merge had run against its part yet, which made
+/// `the_explorer_histogram_is_served_from_the_pre_aggregate` fail about one run in
+/// fifteen with an empty result. A `SELECT` at the time of the diagnosis found 335 rows
+/// still in `logs` for that window and **zero** in `logs_counts_5m` — the aggregate had
+/// already been swept.
+///
+/// Anchored to now instead, and truncated to a five-minute boundary so
+/// `toStartOfFiveMinute` puts a fixture in a predictable bucket rather than one that
+/// depends on when the suite ran. Backdated far enough that the whole window is in the
+/// past: a row in the future is not a retention problem but it is not a measurement
+/// either.
+fn bucket_aligned(secs_ago: i64) -> chrono::DateTime<Utc> {
+    let secs = Utc::now().timestamp() - secs_ago;
+    Utc.timestamp_opt(secs - secs.rem_euclid(300), 0)
+        .single()
+        .expect("a truncated unix timestamp is a valid instant")
+}
+
 /// A window the fixtures fall inside, aligned so a pre-aggregate query covers them too.
 fn window() -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
-    let start = Utc.timestamp_opt(1_700_000_400, 0).unwrap(); // 22:20:00, bucket-aligned
+    let start = window_start();
     (start, start + Duration::hours(1))
+}
+
+/// Where the window begins.
+///
+/// Computed once per process. Every call must return the same instant, because the
+/// fixtures are written relative to it and then queried relative to it — if a run
+/// crosses a five-minute boundary between the `INSERT` and the `SELECT`, a recomputed
+/// start lands in the next bucket and the query looks in the wrong place. That is how
+/// three of these tests failed on the run right after the window stopped being a
+/// constant.
+fn window_start() -> chrono::DateTime<Utc> {
+    static START: std::sync::OnceLock<chrono::DateTime<Utc>> = std::sync::OnceLock::new();
+    *START.get_or_init(|| bucket_aligned(2 * 3600))
+}
+
+/// The shortest retention any table these fixtures write to has.
+///
+/// `metrics` is 30 days; `logs`, `events` and the pre-aggregates are 365 or more. The
+/// shortest one is what binds, because a fixture outside it is removed from that table
+/// and left in the others — which is precisely the half-present state that made this
+/// hard to see. Keep it in step with `ch-migrations/`.
+const SHORTEST_RETENTION_DAYS: i64 = 30;
+
+#[test]
+fn the_fixtures_are_inside_every_retention_window() {
+    // The guard on the bug, checked by the test suite on itself rather than by a CI
+    // mutation, because the failure it prevents is not deterministic: TTL is applied by
+    // a background merge on ClickHouse's own schedule, so an expired fixture passes
+    // until the moment a merge lands between the INSERT and the SELECT. That is a test
+    // that fails once a fortnight for a reason nobody can reproduce.
+    //
+    // This assertion has no such timing in it. It fails immediately, on every run, the
+    // day somebody writes a fixed timestamp here again or shortens a TTL past it.
+    let age = Utc::now() - window_start();
+    assert!(
+        age < Duration::days(SHORTEST_RETENTION_DAYS),
+        "the fixtures are {} days old and the shortest retention is {SHORTEST_RETENTION_DAYS};          ClickHouse will delete them on its next TTL merge, which makes every test in this          file pass or fail depending on when that merge runs",
+        age.num_days()
+    );
+    assert!(
+        age > Duration::zero(),
+        "the fixtures are in the future, which is not a measurement"
+    );
 }
 
 struct Fixture {

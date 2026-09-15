@@ -522,6 +522,29 @@ jobs:
           cp "$RUNNER_TEMP/executor.bak" "$F"
           echo "ok: a serialised fleet fails the suite"
 
+      # A KEK rotation computes a new wrapping from a DEK it read. If the credential is
+      # rotated in between — `put` reuses the id, so the row gets a new DEK and a new
+      # ciphertext — writing that wrapping back leaves the row wrapping the old DEK over
+      # the new ciphertext. Unwrapping then yields a key that decrypts nothing and the
+      # credential is permanently gone, with no error until somebody tries to use it.
+      # The compare-and-set in the WHERE clause is the whole of the fix.
+      - name: The sealed-credential tests fail when the re-wrap stops being conditional
+        run: |
+          F=crates/uops-store-pg/src/sealed.rs
+          cp "$F" "$RUNNER_TEMP/sealed.bak"
+          sed -i 's|WHERE id = $1 AND wrapped_dek = $5|WHERE id = $1|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-pg --test sealed > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/sealed.bak" "$F"
+            echo "::error::the sealed tests passed with a re-wrap that overwrites a newer DEK"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/sealed.bak" "$F"
+          echo "ok: an unconditional re-wrap fails the suite"
+
       # `resource` has no address column: an address is an identifier, so the poller
       # reaches a device through the same `mgmt_ip` row identity resolution wrote. Join
       # the wrong kind and the fleet is empty — and an empty fleet polls nothing, fails

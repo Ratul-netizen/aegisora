@@ -69,7 +69,7 @@ pub use generate::password as generate_password;
 pub use kek::KekRing;
 pub use memory::MemorySealedStore;
 pub use password::PasswordHashString;
-pub use record::{CredentialMeta, KeyId, RotationReport, SealedCredential};
+pub use record::{CredentialMeta, KeyId, Rewrapped, RotationReport, SealedCredential};
 pub use session::{SessionToken, SessionTokenHash};
 pub use vault::{LocalVault, SealedStore};
 
@@ -247,6 +247,101 @@ mod tests {
         assert!(
             v.get(t, id, &ctx()).is_ok(),
             "must still open after rotation"
+        );
+    }
+
+    #[test]
+    fn a_credential_rotated_mid_kek_rotation_is_not_destroyed() {
+        // The bug this guards, in the order it happens:
+        //
+        //   1. a KEK rotation reads the row and unwraps its DEK
+        //   2. an operator rotates the credential — `put` reuses the id, so the row now
+        //      holds a new ciphertext under a new DEK
+        //   3. the KEK rotation writes back a wrapping for the DEK it read in step 1
+        //
+        // Unconditionally, step 3 leaves the row wrapping DEK-1 over ciphertext-2.
+        // Unwrapping yields a key that decrypts nothing and the credential is gone —
+        // silently, with no error anywhere until somebody tries to use it.
+        //
+        // The window is narrow and both operations are rare, which is exactly why this
+        // needs a test rather than an operator noticing.
+        let store = Arc::new(MemorySealedStore::new());
+        let v = LocalVault::new(
+            RustCryptoAead,
+            Arc::clone(&store),
+            Arc::new(MemoryAccessLog::new()),
+            KekRing::new(KeyId::new("kek-1"), Key::generate().unwrap()),
+        );
+        let t = TenantId::new();
+        let id = v.put(t, snmpv3(), &CredentialMeta::new("core")).unwrap();
+
+        // Step 1, by hand: what rotate_kek holds after reading the row.
+        let stale = store.peek(id).unwrap();
+
+        // Step 2: the credential is rotated. Same id, new DEK, new ciphertext.
+        let mut rotation = CredentialMeta::new("core");
+        rotation.supersedes = Some(id);
+        v.put(t, snmpv3(), &rotation).unwrap();
+        let current = store.peek(id).unwrap();
+        assert_ne!(
+            current.wrapped_dek, stale.wrapped_dek,
+            "the fixture is wrong: a credential rotation must produce a new wrapped DEK"
+        );
+
+        // Step 3: the stale re-wrap arrives. It must be refused.
+        let outcome = store
+            .replace_wrapping(
+                id,
+                KeyId::new("kek-2"),
+                b"a wrapping computed from the DEK that is no longer there".to_vec(),
+                [7u8; crate::aead::NONCE_LEN],
+                &stale.wrapped_dek,
+            )
+            .unwrap();
+        assert_eq!(
+            outcome,
+            Rewrapped::Superseded,
+            "a re-wrap computed from a wrapping the row no longer holds must not be written"
+        );
+
+        let after = store.peek(id).unwrap();
+        assert_eq!(
+            after.wrapped_dek, current.wrapped_dek,
+            "nothing may have been written"
+        );
+        assert!(
+            v.get(t, id, &ctx()).is_ok(),
+            "the credential must still open; if this fails the row has been destroyed"
+        );
+    }
+
+    #[test]
+    fn a_rotation_reports_what_it_skipped_rather_than_counting_it_as_a_failure() {
+        // `superseded` is not `failed`: nothing went wrong and nothing needs looking at.
+        // The row is simply newer than the rotation that tried to touch it, and the next
+        // rotation finds it under the old KEK and re-wraps it then. An operator reading
+        // `failed: 1` would go looking for a problem that is not there.
+        let store = Arc::new(MemorySealedStore::new());
+        let v = LocalVault::new(
+            RustCryptoAead,
+            Arc::clone(&store),
+            Arc::new(MemoryAccessLog::new()),
+            KekRing::new(KeyId::new("kek-1"), Key::generate().unwrap()),
+        );
+        let t = TenantId::new();
+        let id = v.put(t, snmpv3(), &CredentialMeta::new("core")).unwrap();
+
+        assert_eq!(
+            store
+                .replace_wrapping(
+                    id,
+                    KeyId::new("kek-2"),
+                    vec![1, 2, 3],
+                    [0u8; crate::aead::NONCE_LEN],
+                    b"not what the row holds",
+                )
+                .unwrap(),
+            Rewrapped::Superseded
         );
     }
 

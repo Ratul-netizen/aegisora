@@ -137,6 +137,34 @@ pub struct RotationReport {
     pub rewrapped: usize,
     pub already_current: usize,
     pub failed: usize,
+    /// Rows that changed between being read and being re-wrapped — an operator rotating
+    /// a credential while the KEK rotation ran. Not a failure: the row now holds a
+    /// wrapping newer than the one this rotation computed, and the next rotation will
+    /// find it under the old KEK and re-wrap it then. See [`Rewrapped::Superseded`].
+    pub superseded: usize,
+}
+
+/// What happened to one row in a KEK rotation.
+///
+/// # Why this is not a `bool`, and why the store has to check
+///
+/// A KEK rotation reads a row, unwraps its DEK, re-wraps that DEK under the new key and
+/// writes the wrapping back. If the credential is *itself* rotated in between —
+/// `LocalVault::put` reuses the credential's id, so a rotation replaces the row's
+/// ciphertext and its DEK — then writing the wrapping back unconditionally leaves the
+/// row holding a wrapping for the **old** DEK over the **new** ciphertext. Unwrapping
+/// then yields a key that decrypts nothing, and the credential is permanently
+/// unopenable.
+///
+/// It is a narrow window and it destroys data silently, which is the worst combination
+/// a race can have. So the write is conditional on the wrapping still being the one that
+/// was read, and this says which way it went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rewrapped {
+    /// The row still held the wrapping it was read with, and now holds the new one.
+    Replaced,
+    /// The row changed since it was read; nothing was written.
+    Superseded,
 }
 
 #[cfg(test)]
