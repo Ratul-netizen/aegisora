@@ -323,16 +323,10 @@ because it reads as covered.
 2. **No UI for the review queue.** `pending_reviews` exists and is tested; nothing
    surfaces it. Blocked on the above, since a queue you can only agree with is worse
    than no queue.
-3. **M2 · the `snmp2`-backed transport.** Everything it needs now exists: the
-   `Transport` trait, a real agent to talk to, and a credential type that carries its
-   protocols. What it still needs is a socket-reuse decision — one UDP socket per
-   poller or one per device — which is a per-device concurrency question and so belongs
-   with the executor rather than ahead of it.
-4. **M2 · the real transport.** `Transport` has one implementation and it is the
-   simulator. The `snmp2`-backed one is next to it and small; what it needs first is a
-   decision about socket reuse — one UDP socket per poller or one per device — which is
-   a per-device concurrency question and so belongs with the executor.
-4. **M2 · the poller binary — pick up here.** Every part exists and is tested; what
+3. ~~**M2 · the real transport.**~~ Done: `UdpTransport`, `snmp2`-backed, one pooled
+   session per device. Two request shapes — a `GETBULK` run for walks and a `GET` for a
+   scalar set — which is what `Work::Scalars`' "one request" actually needs.
+4. **M2 · the poller binary.** Every part exists and is tested; what
    is missing is the process that joins them. In order:
    1. ~~Load profiles.~~ Done: `seed_builtin_profiles`, `profiles_for`, `put_profile`.
    2. ~~The loop.~~ Done: `uops_poll::poller::{Schedule, tasks, run_tick}`.
@@ -355,9 +349,21 @@ because it reads as covered.
       **Also not done:** a lease. Two pollers against one database would both schedule
       every device, doubling the load on the fleet and writing each sample twice. One
       process for now, said out loud in `main.rs`.
-   4. Discovery. Each row of the interface walk becomes a child resource plus a
-      `member_of` edge. That is the last M2 acceptance criterion with nothing behind
-      it, and `generic-snmp` covering an unknown vendor falls out of the same loop.
+   4. **Discovery — pick up here.** Each row of the interface walk becomes a child
+      resource plus a `member_of` edge. The walk already runs and its names are already
+      used to label samples; what does not exist is the write. It is the last M2
+      acceptance criterion with nothing behind it.
+
+## M2 acceptance criteria, where they actually stand
+
+| SPEC §M2 | State |
+|---|---|
+| 1 000 simulated agents at 60s, p95 < 5 s, no missed cycles | Met in `uops-poll`'s fleet test, against the simulator. **Not** re-measured through the binary |
+| SNMPv3 authPriv SHA-256/AES-256 against a real device, credential through `SecretStore` with an access-log entry | Met. `tests/agent.rs` for the wire, `tests/live.rs` for the credential path. The access-log entry is written but the log is in-memory — the `credential_access` table is M3 |
+| Interface discovery creates child resources **and** `member_of` relationships | **Not met.** The walk runs; nothing is written. This is item 4 above |
+| A 32-bit counter wrap produces no negative rate in any query | `uops_poll::counter` is written and tested. **Not wired**: samples are stored raw and nothing computes a rate yet, so the criterion is neither met nor violated |
+| An unknown-vendor device gets interfaces and availability via `generic-snmp` | Half. Interfaces yes; availability is ICMP and is counted as unsupported |
+| Dead device does not delay healthy devices (measured, not assumed) | Met, measured, and guarded in CI by a mutation that serialises the executor |
 
 ## How to pick this up
 
