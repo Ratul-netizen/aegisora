@@ -72,7 +72,9 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | M3 · syslog over TLS | ✅ **decided: terminated at a proxy**, not in-process |
 | **M3 · the syslog daemon** | ✅ `uops-collector-syslog` — a datagram becomes a queryable row, end to end against real everything |
 | **M3 · WAL spill** | ✅ segments on disk, replayed oldest-first, survives a crash |
-| M3 · OTLP, Log Explorer, 50 000 msg/s | ⬜ |
+| **M3 · 50 000 msg/s, drop counter at zero** | ✅ **measured** — 49 986/s offered, all received, 0 dropped, 501 000 rows queryable |
+| M3 · ceiling | ✅ **~100 000/s**, twice the target, every overflow datagram counted |
+| M3 · OTLP, Log Explorer | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -655,6 +657,58 @@ M1 is where they start.
 
 ## Decided since the last update
 
+**SPEC §M3's first acceptance criterion is met, and measured through the daemon.**
+
+```
+offered   49 986/s for 10s, from 1 000 distinct senders
+received  49 986/s   — everything
+dropped   0
+written   501 000 rows in 535 inserts, 0 retries, 0 spilled, 0 lost
+queryable 501 000
+```
+
+And the ceiling, which is the number that says whether the margin is real: **~100 000
+msg/s**, twice the target. Past that the receiver drops — and **counts** every one, which
+is the property SPEC's drop counter exists for. A receiver that silently lost datagrams
+under overload would look identical to one that kept up.
+
+**The sender count is the measurement, not the rate.** 50 000 msg/s from one device is a
+benchmark of an LRU lookup: the same two identifiers every time, the resolution cache
+answers all of them, `PostgreSQL` is never touched. So the load comes from **1 000
+distinct senders**, each on its own loopback address with its own hostname — which is
+what makes the cache a cache rather than a single entry, and what puts a thousand real
+resolutions and a thousand provisional resources in the path. The thousand cold
+resolutions take 5.1 s and are deliberately excluded from the sustained figure.
+
+That is also why this test is Linux-only: the whole of `127.0.0.0/8` is local there, and
+one host cannot otherwise be a thousand devices.
+
+**Two things went wrong in the measurement before anything was learned about the daemon**,
+and both are worth recording because the failures looked exactly like a product that could
+not keep up.
+
+*The generator was slow, and blamed the daemon.* The first version sent a fixed slice per
+10 ms tick and slept the remainder. Every sleep overshoots slightly, nothing catches the
+deficit up, and it delivered 49 914/s against a 50 000 target — reported as **"Measured
+49914/s"**, while the daemon had taken every message and dropped none. Deriving the quota
+from elapsed time instead lets a late tick catch up.
+
+*Then the assertion itself was unsatisfiable.* A generator paced at exactly R finishes
+`R × T` messages in **at least** T seconds, so `offered / elapsed` can never exceed R.
+Asserting `rate >= TARGET` could not pass however good the daemon was. The criterion is
+really a conjunction and is now asserted as one: the load was offered at the rate, all of
+it was received, the drop counter is zero, and everything received reached `ClickHouse`.
+
+*And `written` was read mid-flight.* It reported 25 348 of 501 000 because the batcher was
+still draining. It is now read after the shutdown, which is the only point at which it
+means anything.
+
+**`run::Metrics` exists so the numbers can be read from outside the daemon.** The
+receivers and the batcher each kept their own counters and the question an operator asks —
+*is anything being lost?* — spans both. A drop at the socket and a drop at the batcher have
+completely different causes and the same consequence. It was written for this test and is
+what `/api/v1/health` will report.
+
 **The WAL spill, and a bug in `LogRow` it uncovered.**
 
 Retrying in memory handles the ten-second `ClickHouse` restart. It does not handle the
@@ -1186,6 +1240,7 @@ integration suites.
 | **The simulator modelled a GET as a GETNEXT** | a scalar that was invisible in tests but present on the real agent | `entPhysicalSoftwareRev` could never have been read. The simulator now has a real `get_scalars`. A simulator that is wrong in the same direction as the code under test proves nothing |
 | **`Runner::load` had a trap** | the scale test was measuring nothing | discovery rules lived in a side map populated only inside `run::reload`, so the 1 000-device scale test measured 1 000 devices whose every discovery job failed. `load()` now does both and is the only way in |
 | **Two routes leaked tenant existence** | the isolation harness, once it was given a real vault | `revoke` returned 204 for another tenant's credential and `identifiers_for` returned `200 []`. Both now `NotFound` — 404-never-403 |
+| **The load generator blamed the daemon twice** | the 50 000 msg/s test failing at 49 914/s | a fixed-slice-per-tick generator is systematically slow because sleeps overshoot and nothing catches up; and then the assertion `rate >= TARGET` is unsatisfiable by construction for a clock-paced generator. Both reported a shortfall while the daemon had received every message and dropped none. A measurement harness is code, and its bugs look like the thing it measures |
 | **`LogRow` had never round-tripped** | the first WAL segment replaying as empty | the timestamp fields had `serialize_with` and no matching `deserialize_with`, so the derived `Deserialize` parsed RFC 3339 against a string written as `YYYY-MM-DD HH:MM:SS.mmm`. Every line failed. The types have looked round-trippable since M0 and never were, because nothing read a row back until the spill did |
 | **The memory bound pre-empted the spill** | the test written to prove the spill worked | the `max_buffered` trim ran on every failed insert, including the ones before `spill_after`, so it discarded half a batch one retry before those rows would have been written to disk. Both are answers to the same question and only one can go first |
 | **The disk filled and took Docker with it** | a Linux build failing to link | `target/debug/incremental` had reached 20.4 GB and its Linux twin 5.5 GB, leaving the host at zero bytes free. Docker Desktop's virtual disk could not grow, so the engine refused to start and every container stopped. Twenty-six GB reclaimed from the incremental caches alone, which cost one non-incremental rebuild and nothing else. See Housekeeping — the recovery is much longer than the prevention |

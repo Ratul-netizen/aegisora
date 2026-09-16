@@ -40,6 +40,7 @@
 //! shutdown that dropped the buffer would lose up to a full batch on every deploy.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::mpsc;
 use uops_core::TenantId;
@@ -50,6 +51,45 @@ use uops_store_pg::{PgEnricher, PgStore};
 use uops_syslog::receiver::{Received, TcpReceiver, UdpReceiver};
 
 use crate::config::{Config, Listener};
+
+/// What the daemon has done, readable from outside it.
+///
+/// The receivers and the batcher each keep their own counters; this is where they are
+/// joined, because the question an operator asks — *is anything being lost?* — spans both
+/// and is unanswerable from either alone. A drop at the socket and a drop at the batcher
+/// have completely different causes and the same consequence.
+///
+/// It exists for the scale test first and `/api/v1/health` second. Both need the same
+/// numbers, and a counter that only a test reads is a counter that drifts.
+#[derive(Debug, Default)]
+pub struct Metrics {
+    /// Datagrams and framed messages taken off sockets.
+    pub received: AtomicU64,
+    /// Datagrams the receiver could not hand on, because the queue behind it was full.
+    ///
+    /// UDP only: TCP waits instead, which is the whole difference between them.
+    pub dropped: AtomicU64,
+    /// The batcher's own counters, as of its last report.
+    pub batch: std::sync::Mutex<batch::Stats>,
+}
+
+impl Metrics {
+    /// Rows that reached `ClickHouse`, including replayed ones.
+    #[must_use]
+    pub fn rows_written(&self) -> u64 {
+        self.batch.lock().map_or(0, |s| s.rows_written)
+    }
+
+    /// Everything that was lost, at either end.
+    ///
+    /// The one number that means data loss. A receiver drop and a batcher drop are
+    /// different failures — a full queue versus a full disk — but an operator asking
+    /// "did we lose anything" wants them added up.
+    #[must_use]
+    pub fn lost(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed) + self.batch.lock().map_or(0, |s| s.rows_dropped)
+    }
+}
 
 /// A listener, resolved against the database.
 #[derive(Clone, Debug)]
@@ -146,6 +186,30 @@ pub async fn serve(
     bound: Vec<Bound>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), String> {
+    serve_with_metrics(
+        store,
+        telemetry,
+        config,
+        bound,
+        Arc::new(Metrics::default()),
+        shutdown,
+    )
+    .await
+}
+
+/// [`serve`], reporting into counters the caller can read while it runs.
+///
+/// The scale test needs them mid-flight — a throughput figure computed after the process
+/// has drained is a figure for a system that was allowed to catch up, which is not the
+/// number SPEC asks for.
+pub async fn serve_with_metrics(
+    store: PgStore,
+    telemetry: ChStore,
+    config: &Config,
+    bound: Vec<Bound>,
+    metrics: Arc<Metrics>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), String> {
     let pipeline = Arc::new(Pipeline::new(
         Resolver::new(store.clone()),
         Enrichment::new(PgEnricher::new(store)),
@@ -171,12 +235,16 @@ pub async fn serve(
 
     // One batcher. See the module docs: a second would halve every insert.
     let (rows_tx, rows_rx) = mpsc::channel::<LogRow>(config.queue);
+    let reporting = Arc::clone(&metrics);
     let batcher = tokio::spawn(batch::run_with_wal(
         telemetry,
         rows_rx,
         batch::Config::default(),
         wal,
-        |stats| {
+        move |stats| {
+            if let Ok(mut held) = reporting.batch.lock() {
+                *held = stats;
+            }
             // Only when something was lost. A line per batch at 50 000 msg/s is a log
             // nobody reads; a line when rows were dropped is the one somebody needs.
             if stats.rows_dropped > 0 {
@@ -205,7 +273,7 @@ pub async fn serve(
         // Per listener, so one tenant's burst does not consume another's queue.
         let (received_tx, received_rx) = mpsc::channel::<Received>(config.queue);
 
-        receivers.extend(bind_receivers(&bound, &received_tx, &stop_tx).await?);
+        receivers.extend(bind_receivers(&bound, &received_tx, &stop_tx, &metrics).await?);
 
         // Dropped so that the channel closes once the receivers are done, which is what
         // ends the fan-out, which is what ends the workers. Forgetting this is a
@@ -269,6 +337,7 @@ async fn bind_receivers(
     bound: &Bound,
     received_tx: &mpsc::Sender<Received>,
     stop_tx: &tokio::sync::broadcast::Sender<()>,
+    metrics: &Arc<Metrics>,
 ) -> Result<Vec<tokio::task::JoinHandle<()>>, String> {
     let mut spawned = Vec::new();
 
@@ -284,12 +353,37 @@ async fn bind_receivers(
         let sink = received_tx.clone();
         let mut stop = stop_tx.subscribe();
         let tenant = bound.listener.tenant.clone();
+        let metrics = Arc::clone(metrics);
+        let publishing = Arc::clone(&stats);
         spawned.push(tokio::spawn(async move {
+            // Published while the receiver runs, not after it. A throughput figure taken
+            // once the process has drained is a figure for a system that was allowed to
+            // catch up.
+            let pump = {
+                let metrics = Arc::clone(&metrics);
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+                    loop {
+                        tick.tick().await;
+                        metrics
+                            .received
+                            .store(publishing.received(), Ordering::Relaxed);
+                        metrics
+                            .dropped
+                            .store(publishing.dropped(), Ordering::Relaxed);
+                    }
+                })
+            };
+
             receiver
                 .run(sink, async move {
                     let _ = stop.recv().await;
                 })
                 .await;
+            pump.abort();
+            metrics.received.store(stats.received(), Ordering::Relaxed);
+            metrics.dropped.store(stats.dropped(), Ordering::Relaxed);
+
             // The drop count is the number SPEC cares about, and it is worth saying once
             // at shutdown even when it is zero — "0 dropped" is evidence, and an absent
             // line is not.
