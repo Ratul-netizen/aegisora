@@ -400,7 +400,10 @@ month 9.
 ## 11. Open questions — blocking M1
 
 1. **Name.** Blocks crate naming and the GitHub org. Codename `uops` unblocks everything else.
-2. **License — recommendation: AGPL-3.0 + CLA, enabling commercial dual-licensing.**
+2. ~~**License.**~~ **Decided 2026-09-16: AGPL-3.0-only plus a CLA, enabling commercial
+   dual-licensing.** The recommendation below was chosen deliberately rather than allowed
+   to happen by default, which matters because this is one of the two irreversible
+   decisions in the project.
 
    The straight AGPL recommendation was made *before* the on-premise decision (§0b) and is
    wrong on its own. On-prem enterprise procurement is exactly where AGPL gets blocked —
@@ -415,6 +418,16 @@ month 9.
    before the first outside contribution, dual-licensing becomes permanently impossible —
    it would require every contributor's consent. Put the CLA in place before publicising
    the repository.
+
+   What is now settled: `LICENSE`, every crate manifest and `web/package.json` say
+   `AGPL-3.0-only`; `CONTRIBUTING.md` makes a signed CLA a gate on the first pull request;
+   `CLA.md` is the text.
+
+   **What is still open is not the decision — it is the lawyer.** `CLA.md` is a working
+   draft modelled on the Apache Individual CLA and has not been reviewed by anyone
+   qualified. The decision to dual-license is reversible; accepting one unsigned outside
+   contribution is not. So the remaining gate is legal review of `CLA.md` *before the
+   repository is publicised*, not before the next commit.
 3. **Target buyer.** MSPs in Bangladesh/SEA vs global self-hosters. The `Organization → Tenant`
    hierarchy is in from day one either way, but MSP-first pulls credential scoping, per-tenant data
    isolation guarantees and cross-tenant admin into v0.1. **The only open question that can still

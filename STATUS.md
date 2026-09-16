@@ -643,12 +643,34 @@ M1 is where they start.
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
 | **The bundled IEEE data's terms** | a commercial release | `crates/uops-oui/data/assignments.tsv` is derived from the four public IEEE registries. They are redistributed widely — Wireshark, nmap and Debian's `ieee-data` all ship them — which is the basis for bundling. It is **not** a licence review: IEEE attaches no SPDX identifier, and `cargo deny` checks crate licences rather than the terms of embedded data, so nothing in CI is looking at this |
-| **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
+| **CLA reviewed by a lawyer** | publicising the repository | The licence is decided — AGPL-3.0-only plus a CLA, see *Decided* below — and this is what is left of it. `CLA.md` is a working draft modelled on the Apache ICLA and nobody qualified has read it. **The only irreversible item in this table**: the licence choice can be changed, but one unsigned outside contribution permanently forecloses dual-licensing, because relicensing would need that person's individual consent forever |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |
 | Metrics + rollup ingest cost | M4, not M0 | The one W1 measurement not run |
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The licence is AGPL-3.0-only, with a Contributor License Agreement.** Chosen rather
+than allowed to happen: `LICENSE`, every crate manifest and `web/package.json` already
+said `AGPL-3.0-only`, so PLAN's recommendation was being enacted by inertia, which is the
+wrong way for one of the two irreversible decisions in the project to be made.
+
+The reasoning, restated because the conclusion is easy to misread as "just pick AGPL":
+straight AGPL is wrong on its own, because on-premise enterprise procurement is exactly
+where it gets blocked — many corporate legal teams keep AGPL blocklists that apply even
+to purely internal use — and that market is the one this product is built for. Apache 2.0
+is not the fix either; it gives away the only asset. AGPL plus a CLA keeps both: AGPL for
+everyone, and a commercial licence for the buyers whose lawyers object.
+
+**The time-critical half is the CLA, not the licence text.** Selling a commercial licence
+requires the right to license all of the code that way, and that right cannot be
+reclaimed: once one contribution lands unsigned, relicensing any part of the project needs
+that contributor's individual consent forever. `CONTRIBUTING.md` already makes a signed
+CLA a gate on the first pull request.
+
+What is still open is therefore not the decision but the lawyer. `CLA.md` is a working
+draft modelled on the Apache Individual CLA and has not been reviewed by anyone qualified.
+That review is the gate before the repository is publicised — not before the next commit.
 
 **Every device was going to acquire a duplicate of itself by its second message.**
 The worst defect found since the KEK rotation bug, and found the same way: by writing a

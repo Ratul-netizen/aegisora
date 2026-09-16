@@ -139,5 +139,18 @@ key file that decrypts every stored credential. See [RENAME_AUDIT.md](./RENAME_A
 
 ## License
 
-**Undecided.** AGPL / Apache 2.0 / BSL — see PLAN.md §11. This blocks the first public
-release, since relicensing after outside contributions requires their consent.
+**AGPL-3.0-only, with a Contributor License Agreement.** Decided 2026-09-16.
+
+AGPL for everyone; a commercial license available to buyers whose legal teams maintain
+AGPL blocklists — which is most of on-premise enterprise procurement, and is exactly the
+market this product is built for. Selling that commercial license requires the right to
+license *all* of the code that way, which is what the CLA preserves.
+
+**The CLA is the time-critical half, not the license text.** Once one contribution lands
+unsigned, relicensing any part of the project needs that person's individual consent
+forever, and the dual-licensing path closes permanently. So a signed CLA is a gate on the
+first pull request — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+> [CLA.md](./CLA.md) is a working draft modelled on the Apache Individual CLA and **has
+> not been reviewed by a lawyer**. That review is the remaining gate before the repository
+> is publicised. It is not legal advice.
