@@ -121,9 +121,21 @@ purpose.
 
 ## Name
 
-`uops` is a **working codename**, not the product name. `Aegisora` was rejected —
-`aegisora-ai/aegisora` is an active org in an adjacent market (AI runtime security).
-Crates stay unpublished under the codename until trademark, domain and org clearance.
+The product is **Veyronis** — *Unified Infrastructure Observability & Operations
+Platform*.
+
+`uops` is a **working codename** and everything in the tree still uses it: the crates,
+the binaries, the `UOPS_*` variables, the databases, the Docker images and the NATS
+subjects. That is deliberate. The codename exists so the product name can change without
+touching code, and it just did — `Aegisora` was rejected (`aegisora-ai/aegisora` is an
+active org in an adjacent market) and replaced by `Veyronis` at the cost of eight lines
+of documentation.
+
+The identifiers rename to `veyronis-*` **at clearance** — GitHub org, crates.io, npm,
+`.com`/`.io`, USPTO TESS and Bangladesh RJSC — which is also the first moment the crates
+can be published. Doing it before would re-couple the tree to a name that has had a
+preliminary search rather than a clearance, and would touch persistent state including the
+key file that decrypts every stored credential. See [RENAME_AUDIT.md](./RENAME_AUDIT.md).
 
 ## License
 

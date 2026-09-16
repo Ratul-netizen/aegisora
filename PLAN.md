@@ -113,12 +113,33 @@ and the M0–M4 scope.
 
 ## 1. Naming
 
-`aegisora-ai/aegisora` is an active GitHub org doing AI runtime security and governance — adjacent
-market, same buyer. **Do not use Aegisora.**
+The product name is **Veyronis** — *Unified Infrastructure Observability & Operations
+Platform*.
 
-Repo and crates use the codename `uops` until clearance. Clearance = GitHub org + crates.io + npm +
-`.com`/`.io` + USPTO TESS + Bangladesh RJSC if incorporating locally. Renaming a local workspace is a
-`sed`; renaming a published crate is not.
+`aegisora-ai/aegisora` is an active GitHub org doing AI runtime security and governance — adjacent
+market, same buyer. **Do not use Aegisora.** That rejection is kept here rather than deleted,
+because without it somebody proposes the name again.
+
+No variants: not `Veyron`, `VeyronOS`, `Veyronis AI` or `Veyronis NMS`. The product is
+`Veyronis` and the CLI is `veyronis`.
+
+**Clearance has not been done.** The search behind `Veyronis` was preliminary. Clearance =
+GitHub org + crates.io + npm + `.com`/`.io` + USPTO TESS classes 9 and 42 + Bangladesh RJSC if
+incorporating locally.
+
+**Code keeps the codename `uops` until clearance passes.** Decided 2026-09-16. Crates, binaries,
+the 18 `UOPS_*` variables, the PostgreSQL role and database, the ClickHouse database, the Docker
+images and the `uops.*` NATS subjects all stay as they are. This is what the codename was *for* —
+`Aegisora` → `Veyronis` cost eight lines of documentation and no code, because the product name was
+never baked into an identifier. Renaming them now would re-couple the tree to a name that has had a
+search rather than a clearance, and pay the cost twice if clearance fails. It would also touch
+persistent state — the database, the Docker volumes and `UOPS_KEK_FILE`, which points at the key
+that decrypts every stored credential.
+
+The identifier rename happens in one commit at clearance, alongside the volume and database
+migration, which is also the first moment the crates can be published. Renaming a local workspace
+is a `sed`; renaming a published crate is not. The inventory is in
+[RENAME_AUDIT.md](./RENAME_AUDIT.md).
 
 ---
 

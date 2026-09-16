@@ -642,12 +642,40 @@ M1 is where they start.
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
 | **The bundled IEEE data's terms** | a commercial release | `crates/uops-oui/data/assignments.tsv` is derived from the four public IEEE registries. They are redistributed widely — Wireshark, nmap and Debian's `ieee-data` all ship them — which is the basis for bundling. It is **not** a licence review: IEEE attaches no SPDX identifier, and `cargo deny` checks crate licences rather than the terms of embedded data, so nothing in CI is looking at this |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
-| Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |
 | Metrics + rollup ingest cost | M4, not M0 | The one W1 measurement not run |
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The product is Veyronis; the code keeps the codename `uops` until clearance.**
+`Aegisora` had already been rejected in PLAN.md §1 — `aegisora-ai/aegisora` is an active
+org in an adjacent market — and `Veyronis` is the replacement.
+
+The audit is in [RENAME_AUDIT.md](./RENAME_AUDIT.md), and its headline is that the
+rename was **eight lines of documentation across four files**. Nothing else in the tree
+ever contained the product name: not the 16 crates, not the binaries, not the 18
+`UOPS_*` variables, not the PostgreSQL role or database, not the ClickHouse database,
+not the Docker images, not the `uops.*` NATS subjects, not the npm package, not a
+migration identifier, not a test fixture. That is exactly what the codename was for, and
+it is the first time the bet has been tested.
+
+So the identifiers stay `uops-*`. The rename to `veyronis-*` happens in one commit **at
+clearance** — GitHub org, crates.io, npm, `.com`/`.io`, USPTO TESS classes 9 and 42,
+Bangladesh RJSC — which is also the first moment the crates can be published. Doing it
+now would re-couple the tree to a name that has had a preliminary search rather than a
+clearance, and would pay the cost twice if clearance fails. It also touches persistent
+state in a way the documentation rename does not: the database and role, the Docker
+volumes, and `UOPS_KEK_FILE`, which points at the key that decrypts every stored
+credential. That migration gets written when it is worth writing.
+
+**Still to do, and not by me:** renaming the GitHub repository to
+`Ratul-netizen/veyronis`. `gh` is not installed on this machine and the operation needs
+repo-admin credentials, so it is `gh repo rename veyronis` from an authenticated shell or
+the Settings page. The four `github.com/Ratul-netizen/aegisora` URLs in `Cargo.toml` and
+this file are left pointing at the real repository until that happens — documentation
+that names a URL which does not resolve is worse than documentation that is a rename
+behind. **The repository has not been renamed.**
 
 **Syslog over TLS is terminated at a proxy.** The open item asked for a decision and
 this is it: no TLS in this process, for syslog or anything else. `rustls`' two
