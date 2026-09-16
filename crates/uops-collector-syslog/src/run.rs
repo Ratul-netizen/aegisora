@@ -151,12 +151,31 @@ pub async fn serve(
         Enrichment::new(PgEnricher::new(store)),
     ));
 
+    // Opened before anything is bound, so an unwritable spill directory is a startup
+    // error rather than a discovery made during the outage it exists for.
+    let wal = match &config.spill {
+        Some(directory) => Some(
+            uops_pipeline::Wal::open(uops_pipeline::WalConfig {
+                directory: directory.clone(),
+                ..uops_pipeline::WalConfig::default()
+            })
+            .map_err(|e| {
+                format!(
+                    "the spill directory {} is unusable: {e}",
+                    directory.display()
+                )
+            })?,
+        ),
+        None => None,
+    };
+
     // One batcher. See the module docs: a second would halve every insert.
     let (rows_tx, rows_rx) = mpsc::channel::<LogRow>(config.queue);
-    let batcher = tokio::spawn(batch::run(
+    let batcher = tokio::spawn(batch::run_with_wal(
         telemetry,
         rows_rx,
         batch::Config::default(),
+        wal,
         |stats| {
             // Only when something was lost. A line per batch at 50 000 msg/s is a log
             // nobody reads; a line when rows were dropped is the one somebody needs.
@@ -219,9 +238,23 @@ pub async fn serve(
     match batcher.await {
         Ok(stats) => {
             println!(
-                "uops-collector-syslog: {} row(s) in {} insert(s), {} retries, {} lost",
-                stats.rows_written, stats.batches_written, stats.retries, stats.rows_dropped
+                "uops-collector-syslog: {} row(s) in {} insert(s), {} retries,                  {} spilled, {} replayed, {} still on disk, {} lost",
+                stats.rows_written,
+                stats.batches_written,
+                stats.retries,
+                stats.rows_spilled,
+                stats.rows_replayed,
+                stats.rows_pending,
+                stats.rows_dropped
             );
+            if stats.rows_pending > 0 {
+                // Not loss, and worth distinguishing: the next start replays them. An
+                // operator reading "still on disk" should not go looking for a backup.
+                println!(
+                    "uops-collector-syslog: {} row(s) are still spilled and will be                      replayed on the next start",
+                    stats.rows_pending
+                );
+            }
         }
         Err(e) => return Err(format!("the batcher did not stop cleanly: {e}")),
     }

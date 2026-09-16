@@ -87,6 +87,11 @@ fn config(slug: &str, udp: SocketAddr) -> Config {
             ..PgConfig::default()
         },
         clickhouse: uops_store_ch::ChConfig::from_env(),
+        // No spill: these tests are about the path from a socket to a row, and every one
+        // of them has a ClickHouse that works. The spill's own behaviour is tested in
+        // `uops_pipeline::batch`, where an outage is a value rather than infrastructure
+        // somebody has to break on purpose.
+        spill: None,
         // Small, so the test does not allocate a 200 000-row channel twice per case.
         queue: 4_096,
         workers: 2,

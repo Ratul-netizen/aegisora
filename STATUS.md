@@ -71,7 +71,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **Maintenance windows** | ✅ model, occurrence arithmetic, five routes — 13 tests against real `PostgreSQL`, 11 on the DST cases |
 | M3 · syslog over TLS | ✅ **decided: terminated at a proxy**, not in-process |
 | **M3 · the syslog daemon** | ✅ `uops-collector-syslog` — a datagram becomes a queryable row, end to end against real everything |
-| M3 · WAL spill, OTLP, Log Explorer | ⬜ |
+| **M3 · WAL spill** | ✅ segments on disk, replayed oldest-first, survives a crash |
+| M3 · OTLP, Log Explorer, 50 000 msg/s | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -654,6 +655,60 @@ M1 is where they start.
 
 ## Decided since the last update
 
+**The WAL spill, and a bug in `LogRow` it uncovered.**
+
+Retrying in memory handles the ten-second `ClickHouse` restart. It does not handle the
+ten-*minute* one: memory is bounded, and past the bound the oldest rows were discarded.
+So after three consecutive failed inserts the buffer is written to disk and cleared, and
+ingestion carries on against a `ClickHouse` that is still down. Segments are replayed
+oldest-first once an insert succeeds — including segments a **previous run** left, which
+is the crash case and the reason any of this is on disk rather than in a bigger buffer.
+
+**Segments, not one file.** A single append-only log would need the front truncated to
+acknowledge what has been replayed, which no filesystem offers; the alternatives are
+rewriting it per batch or tracking an offset a crash can disagree with. A segment is
+replayed and then unlinked, so *"what is still owed"* is `ls`.
+
+**The rename is the commit.** A segment is written as `.partial` and renamed once it is
+closed and synced, so a crash mid-write leaves a file replay ignores rather than a
+truncated one it would read half of.
+
+**What durability this actually gives, stated precisely because the tempting claim is
+false:** `fsync` once per segment, at close — not per row, which would cap throughput far
+below the 50 000 msg/s target. So the guarantee is *a segment that exists on disk is
+complete and will be replayed*, **not** *every message that arrived is on disk*. Syslog
+over UDP has no delivery guarantee to preserve in the first place, and claiming the
+stronger property is something an operator would plan around.
+
+**`LogRow` could not be read back at all, and nothing had noticed.** The timestamp fields
+carried `serialize_with` for ClickHouse's `YYYY-MM-DD HH:MM:SS.mmm` and **no matching
+`deserialize_with`**, so the derived `Deserialize` was left using chrono's RFC 3339 parser
+on a string this codebase deliberately writes in another format. Every line of the first
+spilled segment failed to parse and the segment came back empty. The types have looked
+round-trippable since M0 and never were, because nothing read a row back until now.
+Fixed where it was, in `uops-store-ch`, accepting both formats.
+
+The round-trip test asserts equality with the row **`ClickHouse` would have stored** —
+millisecond-truncated, because the columns are `DateTime64(3)` — rather than with the
+untruncated input. Asserting the latter would be asserting that the WAL is more precise
+than its destination, which is not a property worth having and not one it can keep.
+
+**A second bug, from the test that was written to prove the first:** the memory bound ran
+on *every* failure including those before `spill_after`, so with a spill configured it
+discarded half a batch one retry before the disk those rows were about to be written to.
+The trim and the spill are answers to the same question and only one of them can go
+first — the spill does, and the trim is now reachable only when there is no spill or the
+spill itself failed.
+
+**A batcher given no WAL behaves exactly as before**, and that is a supported deployment
+rather than a fallback: a read-only container, or an operator who would rather lose logs
+than fill a disk. The startup line says which one you have, because somebody who thinks
+they configured a spill and did not should find out then rather than from `rows_dropped`
+during the outage it was meant to cover.
+
+`rows_spilled` is **not** loss. The number to watch is `rows_dropped`, which now means
+*the disk was full too*.
+
 **The syslog daemon, and how a message gets a tenant.** The decision the whole crate is
 shaped by, because **a syslog message carries no tenant and cannot be made to**. RFC 5424
 has structured data nobody populates; RFC 3164 has a hostname and a body. There is no
@@ -1131,6 +1186,8 @@ integration suites.
 | **The simulator modelled a GET as a GETNEXT** | a scalar that was invisible in tests but present on the real agent | `entPhysicalSoftwareRev` could never have been read. The simulator now has a real `get_scalars`. A simulator that is wrong in the same direction as the code under test proves nothing |
 | **`Runner::load` had a trap** | the scale test was measuring nothing | discovery rules lived in a side map populated only inside `run::reload`, so the 1 000-device scale test measured 1 000 devices whose every discovery job failed. `load()` now does both and is the only way in |
 | **Two routes leaked tenant existence** | the isolation harness, once it was given a real vault | `revoke` returned 204 for another tenant's credential and `identifiers_for` returned `200 []`. Both now `NotFound` — 404-never-403 |
+| **`LogRow` had never round-tripped** | the first WAL segment replaying as empty | the timestamp fields had `serialize_with` and no matching `deserialize_with`, so the derived `Deserialize` parsed RFC 3339 against a string written as `YYYY-MM-DD HH:MM:SS.mmm`. Every line failed. The types have looked round-trippable since M0 and never were, because nothing read a row back until the spill did |
+| **The memory bound pre-empted the spill** | the test written to prove the spill worked | the `max_buffered` trim ran on every failed insert, including the ones before `spill_after`, so it discarded half a batch one retry before those rows would have been written to disk. Both are answers to the same question and only one can go first |
 | **The disk filled and took Docker with it** | a Linux build failing to link | `target/debug/incremental` had reached 20.4 GB and its Linux twin 5.5 GB, leaving the host at zero bytes free. Docker Desktop's virtual disk could not grow, so the engine refused to start and every container stopped. Twenty-six GB reclaimed from the incremental caches alone, which cost one non-incremental rebuild and nothing else. See Housekeeping — the recovery is much longer than the prevention |
 | **Every device would have duplicated itself** | writing a test for the ordinary syslog case | a hostname plus an address is 0.93, under the 0.95 bar, so the steady state filed a review and a provisional twin for every device. The confidence model was being asked whether two independently discovered resources are the same box, when the real question was whether an observation is the resource its identifiers already belong to. `exclusive_match`, and the same rule in the cache — where the bar had made the hit rate 0%, so both of M3's numeric criteria were unreachable |
 | **Eight foreign keys had no index** | the API scale test timing out in its own clean-up | PostgreSQL never indexes the referencing side, so every parent `DELETE` scanned each child once per row. `ON DELETE CASCADE` from `tenant` made removing a tenant scan every role grant in the installation. Migration 0010, plus a schema guard that fails if a new foreign key arrives without one |

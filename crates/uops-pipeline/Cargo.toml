@@ -13,6 +13,7 @@ async-trait.workspace = true
 chrono.workspace = true
 lru.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+serde_json.workspace = true
 uops-core.workspace = true
 uops-identity.workspace = true
 uops-store-ch.workspace = true

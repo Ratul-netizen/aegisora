@@ -64,9 +64,9 @@ React · TypeScript · Vite
       acceptance criteria met and measured
 - [ ] **M3** — logs ← in progress. Both syslog wire formats, RFC 6587 framing, UDP and
       TCP receivers, the shared pipeline, batched inserts and **the daemon** are done: a
-      datagram on port 514 becomes a row you can query, and an unknown sender becomes a
-      resource rather than a dropped message. The WAL spill, OTLP and the Log Explorer
-      are not. TLS is terminated at a proxy by decision, not built in — see STATUS.md
+      datagram on port 514 becomes a row you can query, an unknown sender becomes a
+      resource rather than a dropped message, and a ClickHouse outage spills to disk and
+      replays rather than dropping. OTLP and the Log Explorer are not. TLS is terminated at a proxy by decision, not built in — see STATUS.md
 - [ ] M4 — dashboards and alerting
 
 Taken out of order because they were asked for: MAC vendor lookup, device make/model/

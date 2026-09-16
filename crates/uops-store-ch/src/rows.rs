@@ -25,15 +25,51 @@ fn clickhouse_datetime<S: serde::Serializer>(
     serializer.serialize_str(&value.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
 }
 
+/// The other half of it, and it was missing until 2026-09-17.
+///
+/// `Deserialize` was derived on these types from the beginning, so they *looked*
+/// round-trippable; the timestamp fields were not, because `serialize_with` without a
+/// matching `deserialize_with` leaves chrono's own RFC 3339 parser reading a string that
+/// this file deliberately writes in another format. Nothing noticed, because nothing read
+/// a row back until the WAL spilled one to disk and replayed it — at which point every
+/// line failed to parse and the segment came back empty.
+///
+/// Both formats are accepted. The `ClickHouse` one because that is what this file writes,
+/// and RFC 3339 because `ClickHouse` itself emits it in some output formats and a row
+/// that came from a query should parse too.
+fn clickhouse_datetime_de<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<DateTime<Utc>, D::Error> {
+    use serde::Deserialize as _;
+    let text = String::deserialize(deserializer)?;
+
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M:%S%.f") {
+        return Ok(naive.and_utc());
+    }
+    DateTime::parse_from_rfc3339(&text)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| serde::de::Error::custom(format!("{text:?} is not a timestamp: {e}")))
+}
+
 /// One row of `logs`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// `PartialEq` so that a round trip can be asserted rather than described — the WAL
+/// spills these to disk and reads them back, and "the row that came back is the row that
+/// went in" is the whole promise of that module.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogRow {
     pub tenant_id: TenantId,
     pub resource_id: ResourceId,
     pub site_id: SiteId,
-    #[serde(serialize_with = "clickhouse_datetime")]
+    #[serde(
+        serialize_with = "clickhouse_datetime",
+        deserialize_with = "clickhouse_datetime_de"
+    )]
     pub observed_at: DateTime<Utc>,
-    #[serde(serialize_with = "clickhouse_datetime")]
+    #[serde(
+        serialize_with = "clickhouse_datetime",
+        deserialize_with = "clickhouse_datetime_de"
+    )]
     pub ingested_at: DateTime<Utc>,
     pub source_kind: String,
     pub source_vendor: String,
@@ -56,9 +92,15 @@ pub struct MetricRow {
     pub resource_id: ResourceId,
     pub site_id: SiteId,
     pub metric: String,
-    #[serde(serialize_with = "clickhouse_datetime")]
+    #[serde(
+        serialize_with = "clickhouse_datetime",
+        deserialize_with = "clickhouse_datetime_de"
+    )]
     pub observed_at: DateTime<Utc>,
-    #[serde(serialize_with = "clickhouse_datetime")]
+    #[serde(
+        serialize_with = "clickhouse_datetime",
+        deserialize_with = "clickhouse_datetime_de"
+    )]
     pub ingested_at: DateTime<Utc>,
     pub value: f64,
     pub unit: String,
@@ -77,9 +119,15 @@ pub struct StateRow {
     pub tenant_id: TenantId,
     pub resource_id: ResourceId,
     pub site_id: SiteId,
-    #[serde(serialize_with = "clickhouse_datetime")]
+    #[serde(
+        serialize_with = "clickhouse_datetime",
+        deserialize_with = "clickhouse_datetime_de"
+    )]
     pub observed_at: DateTime<Utc>,
-    #[serde(serialize_with = "clickhouse_datetime")]
+    #[serde(
+        serialize_with = "clickhouse_datetime",
+        deserialize_with = "clickhouse_datetime_de"
+    )]
     pub ingested_at: DateTime<Utc>,
     /// How loud this transition is. A device going down is an error; coming back is
     /// informational, and an operator who is paged for a recovery stops reading pages.

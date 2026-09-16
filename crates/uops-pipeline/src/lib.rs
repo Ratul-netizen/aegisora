@@ -51,6 +51,7 @@
 
 pub mod attribute;
 pub mod batch;
+pub mod wal;
 
 use std::sync::Mutex;
 
@@ -61,6 +62,7 @@ use uops_store_ch::LogRow;
 
 pub use attribute::{EnrichStats, Enriched, Enricher, Enrichment};
 pub use batch::{Config as BatchConfig, Sink, Stats as BatchStats};
+pub use wal::{Config as WalConfig, Wal};
 
 /// Everything a row needs that the message itself cannot say.
 ///

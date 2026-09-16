@@ -2294,6 +2294,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "lru",
+ "serde_json",
  "tokio",
  "uops-core",
  "uops-identity",

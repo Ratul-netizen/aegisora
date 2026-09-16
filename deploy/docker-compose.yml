@@ -265,6 +265,14 @@ services:
       CLICKHOUSE_USER: uops
       CLICKHOUSE_PASSWORD: uops
       UOPS_SYSLOG_CONFIG: /srv/syslog/listeners.yaml
+      # Where rows go when ClickHouse will not take them. Retrying in memory survives a
+      # restart; it does not survive an upgrade that goes wrong, because memory is
+      # bounded and past the bound the oldest rows were being discarded.
+      #
+      # A named volume, so `docker compose down` keeps it: a spill that was thrown away
+      # on shutdown would lose exactly the logs written during the outage somebody is
+      # investigating.
+      UOPS_SYSLOG_SPILL: /srv/spill
       # No UOPS_KEK_FILE. A syslog collector opens no credentials -- it reads a socket
       # and writes rows -- so it is not given the key that decrypts every credential in
       # the installation. The poller needs it; this does not; so it does not get it.
@@ -272,6 +280,7 @@ services:
       # Read-only, and a bind mount rather than a named volume: this is configuration a
       # human edits and puts in a change ticket, not state the container owns.
       - ./syslog:/srv/syslog:ro
+      - syslog-spill:/srv/spill
     # No TLS. SPEC asks for syslog over TLS and the answer is a proxy in front of the TCP
     # port -- rustls' two production crypto providers both carry OpenSSL-licensed code
     # and neither is on deny.toml's allow-list, which is already why the ClickHouse and
@@ -287,3 +296,7 @@ volumes:
   # compose down` keeps it: losing it means every stored credential becomes
   # undecryptable, and `down -v` is the only way to say that on purpose.
   kek:
+  # The syslog write-ahead spill. Holds rows ClickHouse would not take, and is replayed
+  # on the next start -- so it must survive a restart, which is the whole reason it is a
+  # named volume rather than a tmpfs.
+  syslog-spill:

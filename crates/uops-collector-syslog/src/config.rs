@@ -40,6 +40,14 @@ use serde::Deserialize;
 /// Where the listener list is read from.
 pub const CONFIG_PATH: &str = "UOPS_SYSLOG_CONFIG";
 
+/// Where rows go when `ClickHouse` will not take them.
+///
+/// Unset means **no spill**, and that is a supported deployment rather than a
+/// misconfiguration: a read-only container, or an operator who would rather lose logs
+/// than fill a disk. Without it the batcher keeps its in-memory bound, which survives a
+/// restart but not an upgrade that goes wrong.
+pub const SPILL_PATH: &str = "UOPS_SYSLOG_SPILL";
+
 /// One tenant's ingress.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Listener {
@@ -79,6 +87,8 @@ pub struct Config {
     /// the whole point of a bound is that the drop is visible and counted rather than an
     /// out-of-memory kill that loses everything.
     pub queue: usize,
+    /// Where the write-ahead spill lives, if there is one. See [`SPILL_PATH`].
+    pub spill: Option<std::path::PathBuf>,
     /// How many tasks resolve identity in parallel, per listener.
     ///
     /// One would be enough for the cached path, which is a mutex and an LRU lookup. It
@@ -110,7 +120,10 @@ impl Config {
         let file: File = serde_yaml_ng::from_str(&text)
             .map_err(|e| format!("{path} is not a valid listener file: {e}"))?;
 
-        Self::from_parts(file, std::env::var("DATABASE_URL").ok())
+        Self::from_parts(file, std::env::var("DATABASE_URL").ok()).map(|c| Config {
+            spill: std::env::var(SPILL_PATH).ok().map(std::path::PathBuf::from),
+            ..c
+        })
     }
 
     fn from_parts(file: File, database_url: Option<String>) -> Result<Self, String> {
@@ -125,6 +138,7 @@ impl Config {
             listeners: file.listeners,
             postgres,
             clickhouse: uops_store_ch::ChConfig::from_env(),
+            spill: None,
             queue: DEFAULT_QUEUE,
             workers: std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get),
         })
@@ -147,8 +161,15 @@ impl Config {
                 format!("{} on {}", l.tenant, on.join(" + "))
             })
             .collect();
+        let spill = self.spill.as_ref().map_or_else(
+            // Worth saying out loud. An operator who thinks they configured a spill and
+            // did not should find out from the startup line, not from the rows_dropped
+            // counter during the outage it was meant to cover.
+            || format!("no spill (set {SPILL_PATH} to survive a long ClickHouse outage)"),
+            |p| format!("spill {}", p.display()),
+        );
         format!(
-            "{} listener(s): {}; queue {}, {} workers each",
+            "{} listener(s): {}; queue {}, {} workers each, {spill}",
             self.listeners.len(),
             binds.join(", "),
             self.queue,
