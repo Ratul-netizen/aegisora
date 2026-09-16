@@ -138,6 +138,22 @@ const CASES: &[RouteCase] = &[
         body: Some(r#"{"status":"down"}"#),
     },
     RouteCase {
+        path: "/api/v1/sites",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        // Placing a site on the map. Scoped: another tenant's site must be a 404, not a
+        // 403 — confirming the id exists would leak that customer's estate.
+        path: "/api/v1/sites/{id}/location",
+        probe: Some("/api/v1/sites/018f0000-0000-7000-8000-0000000000dd/location"),
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"location":{"latitude":23.8103,"longitude":90.4125}}"#),
+    },
+    RouteCase {
         // Every unmatched path under /api. Unscoped because it is a 404 for everyone,
         // including the caller's own tenant — there is nothing behind it to leak.
         path: "/api/{*rest}",

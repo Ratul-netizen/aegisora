@@ -188,6 +188,38 @@ export interface Page<T> {
   next: string | null;
 }
 
+/** Signed degrees, WGS 84 — what a phone or a map reports. */
+export interface Coordinate {
+  latitude: number;
+  longitude: number;
+}
+
+/** Resources at a site, by status. */
+export interface SiteCounts {
+  up: number;
+  down: number;
+  degraded: number;
+  unknown: number;
+  maintenance: number;
+  /** Decommissioned resources are in none of the above and not in this either. */
+  total: number;
+}
+
+/**
+ * A site as the map draws it.
+ *
+ * `location` is absent for most sites, for most customers: an operator places the ones
+ * that matter. The map lists the rest beside it rather than dropping them, because a
+ * site missing from a map looks like a site with nothing wrong.
+ */
+export interface Site {
+  id: string;
+  name: string;
+  timezone: string;
+  location?: Coordinate;
+  resources: SiteCounts;
+}
+
 export const api = {
   login: (email: string, password: string) =>
     request<void>("/api/v1/auth/login", { method: "POST", body: { email, password } }),
@@ -200,6 +232,15 @@ export const api = {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
     return request<Page<Resource>>(`/api/v1/resources${query}`, { tenant });
   },
+
+  sites: (tenant: string) => request<Site[]>("/api/v1/sites", { tenant }),
+
+  placeSite: (tenant: string, id: string, location: Coordinate | null) =>
+    request<void>(`/api/v1/sites/${encodeURIComponent(id)}/location`, {
+      method: "PUT",
+      tenant,
+      body: { location },
+    }),
 
   resource: (tenant: string, id: string) =>
     request<Resource>(`/api/v1/resources/${encodeURIComponent(id)}`, { tenant }),

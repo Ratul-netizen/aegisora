@@ -51,6 +51,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M2 — all 6 acceptance criteria met** | ✅ |
 | `uops-oui` | ✅ 9 — IEEE MAC assignments, all four registries |
 | device identity | ✅ make, model, serial, OS from a profile's `identity` block |
+| **M6 · the map** | ✅ site coordinates, status rollup, a tile-free world map |
 | `uops-profile` | ✅ 40 — 5 built-ins, schema, resolution |
 | `uops-poll` | ✅ 56 — wheel, jitter, counters, executor, planner, samples |
 | `uops-snmp` | ✅ 42 — walk, simulator, `snmp2` over UDP, real net-snmp |
@@ -271,6 +272,43 @@ CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails 
 if `.expose()` appears inside a logging macro; a grep that fails if a crypto primitive is
 used outside `uops-secrets`; `cargo-deny`; a CycloneDX SBOM; and a matrix building **both**
 the standard and FIPS crypto artifacts.
+
+### The map does not use tiles
+
+A tile layer means a tile server. This product is deployed on-premise and often
+air-gapped — the same argument `uops-oui` makes about the IEEE registry — so a map that
+fetched tiles would be a blank rectangle for exactly the customers most likely to have
+forty sites across a country. It would also send every viewer's map extent to a third
+party, which is a data-protection conversation nobody wants to have about a status board.
+
+So the coastline is Natural Earth's 110m land outline, converted by `scripts/worldmap.py`
+into one SVG path and bundled: 54 KB, about 20 KB gzipped, no network. Natural Earth is
+public domain and states that no permission or credit is required, which is a materially
+different position from the IEEE registry beside it.
+
+The cost is that this is a *locator* map — coastlines, no roads, no labels, no zoom into
+a street. For "which of my forty sites is red" that is the whole requirement.
+
+Equirectangular, because `x = lon + 180` and `y = 90 - lat` in a 360×180 viewBox means
+the browser needs no projection code and the pins are positioned by the same arithmetic
+as the coastline. A projection the pins and the map disagreed about would put every site
+slightly in the sea, and slightly is the hardest kind of wrong to notice.
+
+### Where a site is, and why not where a device is
+
+Coordinates are on `site`, not on `resource`: fifty switches in one building are not
+fifty places, and a coordinate per device is the same two numbers fifty times, invited to
+disagree.
+
+Not derived from an IP address either. Geo-IP answers a different question and for this
+product usually answers nothing — a management address is RFC 1918 and resolves nowhere,
+a public one resolves to whoever registered the block. An operator typing a coordinate
+once per site is more accurate than a lookup that is wrong invisibly.
+
+A pin's colour is worst-first and deliberately not a proportion: one device down out of
+two hundred is still an outage for whoever depends on it, and a pin that faded to amber
+because the other hundred and ninety-nine were fine would be hiding it. The size of the
+problem is in the numbers on the card.
 
 ### The OUI table reads all four IEEE registries
 

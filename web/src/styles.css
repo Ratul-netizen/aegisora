@@ -370,3 +370,106 @@ h2 {
   margin-top: 28px;
   font-size: 15px;
 }
+
+/* --- The map ------------------------------------------------------------------
+ *
+ * A locator map, drawn from a bundled outline rather than from tiles — see map.tsx on
+ * why an on-premise product cannot depend on a tile server. Everything here is sizing
+ * and colour; the projection is two lines of arithmetic in the component.
+ */
+
+.map-page .world {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* The outline is 360x180, so the box is exactly 2:1 and the map never distorts. */
+  aspect-ratio: 2 / 1;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.map-page .ocean {
+  fill: var(--bg-sunken);
+}
+
+.map-page .land {
+  fill: var(--bg-raised);
+  stroke: var(--border);
+  /* The viewBox is 360 units across and renders a few hundred pixels wide, so a stroke
+   * of 1 would be a coastline several pixels thick. */
+  stroke-width: 0.3;
+}
+
+.map-page .pin {
+  cursor: pointer;
+}
+
+.map-page .pin circle {
+  stroke: var(--bg-raised);
+  stroke-width: 0.4;
+}
+
+.map-page .pin:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.map-page .pin.selected circle {
+  stroke: var(--text);
+  stroke-width: 0.8;
+}
+
+/* A soft ring on anything down, so it is findable without relying on colour alone —
+ * which matters on a map the size of a postage stamp and for anybody who cannot
+ * distinguish the red from the green. */
+.map-page .halo {
+  fill: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.map-page .site-card {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.map-page .site-card h2 {
+  margin: 0 0 2px;
+  font-size: 1rem;
+}
+
+.map-page .site-card p {
+  margin: 0 0 6px;
+}
+
+.map-page .unplaced {
+  margin-top: 20px;
+}
+
+.map-page .unplaced h2 {
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.map-page .unplaced ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+
+.map-page .unplaced li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.map-page .unplaced .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: baseline;
+}

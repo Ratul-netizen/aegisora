@@ -127,6 +127,9 @@ export function Layout() {
         <Link to="/" search={keepSearch} activeProps={{ className: "active" }} activeOptions={{ exact: true }}>
           Overview
         </Link>
+        <Link to="/map" search={keepSearch} activeProps={{ className: "active" }}>
+          Map
+        </Link>
         <Link to="/resources" search={keepSearch} activeProps={{ className: "active" }}>
           Resources
         </Link>

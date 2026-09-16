@@ -11,8 +11,9 @@ pub mod auth;
 pub mod health;
 pub mod query;
 pub mod resources;
+pub mod sites;
 
-use axum::routing::{any, delete, get, patch, post};
+use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Router, middleware};
 
 use crate::audit;
@@ -35,6 +36,8 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/resources/{id}/status",
             patch(resources::set_status),
         )
+        .route("/api/v1/sites", get(sites::list))
+        .route("/api/v1/sites/{id}/location", put(sites::place))
         .route("/api/v1/query", post(query::run))
         // Deliberately above the audit layer as well as outside authentication: an
         // orchestrator polling every five seconds would otherwise write an audit row

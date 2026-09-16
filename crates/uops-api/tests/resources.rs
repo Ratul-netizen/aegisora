@@ -407,3 +407,140 @@ async fn the_audit_trail_does_not_cross_tenants() {
     );
     assert!(!theirs.audit_log().await.is_empty());
 }
+
+/// A site in this fixture's tenant.
+async fn site(f: &Fixture, name: &str) -> uops_core::SiteId {
+    let id = uops_core::SiteId::new();
+    sqlx::query("INSERT INTO site (id, tenant_id, name) VALUES ($1, $2, $3)")
+        .bind(id.into_uuid())
+        .bind(f.tenant.into_uuid())
+        .bind(name)
+        .execute(f.store.pool())
+        .await
+        .expect("site");
+    id
+}
+
+#[tokio::test]
+async fn a_viewer_sees_the_map_and_cannot_change_it() {
+    // Reading the estate is what everybody does; placing a site changes what everybody
+    // else's map shows, which is an operator's decision.
+    let f = fixture("map-viewer", Role::Viewer).await;
+    let id = site(&f, "dhaka").await;
+
+    let (status, body) = f.call(f.get("/api/v1/sites")).await;
+    assert_eq!(status, StatusCode::OK);
+    let sites = body.as_array().expect("an array");
+    assert_eq!(sites.len(), 1);
+    assert_eq!(sites[0]["name"], "dhaka");
+    // Absent rather than null: most sites are unplaced and the field is skipped.
+    assert!(sites[0].get("location").is_none(), "{:?}", sites[0]);
+    assert_eq!(sites[0]["resources"]["total"], 0);
+
+    let (status, _) = f
+        .call(f.send(
+            "PUT",
+            &format!("/api/v1/sites/{id}/location"),
+            &serde_json::json!({"location": {"latitude": 23.8103, "longitude": 90.4125}}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn an_operator_places_a_site_and_it_appears_on_the_map() {
+    let f = fixture("map-operator", Role::Operator).await;
+    let id = site(&f, "chattogram").await;
+
+    let (status, _) = f
+        .call(f.send(
+            "PUT",
+            &format!("/api/v1/sites/{id}/location"),
+            &serde_json::json!({"location": {"latitude": 22.3569, "longitude": 91.7832}}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, body) = f.call(f.get("/api/v1/sites")).await;
+    let location = &body.as_array().expect("array")[0]["location"];
+    assert!((location["latitude"].as_f64().expect("lat") - 22.3569).abs() < 1e-9);
+    assert!((location["longitude"].as_f64().expect("lon") - 91.7832).abs() < 1e-9);
+
+    // And taken off again, which is `null` rather than a missing field: an operator
+    // clearing a location is saying something, and an absent key would be the client
+    // forgetting to send one.
+    let (status, _) = f
+        .call(f.send(
+            "PUT",
+            &format!("/api/v1/sites/{id}/location"),
+            &serde_json::json!({ "location": null }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, body) = f.call(f.get("/api/v1/sites")).await;
+    assert!(body.as_array().expect("array")[0].get("location").is_none());
+}
+
+#[tokio::test]
+async fn a_coordinate_in_the_sea_is_refused_by_the_api() {
+    // The constraint is in the schema; what this checks is that it arrives as a 400 with
+    // a readable message rather than as a 500 with a constraint name.
+    let f = fixture("map-typo", Role::Operator).await;
+    let id = site(&f, "atlantis").await;
+
+    let (status, body) = f
+        .call(f.send(
+            "PUT",
+            &format!("/api/v1/sites/{id}/location"),
+            &serde_json::json!({"location": {"latitude": 91.0, "longitude": 0.0}}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("latitude"),
+        "the message must say which number was wrong: {body}"
+    );
+}
+
+#[tokio::test]
+async fn placing_a_site_is_in_the_audit_log() {
+    // SPEC §M1: an entry for every mutating call. A map that somebody redrew overnight
+    // is exactly the change an operator asks "who did that" about.
+    let f = fixture("map-audit", Role::Operator).await;
+    let id = site(&f, "sylhet").await;
+
+    f.call(f.send(
+        "PUT",
+        &format!("/api/v1/sites/{id}/location"),
+        &serde_json::json!({"location": {"latitude": 24.8949, "longitude": 91.8687}}),
+    ))
+    .await;
+
+    let audit = f.audit_log().await;
+    assert!(
+        audit
+            .iter()
+            .any(|(action, target)| action == "site.location" && target == &format!("site:{id}")),
+        "{audit:?}"
+    );
+}
+
+#[tokio::test]
+async fn reading_the_map_is_in_the_access_log() {
+    // The half SPEC calls out and nobody notices missing: a *read* leaves a row too.
+    let f = fixture("map-access", Role::Viewer).await;
+    site(&f, "rajshahi").await;
+
+    f.call(f.get("/api/v1/sites")).await;
+
+    let log = f.access_log().await;
+    assert!(
+        log.iter()
+            .any(|(target, rows)| target == "site.list" && *rows == Some(1)),
+        "{log:?}"
+    );
+}

@@ -435,6 +435,26 @@ jobs:
           cp "$RUNNER_TEMP/identity.bak" "$F"
           echo "ok: a review that outlives its own answer fails the suite"
 
+      # SPEC makes decommissioning a soft delete so history still resolves. A map that
+      # counted retired equipment would be showing an estate the customer no longer has,
+      # and the count on a pin is what an operator sizes a problem by.
+      - name: The site tests fail when the map counts decommissioned resources
+        run: |
+          F=crates/uops-store-pg/src/sites.rs
+          cp "$F" "$RUNNER_TEMP/sites.bak"
+          sed -i "s/AND r.status <> 'decommissioned'//" "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if SQLX_OFFLINE=false cargo test -p uops-store-pg --test sites > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/sites.bak" "$F"
+            echo "::error::the map counted retired equipment as part of the estate"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/sites.bak" "$F"
+          echo "ok: counting decommissioned resources fails the suite"
+
       # A vendor read off a MAC is an inference; a vendor the device reported is a
       # statement, and so is one an operator typed. The `vendor IS NULL` predicate is
       # what keeps the guess from overwriting either, in the statement rather than in a
