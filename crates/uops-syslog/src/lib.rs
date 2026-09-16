@@ -26,11 +26,16 @@
 //!
 //! # What this crate does not do
 //!
-//! No sockets, no framing of a byte stream into messages (that is [`framing`]), no
-//! identity resolution, no enrichment. One message in, one parsed message out, so the
-//! wire formats can be tested exhaustively without a network.
+//! No identity resolution and no enrichment: those need a database and a cache, and
+//! belong to the pipeline above this. What is here is the wire — [`rfc5424`] and
+//! [`rfc3164`] parse one message, [`framing`] divides a TCP stream into messages, and
+//! [`receiver`] reads them off a socket.
+//!
+//! The parsers themselves touch no I/O at all, which is what lets both wire formats be
+//! tested exhaustively without a network.
 
 pub mod framing;
+pub mod receiver;
 pub mod rfc3164;
 pub mod rfc5424;
 

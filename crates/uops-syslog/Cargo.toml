@@ -9,11 +9,18 @@ repository.workspace = true
 publish.workspace = true
 authors.workspace = true
 
-# No sockets and no storage: one message in, one parsed message out, so both wire formats
-# can be tested exhaustively without a network.
 [dependencies]
 chrono.workspace = true
 thiserror.workspace = true
+# The receivers. The parsers themselves touch none of this -- one message in, one parsed
+# message out -- which is what lets both wire formats be tested exhaustively without a
+# network. `socket2` is for SO_RCVBUF, which SPEC asks to be raised explicitly and which
+# tokio's UdpSocket does not expose.
+socket2.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "sync", "io-util", "time", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]
 workspace = true

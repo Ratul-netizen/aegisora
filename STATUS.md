@@ -61,8 +61,10 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | counter wrap → no negative rate | ✅ computed in `ClickHouse` at query time |
 | ICMP availability | ✅ unprivileged datagram socket, no capability needed |
 | p95 through the binary | ⬜ measured in the library only |
-| **M3 · syslog parsing** | ✅ RFC 5424, RFC 3164, RFC 6587 framing — 39 tests |
-| M3 · receivers, pipeline, Log Explorer | ⬜ |
+| **M3 · syslog parsing** | ✅ RFC 5424, RFC 3164, RFC 6587 framing |
+| **M3 · syslog receivers** | ✅ UDP with drop counting, TCP with backpressure — 46 tests |
+| M3 · syslog over TLS | ⬜ blocked on a crypto-provider licence decision |
+| M3 · pipeline, OTLP, Log Explorer | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -275,6 +277,30 @@ CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails 
 if `.expose()` appears inside a logging macro; a grep that fails if a crypto primitive is
 used outside `uops-secrets`; `cargo-deny`; a CycloneDX SBOM; and a matrix building **both**
 the standard and FIPS crypto artifacts.
+
+### UDP and TCP fail in opposite directions
+
+They are written separately rather than behind one transport abstraction, because the
+right behaviour under load is the opposite in each.
+
+**UDP cannot push back.** A datagram that arrives with nowhere to go is gone, and the
+sender will never know or retry. So the receiver drops it and *counts* it — SPEC: *"a
+silently dropping syslog receiver is worse than none"*. It uses `try_send` rather than
+`send` for exactly this: awaiting a full channel would stop reading the socket, and the
+kernel would then drop the rest of the burst invisibly, which is the outcome SPEC is
+warning about. Dropping in userspace is visible; dropping in the kernel is not.
+
+**TCP can push back.** Not reading makes the receive window shrink, which makes the
+sender slow down. So it uses `send` and waits. A TCP receiver that dropped under load
+would be discarding something it could simply have taken more slowly.
+
+What the drop counter does *not* include is datagrams the kernel discarded before this
+process saw them. Those need `SO_RXQ_OVFL` and a `recvmsg` with control messages, which
+is Linux-only and is not wired up. What is done instead is the half SPEC names: `SO_RCVBUF`
+is raised explicitly, and **what the kernel actually granted is reported** — Linux caps
+the request at `net.core.rmem_max`, which on a stock install is 208 KiB against the 8 MiB
+asked for. A receiver that asked for 8 MB, silently got 208 KB and reported success would
+be precisely the silent dropping the requirement exists to prevent.
 
 ### Putting the poller in compose was three pieces, not one
 
@@ -604,6 +630,7 @@ M1 is where they start.
 | **Shared-database contamination** | intermittent local failures | **Recurred, larger.** The development database had accumulated **2 608 tenants** from every integration test that ever panicked before its clean-up. Harmless until the poller existed; now a reload reads *every* tenant and issues two queries each, so an unswept database turned one reload into five thousand round trips and the live poller test from 2.6 s into 29 s. `db.sh sweep` now removes every tenant but `default` and everything under it, and the poller's live test takes its own scratch database rather than sharing. Earlier instance: the scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
+| **Syslog over TLS needs a crypto provider** | SPEC §M3's TLS transport | `rustls` has two production providers and both carry OpenSSL-licensed code: `aws-lc-rs` is `ISC AND MIT AND OpenSSL`, and `ring` includes BoringSSL-derived sources under the same terms. Neither is on `deny.toml`'s allow-list, which is why this product has no TLS anywhere — the ClickHouse and PostgreSQL clients were both built without it for the same reason. Three ways out: add the OpenSSL licence to the allow-list; use a pure-RustCrypto provider such as `rustls-rustcrypto`, which is unaudited; or terminate syslog-over-TLS at a proxy the way HTTP already is. **My recommendation is the proxy**, because it is what every other transport here already does and it needs no new dependency — but it is a product decision about what an on-premise install is expected to run |
 | **The bundled IEEE data's terms** | a commercial release | `crates/uops-oui/data/assignments.tsv` is derived from the four public IEEE registries. They are redistributed widely — Wireshark, nmap and Debian's `ieee-data` all ship them — which is the basis for bundling. It is **not** a licence review: IEEE attaches no SPDX identifier, and `cargo deny` checks crate licences rather than the terms of embedded data, so nothing in CI is looking at this |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |

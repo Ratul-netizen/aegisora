@@ -2380,7 +2380,9 @@ name = "uops-syslog"
 version = "0.0.1"
 dependencies = [
  "chrono",
+ "socket2",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
