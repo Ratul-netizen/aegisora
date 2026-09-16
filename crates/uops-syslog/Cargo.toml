@@ -17,8 +17,13 @@ thiserror.workspace = true
 # network. `socket2` is for SO_RCVBUF, which SPEC asks to be raised explicitly and which
 # tokio's UdpSocket does not expose.
 socket2.workspace = true
-async-trait.workspace = true
 uops-core.workspace = true
+# Attribution -- who the message belongs to, which site, which vendor. Worked out once
+# in the pipeline for every collector rather than per-collector: SPEC M0.2 is explicit
+# that "resolution happens once, in the pipeline, not in each collector", because two
+# collectors resolving independently would each create their own provisional resource
+# for the same unknown device.
+uops-pipeline.workspace = true
 # The output type. A syslog message and an OTLP one become the same row, which is what
 # makes them correlatable — so the row type is the store's rather than this crate's.
 uops-store-ch.workspace = true

@@ -7,10 +7,10 @@
 //!
 //! # What it is allowed to answer
 //!
-//! Only the unambiguous case: every observed identifier is cached, they all agree on one
-//! resource, and their combined confidence clears the auto-merge bar. Anything else —
-//! one unknown identifier, two identifiers disagreeing, evidence that only adds up to a
-//! review — goes to the store.
+//! Only the unambiguous case: every observed identifier is cached and they all agree on
+//! one resource. Anything else — one unknown identifier, two identifiers disagreeing —
+//! goes to the store, because an identifier that matched nothing is new evidence and
+//! attaching it is a decision.
 //!
 //! That restriction is what makes the cache safe. A cache that answered partial matches
 //! would be deciding, and deciding is what the resolver does with the whole picture in
@@ -27,7 +27,7 @@ use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 use lru::LruCache;
-use uops_core::{AUTO_MERGE_THRESHOLD, Identifier, ResourceId, TenantId, combine_confidence};
+use uops_core::{Identifier, ResourceId, TenantId};
 
 /// What a cached lookup concluded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,8 +102,19 @@ impl ResolutionCache {
         *self.lock_stats()
     }
 
-    /// Answer only if every identifier is known, they agree, and the evidence is strong
-    /// enough to have been auto-merged had the store been asked.
+    /// Answer only if every identifier is known and they all agree on one resource.
+    ///
+    /// That is the same rule `Resolver::resolve` applies on a cold cache — see
+    /// `exclusive_match` — and it is deliberately **not** the confidence model. An
+    /// identifier belongs to exactly one resource, so an observation whose every
+    /// identifier is already attached to the same resource is that resource by prior
+    /// assertion; the base confidences answer the different question of whether two
+    /// independently discovered resources are the same box.
+    ///
+    /// An earlier version also required the combined confidence to clear the auto-merge
+    /// bar. It made this cache answer nothing in the case it exists for: a syslog
+    /// message carries a hostname and an address, which combine to 0.93, so every
+    /// message missed and went to `PostgreSQL`.
     #[must_use]
     pub fn lookup(&self, tenant: TenantId, identifiers: &[Identifier]) -> Cached {
         if identifiers.is_empty() {
@@ -112,7 +123,6 @@ impl ResolutionCache {
         }
 
         let mut resolved: Option<ResourceId> = None;
-        let mut confidences = Vec::with_capacity(identifiers.len());
 
         {
             let mut entries = self.lock_entries();
@@ -128,16 +138,7 @@ impl ResolutionCache {
                     return Cached::Miss;
                 }
                 resolved = Some(found);
-                confidences.push(identifier.kind.base_confidence());
             }
-        }
-
-        // A single hostname is cached and unambiguous but only 0.65 — not enough to
-        // attach telemetry on its own, and the cache must apply the same bar the
-        // resolver would.
-        if combine_confidence(&confidences) < AUTO_MERGE_THRESHOLD {
-            self.lock_stats().misses += 1;
-            return Cached::Miss;
         }
 
         self.lock_stats().hits += 1;
@@ -225,25 +226,52 @@ mod tests {
     }
 
     #[test]
-    fn weak_evidence_is_not_answered_even_when_it_is_cached() {
-        // A hostname alone is 0.65. It is perfectly well known and still not enough to
-        // attach telemetry — the cache has to apply the same bar the resolver would, or
-        // it becomes a way to bypass the thresholds entirely.
+    fn a_single_weak_identifier_is_answered_once_it_is_known() {
+        // This test asserted the opposite until 2026-09-16, and the opposite was wrong.
+        //
+        // The old rule was that a hostname alone is 0.65, so the cache must refuse it and
+        // apply the same bar the resolver would. That reasoning confuses two different
+        // questions. The base confidences say how much sharing an identifier proves that
+        // two *independently discovered* resources are the same box. An entry in this
+        // cache is not that: it is `remember` recording that this identifier already
+        // belongs to that resource, which is `UNIQUE (tenant_id, kind, value)` — one
+        // resource, by assertion, not by inference.
+        //
+        // Applying the bar here made the cache answer nothing in the case it exists for.
+        // A syslog message carries a hostname and a source address, which combine to
+        // 0.93, under 0.95 — so every message missed, went to PostgreSQL, matched its own
+        // resource at 0.93, and was filed as a review. Every device in the estate became
+        // a queue item by talking to us twice. See `resolver::exclusive_match`.
         let cache = ResolutionCache::default();
         let tenant = TenantId::new();
         let observed = vec![ident(IdentifierKind::Hostname, "rtr-01")];
-
-        cache.remember(tenant, &observed, ResourceId::new());
-        assert_eq!(cache.lookup(tenant, &observed), Cached::Miss);
-
-        // The same hostname alongside a MAC clears the bar: 1 − 0.35×0.10 = 0.965.
-        let stronger = vec![
-            ident(IdentifierKind::Hostname, "rtr-01"),
-            ident(IdentifierKind::Mac, "00:11:22:33:44:55"),
-        ];
         let resource = ResourceId::new();
-        cache.remember(tenant, &stronger, resource);
-        assert_eq!(cache.lookup(tenant, &stronger), Cached::Resolved(resource));
+
+        cache.remember(tenant, &observed, resource);
+        assert_eq!(cache.lookup(tenant, &observed), Cached::Resolved(resource));
+    }
+
+    #[test]
+    fn an_identifier_nobody_has_seen_still_misses() {
+        // The rule that did not change, and the one that matters: an identifier which
+        // matched nothing is new evidence, and attaching it is a decision the resolver
+        // makes with the whole picture. A cache that guessed here would be deciding.
+        let cache = ResolutionCache::default();
+        let tenant = TenantId::new();
+        let resource = ResourceId::new();
+
+        cache.remember(
+            tenant,
+            &[ident(IdentifierKind::Hostname, "rtr-01")],
+            resource,
+        );
+
+        // The hostname is known; the address is not. Not answerable here.
+        let with_new_evidence = vec![
+            ident(IdentifierKind::Hostname, "rtr-01"),
+            ident(IdentifierKind::MgmtIp, "10.0.0.1"),
+        ];
+        assert_eq!(cache.lookup(tenant, &with_new_evidence), Cached::Miss);
     }
 
     #[test]

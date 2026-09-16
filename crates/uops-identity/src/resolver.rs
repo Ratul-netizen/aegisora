@@ -101,7 +101,27 @@ impl<S: IdentityStore> Resolver<S> {
         }
 
         let hits = self.store.lookup(tenant, &observed.identifiers).await?;
+
         let candidates = self.assemble_candidates(tenant, observed, &hits).await?;
+
+        // A repeat sighting. See `exclusive_match` for why this is a match rather than
+        // whatever the identifiers happen to be worth.
+        //
+        // It goes through `attach_and_record` like any other match rather than returning
+        // early, which matters twice: the decision is on the record, and
+        // `resource_identifier.last_seen` advances, which is what makes a stale
+        // identifier distinguishable from a live one. Neither costs anything at volume,
+        // because this is the *uncached* path — it runs once per device per process, and
+        // every message after it is a cache hit that touches nothing.
+        if let Some(best) = exclusive_match(&observed.identifiers, &hits).and_then(|id| {
+            candidates
+                .iter()
+                .find(|c| c.resource_id == id && c.contradiction.is_none())
+        }) {
+            return self
+                .attach_and_record(tenant, observed, best, best.confidence)
+                .await;
+        }
 
         let Some(best) = pick_best(&candidates) else {
             return self
@@ -305,6 +325,14 @@ impl<S: IdentityStore> Resolver<S> {
         )
         .await?;
 
+        // Deliberately *not* cached here. The identifiers do now belong to this resource,
+        // so caching them would be correct — and it would make the second observation of
+        // every device invisible: no decision row, and no `last_seen` advance, because
+        // the cached path writes nothing.
+        //
+        // Letting it go to the store once more costs one query per device per process
+        // and buys the audit trail. `exclusive_match` catches it there, records the
+        // match, and seeds the cache; every message after that is a cache hit.
         Ok(Resolution::Created { resource_id })
     }
 
@@ -446,6 +474,60 @@ fn matches_of(identifiers: &[Identifier]) -> Vec<Match> {
 }
 
 /// Observed identifiers that pointed at nothing.
+/// The resource every observed identifier already belongs to, if there is exactly one.
+///
+/// This is **identity by prior assertion**, and it is deliberately not run through the
+/// confidence model. `UNIQUE (tenant_id, kind, value)` means an identifier belongs to
+/// exactly one resource, so an observation whose every identifier is already attached to
+/// the same resource — and to no other — is not evidence *about* which resource it is.
+/// It is the resource, by the assertion somebody or something already made.
+///
+/// The base confidences answer a different question: how much does sharing this
+/// identifier prove that two **independently discovered** resources are the same box. A
+/// hostname is 0.65 there because two customers each have a `core-sw-01` and a
+/// replacement box inherits its predecessor's name. None of that is in play when the
+/// observation and the resource are the same row of `resource_identifier`.
+///
+/// # What this fixes, and it is not a micro-optimisation
+///
+/// Without it a device is a review item by the second message it sends. The first
+/// message creates a resource carrying the device's hostname and address; the second
+/// matches that resource on exactly those identifiers, scores 0.93 — under the 0.95
+/// auto-merge bar — and mints a provisional resource plus a queue item asking whether
+/// the device is itself. Every device in the estate, from its own traffic. The queue
+/// becomes an inventory list and the telemetry splits across two resources.
+///
+/// It is also what makes SPEC §M3's numbers reachable. The cache applies the same rule,
+/// so this path runs on a cold cache and the cached one runs afterwards; without either,
+/// a syslog stream would hit `PostgreSQL` for every message and the >99% hit rate would
+/// be 0%.
+///
+/// # What is deliberately *not* covered
+///
+/// An observation with an identifier that matches **nothing** is not a repeat sighting —
+/// it carries new evidence, and attaching it is a decision. That is the case where a
+/// DHCP lease moves a management address to a different box, and it still goes through
+/// the confidence model and can still become a review.
+fn exclusive_match(observed: &[Identifier], hits: &[crate::store::Hit]) -> Option<ResourceId> {
+    if observed.is_empty() || hits.is_empty() {
+        return None;
+    }
+
+    let resource_id = hits[0].resource_id;
+    // Two resources in the hits is the ambiguity the resolver exists to adjudicate.
+    if hits.iter().any(|hit| hit.resource_id != resource_id) {
+        return None;
+    }
+    // An identifier that matched nothing is new evidence, not a repeat.
+    let every_one_matched = observed.iter().all(|identifier| {
+        hits.iter().any(|hit| {
+            hit.identifier.kind == identifier.kind && hit.identifier.value == identifier.value
+        })
+    });
+
+    every_one_matched.then_some(resource_id)
+}
+
 fn unmatched(observed: &[Identifier], hits: &[crate::store::Hit]) -> Vec<Identifier> {
     observed
         .iter()

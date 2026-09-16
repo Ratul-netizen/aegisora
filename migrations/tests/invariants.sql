@@ -380,6 +380,31 @@ SELECT pg_temp.check(
       WHERE id = '00000000-0000-0000-0000-0000000000a2'),
     'updated_at must be set by the trigger, overriding whatever the writer supplied');
 
+-- Every foreign key has an index on its referencing side.
+--
+-- PostgreSQL indexes the referenced side automatically and the referencing side never,
+-- so an unindexed one makes every parent DELETE or key UPDATE scan the whole child
+-- table, once per row. It stays invisible until somebody deletes in bulk — a
+-- decommissioned site, a removed customer, a retention job — and then the cost is the
+-- product of two table sizes. Migration 0010 has the story; this is the guard that stops
+-- the next foreign key being added without one.
+--
+-- Coverage, not exact shape: an index on (a, b, c) serves a key of (a, b), which is why
+-- this compares a prefix of indkey rather than equality.
+SELECT pg_temp.check(
+    NOT EXISTS (
+        SELECT 1
+          FROM pg_constraint c
+         WHERE c.contype = 'f'
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM pg_index i
+                WHERE i.indrelid = c.conrelid
+                  AND (i.indkey::smallint[])[0:array_length(c.conkey, 1) - 1] @> c.conkey
+           )
+    ),
+    'every foreign key needs an index on the referencing side');
+
 ROLLBACK;
 
 \echo 'schema invariants: OK'

@@ -2234,6 +2234,20 @@ name = "uops-oui"
 version = "0.0.1"
 
 [[package]]
+name = "uops-pipeline"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "lru",
+ "tokio",
+ "uops-core",
+ "uops-identity",
+ "uops-store-ch",
+ "uuid",
+]
+
+[[package]]
 name = "uops-poll"
 version = "0.0.1"
 dependencies = [
@@ -2379,12 +2393,12 @@ dependencies = [
 name = "uops-syslog"
 version = "0.0.1"
 dependencies = [
- "async-trait",
  "chrono",
  "socket2",
  "thiserror 2.0.20",
  "tokio",
  "uops-core",
+ "uops-pipeline",
  "uops-store-ch",
 ]
 

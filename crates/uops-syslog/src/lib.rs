@@ -29,13 +29,15 @@
 //! No identity resolution: that needs a database and a cache, and belongs to the daemon
 //! that owns both. What is here is everything from the wire to a row — [`rfc5424`] and
 //! [`rfc3164`] parse one message, [`framing`] divides a TCP stream into messages,
-//! [`receiver`] reads them off a socket, [`normalize`] turns one into a `LogRow`, and
-//! [`batch`] accumulates rows into the few large inserts `ClickHouse` wants.
+//! [`receiver`] reads them off a socket, and [`normalize`] turns one into a `LogRow`.
+//!
+//! Nor resolution, enrichment or batching: those are the same for every collector and
+//! live in `uops-pipeline`, which is the reason [`normalize::to_row`] takes an
+//! [`Attribution`](uops_pipeline::Attribution) rather than working one out.
 //!
 //! The parsers themselves touch no I/O at all, which is what lets both wire formats be
 //! tested exhaustively without a network.
 
-pub mod batch;
 pub mod framing;
 pub mod normalize;
 pub mod receiver;

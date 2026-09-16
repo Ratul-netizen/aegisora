@@ -1,0 +1,25 @@
+[package]
+name = "uops-pipeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+lru.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+uops-core.workspace = true
+uops-identity.workspace = true
+uops-store-ch.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "test-util"] }
+uuid.workspace = true
+
+[lints]
+workspace = true

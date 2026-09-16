@@ -33,7 +33,7 @@
 
 use std::collections::BTreeMap;
 
-use uops_core::{ResourceId, SiteId, TenantId};
+use uops_pipeline::Attribution;
 use uops_store_ch::LogRow;
 
 use crate::receiver::Received;
@@ -41,27 +41,9 @@ use crate::receiver::Received;
 /// What the `source_kind` column says about anything from here.
 pub const SOURCE_KIND: &str = "syslog";
 
-/// Everything the message itself cannot say.
-///
-/// Identity resolution decides the first three and enrichment decides the vendor; this
-/// module does not guess at any of them, which is why they arrive as an argument rather
-/// than being defaulted here.
-#[derive(Clone, Copy, Debug)]
-pub struct Attribution {
-    pub tenant_id: TenantId,
-    pub resource_id: ResourceId,
-    /// The nil uuid when the resource has no site — `MetricRow` makes the same choice and
-    /// for the same reason: the column is not nullable and one answer to "no site" beats
-    /// two.
-    pub site_id: SiteId,
-    /// `cisco`, `mikrotik`, or empty. From the resource's profile, not from the message:
-    /// a vendor guessed per-message would disagree with itself across a device's log.
-    pub vendor: &'static str,
-}
-
 /// Turn one received message into one row.
 #[must_use]
-pub fn to_row(received: &Received, attribution: Attribution) -> LogRow {
+pub fn to_row(received: &Received, attribution: &Attribution) -> LogRow {
     let message = &received.message;
     let mut attributes = BTreeMap::new();
 
@@ -114,7 +96,7 @@ pub fn to_row(received: &Received, attribution: Attribution) -> LogRow {
         observed_at,
         ingested_at: received.received_at,
         source_kind: SOURCE_KIND.to_owned(),
-        source_vendor: attribution.vendor.to_owned(),
+        source_vendor: attribution.vendor.clone(),
         severity: message.severity.as_str().to_owned(),
         facility: message.facility,
         body: message.message.clone(),
@@ -179,10 +161,10 @@ mod tests {
 
     fn attribution() -> Attribution {
         Attribution {
-            tenant_id: TenantId::new(),
-            resource_id: ResourceId::new(),
-            site_id: SiteId::nil(),
-            vendor: "cisco",
+            tenant_id: uops_core::TenantId::new(),
+            resource_id: uops_core::ResourceId::new(),
+            site_id: uops_core::SiteId::nil(),
+            vendor: "cisco".to_owned(),
         }
     }
 
@@ -194,7 +176,7 @@ mod tests {
         // still look fine on their own.
         let row = to_row(
             &received("<34>Oct 11 22:14:15 rtr-01 sshd[1234]: it happened"),
-            attribution(),
+            &attribution(),
         );
         assert_eq!(
             row.attributes.get("host.name").map(String::as_str),
@@ -221,7 +203,7 @@ mod tests {
         // exists.
         let row = to_row(
             &received("<165>1 2026-09-16T12:00:00Z h app 1 ID47 [a@1 k=\"v\"] body"),
-            attribution(),
+            &attribution(),
         );
         assert_eq!(
             row.attributes.get("syslog.msgid").map(String::as_str),
@@ -247,7 +229,7 @@ mod tests {
     fn a_device_timestamp_wins_and_the_receipt_time_is_kept_beside_it() {
         let row = to_row(
             &received("<34>1 2026-09-16T11:59:00Z h a - - - late arrival"),
-            attribution(),
+            &attribution(),
         );
         assert_eq!(row.observed_at.to_rfc3339(), "2026-09-16T11:59:00+00:00");
         assert_eq!(row.ingested_at.to_rfc3339(), "2026-09-16T12:00:00+00:00");
@@ -259,7 +241,7 @@ mod tests {
         // Without the substitution the row lands at the Unix epoch and sorts to the
         // beginning of every search, which is worse than being a few seconds out. Saying
         // so is what makes a timeline nobody can trust into one somebody can question.
-        let row = to_row(&received("no priority, no timestamp"), attribution());
+        let row = to_row(&received("no priority, no timestamp"), &attribution());
         assert_eq!(row.observed_at, row.ingested_at);
         assert_eq!(
             row.attributes
@@ -273,7 +255,7 @@ mod tests {
     fn a_parse_failure_is_a_row_with_the_text_and_the_reason() {
         // SPEC: never dropped, `parse.error` set, the raw bytes as the body. One filter
         // finds every malformed message in the estate.
-        let row = to_row(&received("<34 this is broken"), attribution());
+        let row = to_row(&received("<34 this is broken"), &attribution());
         assert_eq!(row.body, "<34 this is broken");
         assert!(row.attributes.contains_key("parse.error"));
     }

@@ -63,7 +63,9 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | p95 through the binary | ⬜ measured in the library only |
 | **M3 · syslog parsing** | ✅ RFC 5424, RFC 3164, RFC 6587 framing |
 | **M3 · syslog receivers** | ✅ UDP with drop counting, TCP with backpressure — 46 tests |
-| **M3 · normalize + batch** | ✅ syslog → `LogRow` on semconv keys, batched inserts — 59 tests |
+| **M3 · normalize + batch** | ✅ syslog → `LogRow` on semconv keys, batched inserts |
+| **M3 · `uops-pipeline`** | ✅ resolve + enrich + batch, shared by every collector — 17 tests |
+| identity cache hit rate > 99% | ✅ measured, once the resolver stopped asking the wrong question |
 | M3 · syslog over TLS | ✅ **decided: terminated at a proxy**, not in-process |
 | M3 · the syslog daemon, OTLP, Log Explorer | ⬜ |
 | M4 | ⬜ |
@@ -648,6 +650,69 @@ M1 is where they start.
 
 ## Decided since the last update
 
+**Every device was going to acquire a duplicate of itself by its second message.**
+The worst defect found since the KEK rotation bug, and found the same way: by writing a
+test for the ordinary case and watching it fail.
+
+A device sends syslog carrying a hostname and a source address. Those combine under
+noisy-OR to 0.93, which is under the 0.95 auto-merge bar, so resolution filed it as a
+**review**: a provisional resource, a queue item, and the device's logs landing on the
+twin rather than on the device the poller already knew. Every device in the estate, from
+its own traffic, forever. The review queue would have become an inventory list, and the
+telemetry would have split across two resources — which is the exact failure this product
+exists to prevent.
+
+The bug was that the confidence model was being asked the wrong question. Those numbers
+answer *"how much does sharing this identifier prove that two **independently
+discovered** resources are the same box?"* — where a hostname really is weak, because two
+customers each have a `core-sw-01` and a replacement box inherits its predecessor's name.
+None of that applies when the observation's identifiers are **already attached to that
+one resource and to no other**. `UNIQUE (tenant_id, kind, value)` makes an identifier
+belong to exactly one resource, so a repeat sighting is not evidence *about* which
+resource it is. It is the resource, by the assertion somebody already made.
+
+`resolver::exclusive_match` is that rule: every observed identifier already attached to
+the same single resource, nothing pointing anywhere else, no tier-1 contradiction. It
+goes through `attach_and_record` like any other match rather than returning early, so the
+decision is on the record and `resource_identifier.last_seen` still advances — and it
+costs nothing at volume, because it is the *uncached* path and runs once per device per
+process.
+
+The cache had the same bug from the same reasoning, and its comment was the clearest
+statement of the mistake: *"a single hostname is cached and unambiguous but only 0.65 —
+not enough to attach telemetry on its own."* Applying the bar there made the cache answer
+nothing in the case it exists for, so both of SPEC §M3's numeric acceptance criteria —
+50 000 msg/s and a >99% identity cache hit rate — were unreachable. The hit rate was 0%.
+
+`create_for` deliberately still does **not** seed the cache. It would be correct, and it
+would make the second observation of every device invisible: no decision row, no
+`last_seen`. One extra query per device per process buys the audit trail.
+
+Three existing tests asserted the old behaviour and have been rewritten with the
+reasoning above, including the one named `evidence_in_the_review_band_does_not_auto_merge`.
+The review band itself is unchanged and still tested — by
+`a_partial_match_with_new_evidence_is_still_a_review` — for the case it is actually for:
+the address matches a known device, the hostname matches nothing, so the message is
+asserting something new and a DHCP lease may have moved that address.
+
+**Every foreign key now has an index on its referencing side.** PostgreSQL indexes the
+referenced side automatically and the referencing side never, so every parent `DELETE`
+scanned each child table once per row. Eight constraints had no index, including
+`user_tenant_role_tenant_id_fkey`, which is `ON DELETE CASCADE` — so removing a tenant
+scanned every role grant in the installation, which is exactly what `db.sh sweep` does in
+a loop.
+
+Found by the API scale test failing its own clean-up with `57014 canceling statement due
+to statement timeout`, inside PostgreSQL's own FK check against `resource_alias`. It
+passes alone and fails under a loaded server, which is the signature of something
+quadratic rather than something broken. Migration 0010 adds the eight indexes;
+`migrations/tests/` now has a guard that fails if any foreign key lacks one, and the
+guard was verified by dropping an index and watching it fail.
+
+A product fix, not a test fix. The test does what an operator does — decommissioning a
+site, removing a customer, or a retention job pruning stale resources are all bulk
+deletes against those same constraints.
+
 **The product is Veyronis; the code keeps the codename `uops` until clearance.**
 `Aegisora` had already been rejected in PLAN.md §1 — `aegisora-ai/aegisora` is an active
 org in an adjacent market — and `Veyronis` is the replacement.
@@ -820,6 +885,19 @@ also a `current_id` — which is what lets alias expansion be a single lookup. I
 the database because that is only true if *every* writer collapses, including a DBA
 fixing something by hand.
 
+## Documents
+
+| | |
+|---|---|
+| [PLAN.md](./PLAN.md) | strategy |
+| [SPEC.md](./SPEC.md) | the M0–M4 implementation spec, and the branding rule |
+| [REVIEW.md](./REVIEW.md) | the architecture review gate: what must change before M4, what waits, what still blocks |
+| [RENAME_AUDIT.md](./RENAME_AUDIT.md) | Aegisora → Veyronis, and why the code keeps `uops` |
+| [docs/UI.md](./docs/UI.md) | the UI direction — cockpit, context mode, investigation workspace, 2D/3D topology |
+| this file | where we are |
+
+---
+
 ## The ledger — progress, and what went wrong getting here
 
 Asked for explicitly. Progress is easy to find above; the failures are the part worth
@@ -854,6 +932,8 @@ integration suites.
 | **The simulator modelled a GET as a GETNEXT** | a scalar that was invisible in tests but present on the real agent | `entPhysicalSoftwareRev` could never have been read. The simulator now has a real `get_scalars`. A simulator that is wrong in the same direction as the code under test proves nothing |
 | **`Runner::load` had a trap** | the scale test was measuring nothing | discovery rules lived in a side map populated only inside `run::reload`, so the 1 000-device scale test measured 1 000 devices whose every discovery job failed. `load()` now does both and is the only way in |
 | **Two routes leaked tenant existence** | the isolation harness, once it was given a real vault | `revoke` returned 204 for another tenant's credential and `identifiers_for` returned `200 []`. Both now `NotFound` — 404-never-403 |
+| **Every device would have duplicated itself** | writing a test for the ordinary syslog case | a hostname plus an address is 0.93, under the 0.95 bar, so the steady state filed a review and a provisional twin for every device. The confidence model was being asked whether two independently discovered resources are the same box, when the real question was whether an observation is the resource its identifiers already belong to. `exclusive_match`, and the same rule in the cache — where the bar had made the hit rate 0%, so both of M3's numeric criteria were unreachable |
+| **Eight foreign keys had no index** | the API scale test timing out in its own clean-up | PostgreSQL never indexes the referencing side, so every parent `DELETE` scanned each child once per row. `ON DELETE CASCADE` from `tenant` made removing a tenant scan every role grant in the installation. Migration 0010, plus a schema guard that fails if a new foreign key arrives without one |
 | **My own documentation was false** | checking the claim against the data | I wrote that a 24-bit-only OUI lookup returns the *wrong* vendor. The data shows zero MA-M/MA-S nesting inside listed MA-L blocks, so it returns *nothing*. The wrong version was the intuitive one, which is why it survived review |
 | **A runaway Python process** | 86 000 s of CPU over 25 hours | an orphan from a malformed heredoc. Heredocs through this shell are now written with a file tool instead |
 | **Two test fixtures had arithmetic errors** | writing the assertions | a framed length off by one, and `<189>` asserted as `error` when it is `notice`. Both mine, both in the tests rather than the code |

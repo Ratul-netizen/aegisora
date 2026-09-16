@@ -135,6 +135,7 @@ uops-oui = { path = "crates/uops-oui" }
 uops-poll = { path = "crates/uops-poll" }
 uops-snmp = { path = "crates/uops-snmp" }
 uops-syslog = { path = "crates/uops-syslog" }
+uops-pipeline = { path = "crates/uops-pipeline" }
 uops-api = { path = "crates/uops-api" }
 uops-server = { path = "crates/uops-server" }
 uops-store-ch = { path = "crates/uops-store-ch" }

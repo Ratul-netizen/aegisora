@@ -184,7 +184,7 @@ async fn flush<S: Sink>(sink: &S, buffer: &mut Vec<LogRow>, config: Config, stat
                 // handful of these and then stops; a row-per-failure log would produce
                 // ten thousand and bury the recovery.
                 eprintln!(
-                    "syslog: {} rows could not be stored, retrying in {wait:?}: {why}",
+                    "pipeline: {} rows could not be stored, retrying in {wait:?}: {why}",
                     buffer.len()
                 );
 

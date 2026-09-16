@@ -127,10 +127,27 @@ async fn two_sources_with_only_a_weak_identifier_in_common_need_a_human() {
 }
 
 #[tokio::test]
-async fn evidence_in_the_review_band_does_not_auto_merge() {
-    // SPEC's own worked example: mgmt_ip (0.80) + hostname (0.65) → 0.93, below the 0.95
-    // bar. A wrong auto-merge corrupts every correlation downstream and is nearly
-    // invisible; a queue item costs someone ten seconds.
+async fn a_repeat_sighting_is_the_same_device_and_not_a_question() {
+    // This test asserted the opposite until 2026-09-16, under the name
+    // `evidence_in_the_review_band_does_not_auto_merge`, and the opposite was wrong.
+    //
+    // The reasoning was SPEC's worked example: mgmt_ip (0.80) + hostname (0.65) → 0.93,
+    // under the 0.95 bar, so review. That is correct when the question is whether two
+    // *independently discovered* resources are the same box. It is not this question.
+    // Here every identifier the observation carries is already attached to that one
+    // resource and to nothing else — `UNIQUE (tenant_id, kind, value)` — so there is no
+    // inference to make. It is the resource, by the assertion already recorded.
+    //
+    // What the old rule cost: a device is a review item by its second observation,
+    // because the second observation carries the same identifiers as the first. Every
+    // device in the estate, from its own traffic, forever. Its telemetry splits between
+    // the original and a provisional twin, which is the exact split-brain this product
+    // exists to prevent.
+    //
+    // The replacement-box case the old comment worried about is real and is caught by
+    // the evidence that actually proves it: a new serial is a tier-1 contradiction, which
+    // creates a new resource and moves the identifiers. See
+    // `a_tier_one_contradiction_creates_rather_than_merges`.
     let (resolver, tenant) = resolver();
 
     let known = ObservedIdentity::new("snmp")
@@ -138,36 +155,57 @@ async fn evidence_in_the_review_band_does_not_auto_merge() {
         .with(K::Hostname, "rtr-01");
     let original = landed_on(&resolver.resolve(tenant, &known).await.unwrap());
 
-    // The same address and name again — possibly the same box, possibly a replacement
-    // that inherited both.
     let again = ObservedIdentity::new("syslog")
         .with(K::MgmtIp, "10.0.0.1")
         .with(K::Hostname, "rtr-01");
-    let outcome = resolver.resolve(tenant, &again).await.unwrap();
+
+    assert!(matches!(
+        resolver.resolve(tenant, &again).await.unwrap(),
+        Resolution::Matched { resource_id, .. } if resource_id == original
+    ));
+    assert_eq!(
+        resolver.store().resource_count(),
+        1,
+        "a device must not acquire a twin by talking to us twice"
+    );
+    assert!(resolver.reviews(tenant, 50).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_partial_match_with_new_evidence_is_still_a_review() {
+    // The band did not go away — this is what it is actually for. The address matches a
+    // known device and the hostname matches nothing, so the observation is asserting
+    // something new: that this name belongs to that box. It might, or a DHCP lease might
+    // have moved the address to a different machine, and attaching the name would make
+    // one resource out of two.
+    let (resolver, tenant) = resolver();
+
+    let known = ObservedIdentity::new("snmp").with(K::MgmtIp, "10.0.0.1");
+    let original = landed_on(&resolver.resolve(tenant, &known).await.unwrap());
+
+    let with_a_new_name = ObservedIdentity::new("syslog")
+        .with(K::MgmtIp, "10.0.0.1")
+        .with(K::Hostname, "rtr-01");
+    let outcome = resolver.resolve(tenant, &with_a_new_name).await.unwrap();
 
     let Resolution::Review {
         provisional_id,
         candidates,
     } = outcome
     else {
-        panic!("0.93 must not auto-merge")
+        panic!("0.80 with unmatched evidence must not auto-merge")
     };
     assert_ne!(provisional_id, original);
     assert_eq!(candidates[0].resource_id, original);
-    assert!(
-        (candidates[0].confidence - 0.93).abs() < 0.01,
-        "noisy-OR of 0.80 and 0.65 is 0.93, got {}",
-        candidates[0].confidence
-    );
 
-    // The matched identifiers stay with the original. Moving them would enact the merge
+    // The matched identifier stays with the original. Moving it would enact the merge
     // this review exists to ask about — and UNIQUE (tenant, kind, value) would refuse.
     let still = resolver
         .store()
         .identifiers_of(tenant, original)
         .await
         .unwrap();
-    assert_eq!(still.len(), 2, "the original keeps what it had");
+    assert_eq!(still.len(), 1, "the original keeps what it had");
 }
 
 #[tokio::test]
@@ -177,11 +215,10 @@ async fn a_repeated_review_reuses_its_provisional_resource() {
     // this, one unanswered question mints a provisional resource per message.
     let (resolver, tenant) = resolver();
 
-    let known = ObservedIdentity::new("snmp")
-        .with(K::MgmtIp, "10.0.0.1")
-        .with(K::Hostname, "rtr-01");
+    let known = ObservedIdentity::new("snmp").with(K::MgmtIp, "10.0.0.1");
     resolver.resolve(tenant, &known).await.unwrap();
 
+    // A genuine review: the address matches, the name is new evidence.
     let repeat = ObservedIdentity::new("syslog")
         .with(K::MgmtIp, "10.0.0.1")
         .with(K::Hostname, "rtr-01");
@@ -292,6 +329,12 @@ async fn every_decision_is_recorded() {
     let observed = ObservedIdentity::new("snmp").with(K::Serial, "FTX1");
 
     resolver.resolve(tenant, &observed).await.unwrap();
+
+    // The second sighting is a repeat — every identifier already belongs to that
+    // resource — and it is recorded as an auto-merge rather than being skipped. It runs
+    // once per device per process, not once per message: `create_for` deliberately does
+    // not seed the cache, so this observation reaches the store, records the match and
+    // *then* caches it. Every message after this one is a cache hit that writes nothing.
     resolver.resolve(tenant, &observed).await.unwrap();
 
     let decisions = resolver.store().decisions();
