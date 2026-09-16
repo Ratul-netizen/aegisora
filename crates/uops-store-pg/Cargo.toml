@@ -18,6 +18,10 @@ uops-profile.workspace = true
 # src/discovery.rs. No dependencies of its own; the table is embedded.
 uops-oui.workspace = true
 uops-query.workspace = true
+# The pipeline's Enricher trait. The dependency points this way -- the pipeline knows
+# nothing about PostgreSQL, and the store is what reaches across -- which is the same
+# direction as uops-query and PgCatalog.
+uops-pipeline.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 serde.workspace = true

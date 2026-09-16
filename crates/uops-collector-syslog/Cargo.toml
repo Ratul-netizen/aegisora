@@ -1,0 +1,37 @@
+[package]
+name = "uops-collector-syslog"
+description = "The syslog daemon. Joins the receivers, the pipeline and the two stores."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+uops-syslog.workspace = true
+uops-pipeline.workspace = true
+uops-identity.workspace = true
+uops-store-ch.workspace = true
+uops-store-pg.workspace = true
+
+chrono.workspace = true
+serde.workspace = true
+# A listener list is inherently a list, and environment variables encode lists badly --
+# UOPS_SYSLOG_LISTENER_0_UDP is not configuration, it is a workaround. YAML is what the
+# monitoring profiles already use, for the same reason: a human writes this file.
+serde_yaml_ng.workspace = true
+# "signal" for graceful shutdown, "net" through the receivers, "rt-multi-thread" because
+# the pipeline's resolution path awaits PostgreSQL and a current-thread runtime would
+# serialise every listener behind one slow lookup.
+tokio = { workspace = true, features = ["net", "signal", "time", "rt-multi-thread", "macros", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+sqlx.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

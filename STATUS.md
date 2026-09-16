@@ -70,7 +70,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **Operator tags** | ✅ a column and a type of their own, apart from `attributes` |
 | **Maintenance windows** | ✅ model, occurrence arithmetic, five routes — 13 tests against real `PostgreSQL`, 11 on the DST cases |
 | M3 · syslog over TLS | ✅ **decided: terminated at a proxy**, not in-process |
-| M3 · the syslog daemon, OTLP, Log Explorer | ⬜ |
+| **M3 · the syslog daemon** | ✅ `uops-collector-syslog` — a datagram becomes a queryable row, end to end against real everything |
+| M3 · WAL spill, OTLP, Log Explorer | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -652,6 +653,66 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The syslog daemon, and how a message gets a tenant.** The decision the whole crate is
+shaped by, because **a syslog message carries no tenant and cannot be made to**. RFC 5424
+has structured data nobody populates; RFC 3164 has a hostname and a body. There is no
+field to put a customer in, and if there were, the sender would control it.
+
+So the tenant comes from **where the message arrived** — one listener per tenant, on its
+own address or port, because the binding is the one thing a sender cannot influence.
+
+The alternative considered and not taken was an explicit sender-address allow-list with
+unknown senders refused. It is a tighter posture and it loses the logs of every device
+somebody forgot to register — which are disproportionately the devices involved in an
+incident, because an unregistered device is one nobody is watching. An operator who wants
+that posture can have it at the firewall, where it is one rule rather than a second
+identity system.
+
+**An unknown sender inside a listener's tenant is not dropped.** The resolver creates a
+provisional resource and a review-queue item — rule 1 of SPEC §M0.2, *never block
+ingestion* — so a device that starts logging before anybody adds it to inventory still has
+its logs when somebody goes looking. The live test asserts exactly this: a datagram from a
+device nothing knows about becomes both a row and a resource.
+
+**Configuration is a file, not environment variables.** A listener list is inherently a
+list and `UOPS_SYSLOG_LISTENER_0_UDP` is not configuration, it is a workaround. The
+connection strings stay in the environment, because those carry passwords and a file on
+disk is a file in a backup. The daemon refuses to start on an empty listener list, on two
+listeners for one tenant (the shape of the copy-paste mistake that puts one customer's
+logs in another's account) and on two tenants sharing an address.
+
+**Backpressure is a chain, and it stops at UDP.** Every channel is bounded and every hop
+uses `send` rather than `try_send`, so a slow ClickHouse slows the batcher → fills the row
+channel → slows the workers → fills the received channel → stops the TCP receiver reading
+→ shrinks the receive window → slows the sender. UDP has no back channel, so the receiver
+drops and counts, which is the decision `uops_syslog::receiver` already made: a drop in
+userspace is a number somebody can see and a drop in the kernel is not.
+
+**Each listener fans out to several workers.** Resolution is a cache hit almost always —
+a mutex and an LRU lookup, fast enough for one worker. The exception is what matters: a
+*miss* awaits PostgreSQL, and with a single worker one slow lookup stalls every message
+behind it. The batcher is deliberately the opposite and there is exactly one, because a
+second would halve every insert while doubling the part count, which is the failure
+`batch` exists to prevent.
+
+**It is not given the KEK.** The poller needs it to open credentials; a syslog collector
+reads a socket and writes rows. So the compose service does not mount the key that
+decrypts every credential in the installation.
+
+**Four live tests against real everything**, plus a CI mutation that collapses every
+listener onto one tenant and requires the suite to fail — verified locally, and it does:
+*"and the second must have its own"*. Also tested: two tenants sending an identical
+message from the same address to two ports resolve to two different resources, which is
+the attribution decision proven rather than asserted; a malformed message is stored with
+`parse.error` naming what could not be read; and a shutdown writes what is still buffered,
+because a batch is up to 10 000 rows and a daemon that returned without flushing would
+lose a full batch of somebody's logs on every deploy.
+
+**Ports:** the compose service publishes 514/udp and 601/tcp on the outside and binds
+1514 and 1601 inside. Binding below 1024 needs `CAP_NET_BIND_SERVICE`, which is one more
+thing to get right on every host, and a published port is a mapping Docker already does.
+The bind error says so when it happens anyway.
 
 **Maintenance windows, and the thing the original sketch got wrong.** The review listed
 `timezone` as one field among seven. It is the whole problem.

@@ -46,6 +46,7 @@ pub mod bootstrap;
 pub mod catalog;
 pub mod discovery;
 mod enforced;
+pub mod enrich;
 pub mod error;
 pub mod facts;
 pub mod groups;
@@ -67,6 +68,7 @@ pub use auth::{
 pub use bootstrap::{FirstRun, FirstRunRequest};
 pub use catalog::PgCatalog;
 pub use discovery::{DiscoveredChild, DiscoveryReport};
+pub use enrich::PgEnricher;
 pub use facts::{DeviceFacts, IdentityReport};
 pub use groups::{GroupSummary, NewGroup};
 pub use maintenance::{MaintenanceWindow, NewWindow};

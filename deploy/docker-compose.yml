@@ -242,6 +242,44 @@ services:
     entrypoint: ["/usr/local/bin/uops-poller"]
     restart: unless-stopped
 
+  syslog:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: uops:dev
+    container_name: uops-syslog
+    depends_on:
+      # Not on the server, for the same reason as the poller: they share a database and
+      # neither calls the other.
+      migrate: { condition: service_completed_successfully }
+    ports:
+      # The well-known ports on the outside, high ports on the inside. Binding below 1024
+      # needs CAP_NET_BIND_SERVICE, which is one more thing to get right on every host --
+      # and a published port is a mapping Docker already does. Senders still use 514.
+      - "514:1514/udp"
+      - "601:1601"
+    environment:
+      DATABASE_URL: postgres://uops:uops@postgres:5432/uops
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: uops
+      CLICKHOUSE_USER: uops
+      CLICKHOUSE_PASSWORD: uops
+      UOPS_SYSLOG_CONFIG: /srv/syslog/listeners.yaml
+      # No UOPS_KEK_FILE. A syslog collector opens no credentials -- it reads a socket
+      # and writes rows -- so it is not given the key that decrypts every credential in
+      # the installation. The poller needs it; this does not; so it does not get it.
+    volumes:
+      # Read-only, and a bind mount rather than a named volume: this is configuration a
+      # human edits and puts in a change ticket, not state the container owns.
+      - ./syslog:/srv/syslog:ro
+    # No TLS. SPEC asks for syslog over TLS and the answer is a proxy in front of the TCP
+    # port -- rustls' two production crypto providers both carry OpenSSL-licensed code
+    # and neither is on deny.toml's allow-list, which is already why the ClickHouse and
+    # PostgreSQL clients were built without it. stunnel or rsyslog terminates and forwards
+    # plaintext over the loopback. See STATUS.
+    entrypoint: ["/usr/local/bin/uops-collector-syslog"]
+    restart: unless-stopped
+
 volumes:
   pg-data:
   ch-data:

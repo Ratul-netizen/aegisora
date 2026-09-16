@@ -2238,6 +2238,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-collector-syslog"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_yaml_ng",
+ "sqlx",
+ "tokio",
+ "uops-core",
+ "uops-identity",
+ "uops-pipeline",
+ "uops-store-ch",
+ "uops-store-pg",
+ "uops-syslog",
+ "uuid",
+]
+
+[[package]]
 name = "uops-core"
 version = "0.0.1"
 dependencies = [
@@ -2419,6 +2437,7 @@ dependencies = [
  "uops-core",
  "uops-identity",
  "uops-oui",
+ "uops-pipeline",
  "uops-profile",
  "uops-query",
  "uops-secrets",

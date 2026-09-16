@@ -1,0 +1,33 @@
+# Which tenant a syslog message belongs to.
+#
+# A syslog message carries no tenant and cannot be made to: RFC 5424 has structured data
+# that nobody populates, RFC 3164 has a hostname and a body, and anything the sender can
+# write is something the sender controls. So the tenant comes from *where the message
+# arrived* -- one listener per tenant, on its own address or port, because the binding is
+# the one thing a sender cannot influence.
+#
+# An unknown sender inside a listener's tenant is NOT dropped. The resolver creates a
+# provisional resource and a review-queue item, so a device that starts logging before
+# anybody adds it to inventory still has its logs when somebody goes looking.
+#
+# Each tenant needs its own address or port, and the daemon refuses to start if two share
+# one -- the bind would fail anyway, and refusing here means the error names the tenants.
+
+listeners:
+  # `tenant` is the slug in PostgreSQL, not a uuid. A mistyped slug fails at startup with
+  # a message that names it; a mistyped uuid would be a plausible-looking id that simply
+  # never matches anything.
+  #
+  # This slug is what `UOPS_TENANT_SLUG` created on first run. Change both together.
+  - tenant: example
+    # High ports, deliberately. 514 and 601 are the well-known ones and both are below
+    # 1024, which needs CAP_NET_BIND_SERVICE -- one more thing to get right on every
+    # host. The compose file maps 514/udp and 601/tcp on the *outside* to these on the
+    # inside, so senders still use the standard ports.
+    udp: 0.0.0.0:1514
+    tcp: 0.0.0.0:1601
+    # What `source_vendor` says when the resource itself does not know. A fallback, never
+    # an override: what a device says about itself wins, or a per-listener guess would
+    # disagree with the poller's own discovery for the same device and the two would
+    # alternate row by row.
+    vendor: ""

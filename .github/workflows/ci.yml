@@ -569,6 +569,32 @@ jobs:
           cp "$RUNNER_TEMP/walk.bak" "$F"
           echo "ok: a walk that does not stop fails the suite"
 
+      # A syslog message carries no tenant, so the daemon takes it from the listener the
+      # message arrived on. If that attribution collapses -- every listener resolving to
+      # the same tenant -- one customer's logs land in another customer's account, which
+      # is the worst failure this product has and produces no error anywhere.
+      #
+      # The mutation is the shape of the real mistake: a loop that computes the right
+      # tenant and then stores the wrong one.
+      - name: The syslog daemon's tests fail when every listener resolves to one tenant
+        run: |
+          F=crates/uops-collector-syslog/src/run.rs
+          cp "$F" "$RUNNER_TEMP/syslogd.bak"
+          # '#' as the delimiter: the replacement contains a closure, and '|' is both
+          # sed's delimiter and Rust's closure syntax.
+          sed -i 's#^            tenant_id,$#            tenant_id: bound.first().map_or(tenant_id, |b: \&Bound| b.tenant_id),#' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-collector-syslog --test live > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/syslogd.bak" "$F"
+            echo "::error::the live tests passed with every listener attributed to one tenant"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/syslogd.bak" "$F"
+          echo "ok: collapsing tenant attribution fails the suite"
+
       # SPEC §M2: "dead device does not delay polling of healthy devices (measured, not
       # assumed)". The mutation serialises the fleet — one poll in flight, whatever the
       # limit says — which is precisely the failure the criterion is about.

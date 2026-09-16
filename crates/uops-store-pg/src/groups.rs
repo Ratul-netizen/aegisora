@@ -59,6 +59,29 @@ pub struct GroupSummary {
 }
 
 impl PgStore {
+    /// A tenant's id, by the slug a human wrote in a configuration file.
+    ///
+    /// Not tenant-scoped, and it cannot be: this is what a collector calls *before* it
+    /// has a scope, to turn `tenant: acme` in its listener file into the `TenantId`
+    /// every later call carries. It reads one indexed column and returns an id, which is
+    /// the smallest thing that can answer the question.
+    ///
+    /// `None` rather than an error for an unknown slug, so the caller can say *"the
+    /// listener file names a tenant that does not exist"* instead of relaying a row-not-
+    /// found.
+    pub async fn tenant_by_slug(&self, slug: &str) -> Result<Option<uops_core::TenantId>> {
+        // tenant-exempt: resolving a slug to a tenant is how a process *obtains* its
+        // scope, so it necessarily runs outside one. It reads the `tenant` table itself
+        // and returns an id, never a row of anybody's data.
+        sqlx::query_scalar!(
+            r#"SELECT id AS "id: uops_core::TenantId" FROM tenant WHERE slug = $1"#,
+            slug,
+        )
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| map("tenant", slug.to_owned(), e))
+    }
+
     /// Create a group in the scope's tenant.
     ///
     /// # Errors

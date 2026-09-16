@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT site_id AS \"site_id: SiteId\", vendor\n              FROM resource\n             WHERE tenant_id = $1 AND id = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "site_id: SiteId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vendor",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "ae909aa103682c73d89e69264b9f7653aeebf3c41176b7688dcb62b32119c7fe"
+}
