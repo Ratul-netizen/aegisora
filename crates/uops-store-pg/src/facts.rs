@@ -27,7 +27,7 @@
 //! earlier poll learned, or what an operator typed, every fifteen minutes — so the
 //! statement below only sets a column when there is something to set.
 
-use uops_core::{Identifier, IdentifierKind, ResourceId, Result, TenantScope};
+use uops_core::{Error, Identifier, IdentifierKind, ResourceId, Result, TenantScope};
 
 use crate::error::map;
 use crate::store::PgStore;
@@ -68,6 +68,13 @@ pub struct IdentityReport {
 
 /// The source recorded on an identifier this poller writes.
 pub const SOURCE: &str = "snmp-identity";
+
+/// The source recorded on an identifier a person typed.
+///
+/// The column is what separates what an operator asserted from what a collector
+/// observed, and the separation is load-bearing: editing the inventory must not be able
+/// to delete the evidence identity resolution merged two resources on.
+pub const MANUAL: &str = "manual";
 
 impl PgStore {
     /// Record what a device says it is.
@@ -139,6 +146,111 @@ impl PgStore {
         Ok(report)
     }
 
+    /// Replace the identifiers an operator typed, leaving the ones collectors found.
+    ///
+    /// # Why replace rather than add
+    ///
+    /// One verb gives add, change and remove. A `POST` that only added would make a
+    /// typo'd management address permanent — and a mistyped `mgmt_ip` is not a cosmetic
+    /// error, it is a device polling somebody else's equipment.
+    ///
+    /// # Why only the manual ones
+    ///
+    /// A discovered identifier is a fact a collector observed: the MAC discovery read
+    /// off an interface, the serial ENTITY-MIB reported. An operator editing the
+    /// inventory has no business deleting those, and an operator who could would be
+    /// able to make identity resolution forget why it merged two resources. The
+    /// `source` column is what separates them, and this statement is the only place
+    /// that distinction is enforced.
+    ///
+    /// # Errors
+    ///
+    /// Storage failures, or a value another resource in this tenant already claims —
+    /// which is `IdentityConflict`, because two devices cannot share a management
+    /// address and the caller needs to know which one already has it.
+    pub async fn set_manual_identifiers(
+        &self,
+        scope: &TenantScope,
+        resource: ResourceId,
+        identifiers: &[Identifier],
+    ) -> Result<()> {
+        let tenant = scope.tenant_id();
+
+        // One transaction: between the delete and the insert this resource has no
+        // address, and a poller reloading in that window would drop it from the fleet.
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| map("identifier", resource.to_string(), e))?;
+
+        // The resource must be this tenant's. Without this the delete below matches
+        // nothing and the insert then attaches an identifier to another customer's
+        // resource — which is the one mistake in this module that would matter.
+        let exists: Option<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT id FROM resource WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.into_uuid())
+                .bind(resource.into_uuid())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| map("resource", resource.to_string(), e))?;
+        if exists.is_none() {
+            return Err(Error::NotFound {
+                kind: "resource",
+                id: resource.to_string(),
+            });
+        }
+
+        sqlx::query(
+            "DELETE FROM resource_identifier
+              WHERE tenant_id = $1 AND resource_id = $2 AND source = $3",
+        )
+        .bind(tenant.into_uuid())
+        .bind(resource.into_uuid())
+        .bind(MANUAL)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| map("identifier", resource.to_string(), e))?;
+
+        for identifier in identifiers {
+            let result = sqlx::query(
+                "INSERT INTO resource_identifier
+                     (id, tenant_id, resource_id, kind, value, confidence, source)
+                 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)",
+            )
+            .bind(tenant.into_uuid())
+            .bind(resource.into_uuid())
+            .bind(identifier.kind)
+            .bind(&identifier.value)
+            .bind(identifier.kind.base_confidence())
+            .bind(MANUAL)
+            .execute(&mut *tx)
+            .await;
+
+            if let Err(e) = result {
+                // Not an upsert, unlike the collectors' path. A collector re-observing
+                // an identifier somebody else holds is ordinary and the row simply stays
+                // where it is; an operator *typing* one is asserting something, and
+                // silently ignoring it would leave them looking at a form that saved and
+                // a device that did not change.
+                if let sqlx::Error::Database(db) = &e
+                    && db.is_unique_violation()
+                {
+                    return Err(Error::IdentityConflict {
+                        kind: identifier.kind.as_str(),
+                        value: identifier.value.clone(),
+                    });
+                }
+                return Err(map("identifier", resource.to_string(), e));
+            }
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| map("identifier", resource.to_string(), e))?;
+        Ok(())
+    }
+
     /// The identifiers recorded for a resource. For a test, and for a detail view.
     ///
     /// # Errors
@@ -149,6 +261,26 @@ impl PgStore {
         scope: &TenantScope,
         resource: ResourceId,
     ) -> Result<Vec<Identifier>> {
+        // The resource has to exist in this tenant. Without this, another tenant's id
+        // returns an empty list and a 200 — which leaks nothing, since an empty list is
+        // also what a resource with no identifiers returns, but which says "this exists
+        // and has none" where every other resource route says "not found". An API whose
+        // answer to the same question depends on which route you asked is one nobody can
+        // reason about.
+        let exists: Option<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT id FROM resource WHERE tenant_id = $1 AND id = $2")
+                .bind(scope.tenant_id().into_uuid())
+                .bind(resource.into_uuid())
+                .fetch_optional(self.pool())
+                .await
+                .map_err(|e| map("resource", resource.to_string(), e))?;
+        if exists.is_none() {
+            return Err(Error::NotFound {
+                kind: "resource",
+                id: resource.to_string(),
+            });
+        }
+
         let rows: Vec<(IdentifierKind, String)> = sqlx::query_as(
             "SELECT kind, value FROM resource_identifier
               WHERE tenant_id = $1 AND resource_id = $2

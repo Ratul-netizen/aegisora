@@ -39,6 +39,12 @@ pub enum ApiError {
     #[error("{0}")]
     BadRequest(String),
 
+    /// The deployment has not configured something this route needs. A 503 rather than
+    /// a 500: nothing is broken, a capability is switched off, and the message says
+    /// which variable turns it on.
+    #[error("{0}")]
+    Unavailable(&'static str),
+
     /// Everything below the API. Its message is logged, not returned.
     #[error(transparent)]
     Internal(#[from] uops_core::Error),
@@ -55,6 +61,11 @@ impl ApiError {
             Self::Forbidden(why) => (StatusCode::FORBIDDEN, "forbidden", (*why).to_owned()),
             Self::NotFound => (StatusCode::NOT_FOUND, "not-found", "not found".to_owned()),
             Self::BadRequest(detail) => (StatusCode::BAD_REQUEST, "invalid-input", detail.clone()),
+            Self::Unavailable(why) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "not-configured",
+                (*why).to_owned(),
+            ),
             Self::Internal(e) => {
                 let status = StatusCode::from_u16(e.status_code())
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

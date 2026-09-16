@@ -304,7 +304,22 @@ async fn rotating_the_kek_rewraps_without_touching_the_ciphertext() {
         report.rewrapped > 0,
         "something must have been re-wrapped: {report:?}"
     );
-    assert_eq!(report.failed, 0);
+
+    // Deliberately not `report.failed == 0`. A rotation reads *every* row in the
+    // database — `list_all` is global, because a rotation that skipped rows would leave
+    // ones only the retired key can open — and this database is shared with every other
+    // suite. Rows sealed under some other test's ephemeral ring cannot be unwrapped by
+    // this one and are counted as failed, correctly.
+    //
+    // So the assertion is about this credential rather than about the estate: its
+    // wrapping now names the new key. That is also stronger than the counter was, which
+    // could have been satisfied by some other row being re-wrapped.
+    let kek_id: String = sqlx::query_scalar("SELECT kek_id FROM credential WHERE id = $1")
+        .bind(id.into_uuid())
+        .fetch_one(store.pool())
+        .await
+        .expect("the wrapping key");
+    assert_eq!(kek_id, NEXT_KEK, "this credential was not re-wrapped");
 
     let after: Vec<u8> = sqlx::query_scalar("SELECT ciphertext FROM credential WHERE id = $1")
         .bind(id.into_uuid())

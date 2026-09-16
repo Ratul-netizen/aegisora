@@ -1,7 +1,8 @@
 # uops — Unified Infrastructure Observability Platform
 
-> **Status: pre-v0.** No product code yet. This repository currently holds the
-> architecture decisions and the W1 storage benchmark that validates them.
+> **Status: pre-v0**, and no longer only documents. M0, M1 and M2 are implemented and
+> tested; `docker compose up` gives an API, a web UI and an SNMP poller that fills them.
+> See [Try it](#try-it).
 
 Network monitoring, infrastructure monitoring, logs, metrics, traces, flows, topology,
 events and automation on **one resource identity and one correlation model** — rather than
@@ -57,14 +58,63 @@ React · TypeScript · Vite
 - [x] Architecture decisions frozen for M0–M4
 - [x] M0–M4 implementation specification
 - [x] W1 storage benchmark **executed — architecture validated**
-- [x] M0: workspace, CI, `uops-core`
-- [ ] M0: `uops-secrets` ← next
-- [ ] M0: query AST, migrations, bus
-- [ ] M1 core platform
+- [x] **M0** — primitives: envelope, identity, query AST, secrets, migrations, bus
+- [x] **M1** — core platform: API, auth, inventory, telemetry, web shell, first run
+- [x] **M2** — NMS: SNMP polling, profiles, discovery, rates, availability. All six
+      acceptance criteria met and measured
+- [ ] **M3** — logs ← next
+- [ ] M4 — dashboards and alerting
 
-The W1 gate passed. The Investigation Workspace query reads **16,380 rows at both 10M
-and 100M rows** — 9 ms either way — so resource-scoped investigation is independent of
-table size. Full numbers in [bench/results/FINDINGS.md](./bench/results/FINDINGS.md).
+Taken out of order because they were asked for: MAC vendor lookup, device make/model/
+serial from a profile, and a site map.
+
+## Try it
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml logs server | grep password
+```
+
+Open <http://localhost:8080> and sign in as `admin@example.invalid` with that password.
+It is printed once, is not stored anywhere, and cannot be asked for again.
+
+That gives you an API, a UI and a poller — and an empty inventory. A device becomes
+*pollable* when it has somewhere to send a packet and something to authenticate with, so
+there are three steps rather than one:
+
+1. **Store a credential** — `POST /api/v1/credentials`. Material goes in and never comes
+   out: there is no route that returns it, deliberately.
+2. **Create a device** — `POST /api/v1/resources`.
+3. **Give it an address and the credential** — `PUT /api/v1/resources/{id}/identifiers`
+   with a `mgmt_ip`, and `PUT /api/v1/resources/{id}/credential`.
+
+The address is an *identifier* rather than a column on the device, which is why it is its
+own step: it is the thing identity resolution matches on, and a device that is re-addressed
+should be re-identified and re-dialled by one fact changing once.
+
+The poller re-reads the fleet every minute, so polling starts within a minute of step 3.
+
+To try it against something without wiring up real equipment, start the bundled `net-snmp`
+agent:
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile test up -d snmp-agent
+```
+
+Its address inside the compose network is what goes in the `mgmt_ip`, and its credentials
+are in [deploy/snmp-agent/README.md](./deploy/snmp-agent/README.md) — all of them public
+on purpose.
+
+### The key-encryption key
+
+Generated on first run into a Docker volume, never committed: a key in a repository is a
+key in every clone, every fork and every CI log. The API and the poller read the same
+file, because a credential the API sealed that the poller cannot open is a device that
+silently never gets polled.
+
+`docker compose down` keeps it. `docker compose down -v` destroys it, and with it the
+ability to decrypt every credential already stored — which is the only way to say that on
+purpose.
 
 ## Name
 

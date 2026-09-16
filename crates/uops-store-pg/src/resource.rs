@@ -162,6 +162,60 @@ impl PgStore {
         Ok(row.into())
     }
 
+    /// Point a resource at a stored credential, or detach it.
+    ///
+    /// # Why the credential's tenant is checked here
+    ///
+    /// The poller trusts `resource.credential_ref`: it reads the column and opens
+    /// whatever it names. Without this check a resource could be pointed at another
+    /// customer's credential by id, and the poller would dutifully use it — which is a
+    /// cross-tenant read performed by the most privileged component in the product.
+    ///
+    /// Migration 0005's foreign key is on `credential (id)` alone, not on
+    /// `(id, tenant_id)`, so the database would accept it. The `EXISTS` below is what
+    /// refuses it, and it is one statement so there is no window between the check and
+    /// the write.
+    ///
+    /// # Errors
+    ///
+    /// Storage failures, a resource in another tenant, or a credential in another
+    /// tenant — both `NotFound`, because confirming either exists would leak it.
+    pub async fn assign_credential(
+        &self,
+        scope: &TenantScope,
+        id: ResourceId,
+        credential: Option<CredentialRef>,
+    ) -> Result<()> {
+        let affected = sqlx::query!(
+            r#"
+            UPDATE resource
+               SET credential_ref = $3, updated_at = now()
+             WHERE tenant_id = $1
+               AND id = $2
+               AND ($3::uuid IS NULL
+                    OR EXISTS (SELECT 1 FROM credential c
+                                WHERE c.id = $3 AND c.tenant_id = $1))
+            "#,
+            scope.tenant_id() as uops_core::TenantId,
+            id as ResourceId,
+            credential as Option<CredentialRef>,
+        )
+        .execute(self.pool())
+        .await
+        .map_err(|e| map("resource", id.to_string(), e))?
+        .rows_affected();
+
+        if affected == 0 {
+            // Deliberately does not distinguish "no such resource" from "no such
+            // credential". Both are things the caller may not know exist.
+            return Err(Error::NotFound {
+                kind: "resource",
+                id: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Fetch one resource.
     ///
     /// A resource in another tenant reports `NotFound`, not `Forbidden` — the tenant

@@ -290,7 +290,7 @@ impl SealedStore for PgSealedStore {
         blocking(async {
             // Stamped, not deleted. Telemetry and audit rows reference a credential by
             // id, and a row that vanished would leave them pointing at nothing.
-            sqlx::query(
+            let affected = sqlx::query(
                 "UPDATE credential SET revoked_at = now()
                   WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL",
             )
@@ -298,8 +298,24 @@ impl SealedStore for PgSealedStore {
             .bind(id.into_uuid())
             .execute(self.store.pool())
             .await
-            .map(|_| ())
-            .map_err(|e| SecretError::Storage(e.to_string()))
+            .map_err(|e| SecretError::Storage(e.to_string()))?
+            .rows_affected();
+
+            if affected == 0 {
+                // Nothing matched: no such credential, another tenant's, or one already
+                // revoked. `MemorySealedStore` has always reported this and this
+                // implementation did not, so an API built on it answered "done" to an
+                // operator revoking something that was never touched — and, through the
+                // route, answered 204 for another tenant's id where every other route
+                // answers 404.
+                //
+                // Not distinguished from "already revoked", deliberately. Revocation is
+                // idempotent in intent and the caller wanted it gone; telling them which
+                // of the three it was would tell a caller from another tenant that the id
+                // exists.
+                return Err(SecretError::NotFound);
+            }
+            Ok(())
         })
     }
 }

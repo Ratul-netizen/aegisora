@@ -122,6 +122,9 @@ services:
       dockerfile: deploy/Dockerfile
     image: uops:dev
     container_name: uops-migrate
+    # Root, only here, only to create the key file and hand it to the uops user. Every
+    # long-running service below runs as uops.
+    user: root
     depends_on:
       postgres: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
@@ -131,12 +134,31 @@ services:
       CLICKHOUSE_DB: uops
       CLICKHOUSE_USER: uops
       CLICKHOUSE_PASSWORD: uops
+    volumes:
+      - kek:/srv/kek
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
         uops-pg-migrate
         uops-ch-migrate apply --dir /srv/ch-migrations
+        # The key-encryption key, generated once and kept in a volume.
+        #
+        # Not a literal in this file: a key committed to a repository is a key in every
+        # clone, every fork and every CI log, and the one thing certain about a
+        # convenient development default is that somebody will ship it. Generated here
+        # because this service already runs once, before anything else, and is the only
+        # place a first-boot step belongs.
+        #
+        # 0600 and owned by the uops user, because KekRing::from_file refuses a
+        # group-readable key -- rightly: a KEK other local accounts can read is not a
+        # root of trust.
+        if [ ! -f /srv/kek/kek.hex ]; then
+          od -An -tx1 -N32 /dev/urandom | tr -dc '0-9a-f' > /srv/kek/kek.hex
+          chmod 600 /srv/kek/kek.hex
+          echo "generated a key-encryption key in the kek volume"
+        fi
+        chown uops:uops /srv/kek/kek.hex
     restart: "no"
 
   server:
@@ -167,6 +189,12 @@ services:
       UOPS_ORG_NAME: "Example organization"
       UOPS_TENANT_NAME: "Example tenant"
       UOPS_ADMIN_EMAIL: admin@example.invalid
+      # The same file the poller reads. A credential the API sealed that the poller
+      # cannot open is a device that silently never gets polled, which is the worst way
+      # for this to be misconfigured -- so there is one file and both mount it.
+      UOPS_KEK_FILE: /srv/kek/kek.hex
+    volumes:
+      - kek:/srv/kek:ro
     healthcheck:
       # The route is unauthenticated precisely so this can read it. `ok` is false when a
       # store is unreachable, and that is still a 200 — a restart does not fix somebody
@@ -181,6 +209,43 @@ services:
     # stored anywhere and cannot be asked for again: `docker compose logs server`.
     restart: unless-stopped
 
+  poller:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: uops:dev
+    container_name: uops-poller
+    depends_on:
+      # Not on the server: they share a database and neither calls the other. Waiting
+      # would only mean the poller could not start while the API was restarting.
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://uops:uops@postgres:5432/uops
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: uops
+      CLICKHOUSE_USER: uops
+      CLICKHOUSE_PASSWORD: uops
+      UOPS_KEK_FILE: /srv/kek/kek.hex
+    volumes:
+      - kek:/srv/kek:ro
+    # The availability check uses an unprivileged ICMP datagram socket rather than a raw
+    # one, so it needs no CAP_NET_RAW. Docker sets this sysctl to `0 2147483647` on its
+    # default bridge already; naming it here is what keeps it true on a host whose
+    # daemon has been configured otherwise, and is where the requirement is written down.
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    # No ports. Nothing connects *to* a poller.
+    #
+    # It polls nothing until a device exists with a `mgmt_ip` identifier and a credential
+    # assigned to it -- see the README. An empty inventory is not an error and the poller
+    # says so once a minute rather than failing.
+    entrypoint: ["/usr/local/bin/uops-poller"]
+    restart: unless-stopped
+
 volumes:
   pg-data:
   ch-data:
+  # The key-encryption key. A named volume rather than a bind mount so that `docker
+  # compose down` keeps it: losing it means every stored credential becomes
+  # undecryptable, and `down -v` is the only way to say that on purpose.
+  kek:

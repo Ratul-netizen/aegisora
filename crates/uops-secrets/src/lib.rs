@@ -71,7 +71,7 @@ pub use memory::MemorySealedStore;
 pub use password::PasswordHashString;
 pub use record::{CredentialMeta, KeyId, Rewrapped, RotationReport, SealedCredential};
 pub use session::{SessionToken, SessionTokenHash};
-pub use vault::{LocalVault, SealedStore};
+pub use vault::{LocalVault, SealedStore, Summary};
 
 #[cfg(feature = "crypto-rustcrypto")]
 pub use aead::RustCryptoAead;

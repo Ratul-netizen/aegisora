@@ -27,4 +27,4 @@ pub use csrf::{CSRF_HEADER, CsrfChecked};
 pub use error::{ApiError, ApiResult};
 pub use extract::{Authenticated, Caller, TENANT_HEADER};
 pub use routes::router;
-pub use state::AppState;
+pub use state::{AppState, Vault};

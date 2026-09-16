@@ -78,6 +78,35 @@ impl<T: SealedStore> SealedStore for std::sync::Arc<T> {
     }
 }
 
+/// What a credential is, with none of what it holds.
+///
+/// Everything here is safe to show an administrator and to put in an audit row: a name
+/// somebody chose, the kind of thing it is, which version is current and whether it has
+/// been retired. There is deliberately no field that could carry material, so a future
+/// edit cannot add one by accident.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Summary {
+    pub id: CredentialRef,
+    pub name: String,
+    /// `snmp_community`, `snmp_v3`. Not the secret: a UI lists credentials by what they
+    /// are without opening any of them.
+    pub kind: String,
+    pub version: u32,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl Summary {
+    fn of(row: &SealedCredential) -> Self {
+        Self {
+            id: row.id,
+            name: row.name.clone(),
+            kind: row.kind.clone(),
+            version: row.version,
+            revoked_at: row.revoked_at,
+        }
+    }
+}
+
 /// Seals credentials so that neither the database nor the logs ever hold usable
 /// material.
 pub struct LocalVault<A: AeadProvider, S: SealedStore, L: AccessLog> {
@@ -299,6 +328,41 @@ impl<A: AeadProvider, S: SealedStore, L: AccessLog> LocalVault<A, S, L> {
     ) -> Result<Secret<CredentialMaterial>> {
         let row = self.store.latest_by_name(tenant, name)?;
         self.get(tenant, row.id, ctx)
+    }
+
+    /// What a credential is, without any of what it holds.
+    ///
+    /// For a UI that lists credentials by name: the material is not here, the wrapped
+    /// DEK is not here, and the ciphertext is not here. `SealedCredential` carries all
+    /// three — harmlessly, since they are encrypted — and handing it to a caller that
+    /// wants a name would be handing it three things it has no use for.
+    ///
+    /// # Errors
+    ///
+    /// Storage failures, or a credential in another tenant — which is `NotFound`.
+    pub fn describe(&self, tenant: TenantId, id: CredentialRef) -> Result<Summary> {
+        Ok(Summary::of(&self.store.get(tenant, id)?))
+    }
+
+    /// Every credential in a tenant, as summaries.
+    ///
+    /// # Errors
+    ///
+    /// Storage failures.
+    pub fn list(&self, tenant: TenantId) -> Result<Vec<Summary>> {
+        // `list_all` is deliberately cross-tenant — it exists for KEK rotation — so the
+        // filter is here. A vault method that returned another tenant's credentials
+        // because its caller forgot a predicate is the shape this whole crate is written
+        // against.
+        let mut out: Vec<Summary> = self
+            .store
+            .list_all()?
+            .iter()
+            .filter(|row| row.tenant_id == tenant)
+            .map(Summary::of)
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
     }
 
     pub fn revoke(&self, tenant: TenantId, id: CredentialRef) -> Result<()> {

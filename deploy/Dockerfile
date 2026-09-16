@@ -54,7 +54,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     cargo build --release --workspace --bins && \
     # Out of the cache mount, which does not survive this layer.
-    cp target/release/uops-server target/release/uops-ch-migrate target/release/uops-pg-migrate /usr/local/bin/
+    cp target/release/uops-server target/release/uops-poller \
+       target/release/uops-ch-migrate target/release/uops-pg-migrate /usr/local/bin/
 
 
 # --- what actually ships ----------------------------------------------------------
@@ -68,7 +69,12 @@ RUN apk add --no-cache ca-certificates libgcc
 # as root is a finding in every procurement checklist this product will meet.
 RUN addgroup -S uops && adduser -S -G uops uops
 
-COPY --from=server /usr/local/bin/uops-server /usr/local/bin/uops-ch-migrate /usr/local/bin/uops-pg-migrate /usr/local/bin/
+# One image, every binary. Which one runs is the entrypoint's business — see
+# docker-compose.yml, where the poller is the same image with a different command. Two
+# images would be two builds, two pushes and two chances for the poller to be a version
+# behind the API that wrote the credentials it reads.
+COPY --from=server /usr/local/bin/uops-server /usr/local/bin/uops-poller \
+     /usr/local/bin/uops-ch-migrate /usr/local/bin/uops-pg-migrate /usr/local/bin/
 COPY --from=web /build/dist /srv/web
 COPY migrations/ /srv/migrations/
 COPY ch-migrations/ /srv/ch-migrations/

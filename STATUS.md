@@ -52,6 +52,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | `uops-oui` | ✅ 9 — IEEE MAC assignments, all four registries |
 | device identity | ✅ make, model, serial, OS from a profile's `identity` block |
 | **M6 · the map** | ✅ site coordinates, status rollup, a tile-free world map |
+| **`docker compose up` polls** | ✅ credentials, identifiers and the poller service |
 | `uops-profile` | ✅ 40 — 5 built-ins, schema, resolution |
 | `uops-poll` | ✅ 56 — wheel, jitter, counters, executor, planner, samples |
 | `uops-snmp` | ✅ 42 — walk, simulator, `snmp2` over UDP, real net-snmp |
@@ -272,6 +273,68 @@ CI enforces fmt, clippy `-D warnings`, tests, doctests, plus: a grep that fails 
 if `.expose()` appears inside a logging macro; a grep that fails if a crypto primitive is
 used outside `uops-secrets`; `cargo-deny`; a CycloneDX SBOM; and a matrix building **both**
 the standard and FIPS crypto artifacts.
+
+### Putting the poller in compose was three pieces, not one
+
+The plan was to copy a binary into the image and add a service. What that would have
+produced is a poller logging "no credential is assigned" for every device for ever,
+because **nothing in the product could create a credential**. The `credential` table had
+existed since migration 0005 and had only ever been written by a test.
+
+Then, with credentials possible, a device still could not be polled: `pollable_devices`
+reads `resource_identifier` where `kind = 'mgmt_ip'`, deliberately — an address is what
+identity resolution matches on rather than a column on the device — and no route could
+write one. So the chain needed a third piece.
+
+The result is that the path from `docker compose up` to a device being polled is now
+four API calls, and it is in the README because nothing else would make it discoverable.
+
+Two decisions inside that:
+
+**Material goes in and never comes out.** No route returns a credential's material — not
+for an administrator, not for an export, not for a "reveal" button. The value of envelope
+encryption is that the material has one reader, and every additional path to it is one a
+compromised session or a screenshot can take. `NewMaterial` and `CreateCredential` carry
+hand-written `Debug` impls that redact, because a derived one puts a community string in
+the first `{:?}` anybody reaches for.
+
+**Manual identifiers are replaced wholesale and discovered ones are untouched.** One verb
+gives add, change and remove — a route that only added would make a mistyped `mgmt_ip`
+permanent, and a mistyped management address is a device polling somebody else's
+equipment. The `source` column separates what an operator asserted from what a collector
+observed, and an operator editing the inventory has no business deleting the evidence
+identity resolution merged two resources on.
+
+### The KEK is generated, not committed
+
+`docker compose up` generates one into a named volume on first run. A key in a repository
+is a key in every clone, every fork and every CI log, and the one certain thing about a
+convenient development default is that somebody ships it.
+
+The API and the poller read the same file. A credential the API sealed that the poller
+cannot open is a device that silently never gets polled, which is the worst way for this
+to be misconfigured — so there is one file and both mount it read-only.
+
+`down` keeps the volume; `down -v` destroys it and with it the ability to decrypt every
+stored credential. That is the only way to say it on purpose.
+
+### Two inconsistencies the isolation harness found
+
+Both were routes answering something other than 404 for another tenant's object, and
+neither leaked anything — which is why they had survived.
+
+`PgSealedStore::revoke` returned `Ok` however many rows it touched, so revoking another
+tenant's credential answered **204**. `MemorySealedStore` had always reported `NotFound`;
+the PostgreSQL implementation was the outlier, and an API built on it told an operator
+"done" about something it had not touched.
+
+`identifiers_for` returned **200 `[]`** for another tenant's resource — the same answer
+as a resource with no identifiers, so no information crossed, but a 200 says "this exists
+and is empty" where every other resource route says "not found".
+
+The harness caught both only because it now builds its `AppState` with a real vault.
+Without one the credential routes answer 503 before the scope check, and the test would
+have been checking that a disabled feature leaks nothing.
 
 ### The map does not use tiles
 
@@ -539,7 +602,6 @@ M1 is where they start.
 | **Shared-database contamination** | intermittent local failures | **Recurred, larger.** The development database had accumulated **2 608 tenants** from every integration test that ever panicked before its clean-up. Harmless until the poller existed; now a reload reads *every* tenant and issues two queries each, so an unswept database turned one reload into five thousand round trips and the live poller test from 2.6 s into 29 s. `db.sh sweep` now removes every tenant but `default` and everything under it, and the poller's live test takes its own scratch database rather than sharing. Earlier instance: the scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
-| **The poller is not in `docker compose`** | a stack that polls | The image builds every workspace binary but copies only `uops-server`, `uops-ch-migrate` and `uops-pg-migrate`, and compose has no poller service. So `docker compose up` gives an API and a UI over a database nothing is filling. Adding it needs a KEK in the compose environment, which is a decision about what a development stack may ship with |
 | **The bundled IEEE data's terms** | a commercial release | `crates/uops-oui/data/assignments.tsv` is derived from the four public IEEE registries. They are redistributed widely — Wireshark, nmap and Debian's `ieee-data` all ship them — which is the basis for bundling. It is **not** a licence review: IEEE attaches no SPDX identifier, and `cargo deny` checks crate licences rather than the terms of embedded data, so nothing in CI is looking at this |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |

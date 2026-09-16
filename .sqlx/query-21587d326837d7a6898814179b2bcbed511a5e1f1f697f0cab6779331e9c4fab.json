@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE resource\n               SET credential_ref = $3, updated_at = now()\n             WHERE tenant_id = $1\n               AND id = $2\n               AND ($3::uuid IS NULL\n                    OR EXISTS (SELECT 1 FROM credential c\n                                WHERE c.id = $3 AND c.tenant_id = $1))\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "21587d326837d7a6898814179b2bcbed511a5e1f1f697f0cab6779331e9c4fab"
+}

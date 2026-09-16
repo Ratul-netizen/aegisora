@@ -8,6 +8,7 @@
 //! There is one path to telemetry, and this is it.
 
 pub mod auth;
+pub mod credentials;
 pub mod health;
 pub mod query;
 pub mod resources;
@@ -35,6 +36,19 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/resources/{id}/status",
             patch(resources::set_status),
+        )
+        .route(
+            "/api/v1/credentials",
+            get(credentials::list).post(credentials::create),
+        )
+        .route("/api/v1/credentials/{id}", delete(credentials::revoke))
+        .route(
+            "/api/v1/resources/{id}/credential",
+            put(credentials::assign),
+        )
+        .route(
+            "/api/v1/resources/{id}/identifiers",
+            get(credentials::identifiers).put(credentials::set_identifiers),
         )
         .route("/api/v1/sites", get(sites::list))
         .route("/api/v1/sites/{id}/location", put(sites::place))

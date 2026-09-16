@@ -26,6 +26,26 @@ pub struct Config {
     pub clickhouse: ChConfig,
     pub secure_cookies: bool,
     pub first_run: FirstRunNames,
+    /// Where the key-encryption key comes from, if anywhere.
+    ///
+    /// `None` is a working deployment, unlike in the poller — the server only needs a
+    /// KEK to *store* a device credential, and an installation that is only using the
+    /// inventory has nothing to store. The credential routes answer 503 naming the
+    /// variable; everything else works unchanged.
+    ///
+    /// It must be the *same* key the poller has. A credential the API sealed that the
+    /// poller cannot open is a device that silently never gets polled, which is the
+    /// worst way for this to be misconfigured — see `deploy/docker-compose.yml`, where
+    /// both read one file.
+    pub kek: Option<KekSource>,
+    pub kek_id: String,
+}
+
+/// Where the KEK is read from. Mirrors `uops_poller::config::KekSource`.
+#[derive(Debug, Clone)]
+pub enum KekSource {
+    File(std::path::PathBuf),
+    Env(String),
 }
 
 // There is deliberately no shutdown grace period here. Draining waits for the requests
@@ -111,6 +131,15 @@ impl Config {
             postgres: PgConfig::from_env(),
             clickhouse: ChConfig::from_env(),
             secure_cookies: !flag("UOPS_INSECURE_COOKIES"),
+            kek: match (
+                std::env::var("UOPS_KEK_FILE").ok(),
+                std::env::var("UOPS_KEK_HEX").ok(),
+            ) {
+                (Some(path), _) => Some(KekSource::File(path.into())),
+                (None, Some(_)) => Some(KekSource::Env("UOPS_KEK_HEX".to_owned())),
+                (None, None) => None,
+            },
+            kek_id: var("UOPS_KEK_ID", "default"),
             first_run: FirstRunNames {
                 org: var("UOPS_ORG_NAME", "Default organization"),
                 tenant: var("UOPS_TENANT_NAME", "Default tenant"),
@@ -130,11 +159,16 @@ impl Config {
     #[must_use]
     pub fn summary(&self) -> String {
         format!(
-            "bind={} postgres={} clickhouse={} secure_cookies={}",
+            "bind={} postgres={} clickhouse={} secure_cookies={} credentials={}",
             self.bind,
             redact(&self.postgres.url),
             redact(&self.clickhouse.url),
             self.secure_cookies,
+            match &self.kek {
+                Some(KekSource::File(p)) => format!("file {}", p.display()),
+                Some(KekSource::Env(v)) => format!("env {v}"),
+                None => "off (no KEK configured)".to_owned(),
+            },
         )
     }
 }

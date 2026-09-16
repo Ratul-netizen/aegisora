@@ -138,6 +138,55 @@ const CASES: &[RouteCase] = &[
         body: Some(r#"{"status":"down"}"#),
     },
     RouteCase {
+        // Listing credentials. Scoped, and the fixture has no vault configured — which
+        // is its own answer: a 503 is not a leak, and the isolation harness checks that
+        // a caller from another tenant gets nothing either way.
+        path: "/api/v1/credentials",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/credentials",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"name":"x","kind":"snmp_community","community":"y"}"#),
+    },
+    RouteCase {
+        path: "/api/v1/credentials/{id}",
+        probe: Some("/api/v1/credentials/018f0000-0000-7000-8000-0000000000ee"),
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        // Pointing a device at a credential. Scoped on both halves — the resource and
+        // the credential must each be this tenant's, which the store enforces in one
+        // statement.
+        path: "/api/v1/resources/{id}/credential",
+        probe: Some("/api/v1/resources/018f0000-0000-7000-8000-0000000000ff/credential"),
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"credential":null}"#),
+    },
+    RouteCase {
+        // The route that makes a device pollable: `mgmt_ip` lives here, not in a column.
+        path: "/api/v1/resources/{id}/identifiers",
+        probe: Some("/api/v1/resources/018f0000-0000-7000-8000-0000000000ab/identifiers"),
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/resources/{id}/identifiers",
+        probe: Some("/api/v1/resources/018f0000-0000-7000-8000-0000000000ab/identifiers"),
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some("[]"),
+    },
+    RouteCase {
         path: "/api/v1/sites",
         probe: None,
         method: "GET",
@@ -214,8 +263,26 @@ fn telemetry() -> uops_store_ch::ChStore {
     ))
 }
 
+/// A vault over the same database, with an ephemeral key ring.
+///
+/// The routes that store credentials answer 503 without one, which is correct and is
+/// also the wrong thing to test isolation against: a 503 is the same for every caller,
+/// so the harness would be checking that a disabled feature leaks nothing. A real
+/// deployment has a vault, and that is the path the tenant predicate has to hold on.
+///
+/// `ephemeral_for_tests` is right here, unlike in the poller's tests: nothing in this
+/// file needs a credential sealed by one process to be readable by another.
+fn vault(store: &PgStore) -> uops_api::Vault {
+    uops_secrets::LocalVault::new(
+        uops_secrets::RustCryptoAead,
+        uops_store_pg::PgSealedStore::new(store.clone()),
+        uops_secrets::MemoryAccessLog::new(),
+        uops_secrets::KekRing::ephemeral_for_tests().expect("an ephemeral key ring"),
+    )
+}
+
 fn app(store: &PgStore) -> Router {
-    uops_api::router(AppState::new(store.clone(), telemetry()))
+    uops_api::router(AppState::new(store.clone(), telemetry()).with_vault(vault(store)))
 }
 
 struct Party {
@@ -356,7 +423,10 @@ async fn attempt(
 // The acceptance test
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+// Multi-threaded: `PgSealedStore` bridges a synchronous trait onto sqlx with
+// `block_in_place`, which a current-thread runtime refuses — loudly, by design. Every
+// binary in this workspace uses a multi-threaded runtime, so this matches what ships.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_route_in_the_router_has_an_isolation_case() {
     // The assertion that makes the rest of this file mean "every endpoint". It runs
     // first because it needs no database and no fixtures: a route added without a
@@ -399,7 +469,10 @@ async fn every_route_in_the_router_has_an_isolation_case() {
     );
 }
 
-#[tokio::test]
+// Multi-threaded: `PgSealedStore` bridges a synchronous trait onto sqlx with
+// `block_in_place`, which a current-thread runtime refuses — loudly, by design. Every
+// binary in this workspace uses a multi-threaded runtime, so this matches what ships.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_user_cannot_reach_a_tenant_they_have_no_role_on() {
     let store = store().await;
     let a = party(&store, "atkr").await;
@@ -431,7 +504,10 @@ async fn a_user_cannot_reach_a_tenant_they_have_no_role_on() {
     }
 }
 
-#[tokio::test]
+// Multi-threaded: `PgSealedStore` bridges a synchronous trait onto sqlx with
+// `block_in_place`, which a current-thread runtime refuses — loudly, by design. Every
+// binary in this workspace uses a multi-threaded runtime, so this matches what ships.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_valid_tenant_header_does_not_unlock_another_tenants_objects() {
     let store = store().await;
     let a = party(&store, "atkr2").await;
@@ -482,7 +558,10 @@ async fn a_valid_tenant_header_does_not_unlock_another_tenants_objects() {
     );
 }
 
-#[tokio::test]
+// Multi-threaded: `PgSealedStore` bridges a synchronous trait onto sqlx with
+// `block_in_place`, which a current-thread runtime refuses — loudly, by design. Every
+// binary in this workspace uses a multi-threaded runtime, so this matches what ships.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_tenant_list_a_user_is_shown_contains_only_their_own() {
     let store = store().await;
     let a = party(&store, "atkr3").await;
@@ -517,7 +596,10 @@ async fn the_tenant_list_a_user_is_shown_contains_only_their_own() {
     );
 }
 
-#[tokio::test]
+// Multi-threaded: `PgSealedStore` bridges a synchronous trait onto sqlx with
+// `block_in_place`, which a current-thread runtime refuses — loudly, by design. Every
+// binary in this workspace uses a multi-threaded runtime, so this matches what ships.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unauthenticated_request_reaches_nothing_scoped() {
     let store = store().await;
     let b = party(&store, "vctm4").await;

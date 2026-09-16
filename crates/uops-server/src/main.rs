@@ -39,8 +39,9 @@ use std::process::ExitCode;
 
 use uops_api::AppState;
 use uops_api::routes::router;
+use uops_secrets::{KekRing, LocalVault, MemoryAccessLog, RustCryptoAead};
 use uops_store_ch::{ChClient, ChStore, TelemetryStore};
-use uops_store_pg::PgStore;
+use uops_store_pg::{PgSealedStore, PgStore};
 
 use crate::config::Config;
 
@@ -81,6 +82,33 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     firstrun::run(&store, &config.first_run).await?;
 
+    // The vault, if this deployment configured a key. Built before the state so a bad
+    // KEK — unreadable, malformed, or group-readable — fails here with a sentence rather
+    // than on the first request to store a credential.
+    let vault = if let Some(source) = &config.kek {
+        let ring = match source {
+            config::KekSource::File(path) => {
+                KekRing::from_file(path, uops_secrets::record::KeyId(config.kek_id.clone()))
+            }
+            config::KekSource::Env(name) => {
+                KekRing::from_env(name, uops_secrets::record::KeyId(config.kek_id.clone()))
+            }
+        }
+        .map_err(|e| format!("the key ring could not be opened: {e}"))?;
+        println!("credential storage enabled");
+        Some(LocalVault::new(
+            RustCryptoAead,
+            PgSealedStore::new(store.clone()),
+            MemoryAccessLog::new(),
+            ring,
+        ))
+    } else {
+        // Not a warning. A deployment that only wants the inventory is a supported one,
+        // and the credential routes say so themselves with a 503 naming the variable.
+        println!("no KEK configured: device credentials cannot be stored");
+        None
+    };
+
     let state = if config.secure_cookies {
         AppState::new(store, telemetry)
     } else {
@@ -88,6 +116,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // deployment that has this on has it on for a reason someone can now find.
         eprintln!("warning: UOPS_INSECURE_COOKIES is set — cookies will not carry Secure");
         AppState::new(store, telemetry).allowing_insecure_cookies()
+    };
+
+    let state = match vault {
+        Some(v) => state.with_vault(v),
+        None => state,
     };
 
     let mut app = router(state);
