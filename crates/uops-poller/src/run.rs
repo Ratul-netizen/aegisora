@@ -32,14 +32,16 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 use uops_core::{ResourceId, TenantScope};
+use uops_poll::plan::Device;
 use uops_poll::poller::{JobKey, Schedule, Task, run_tick, tasks, tick_instant};
 use uops_poll::{Executor, TickReport};
+use uops_profile::Profile;
 use uops_snmp::Target;
 use uops_store_ch::ChStore;
 use uops_store_pg::PgStore;
 
 use crate::config::Config;
-use crate::credentials::Transports;
+use crate::credentials::TransportSource;
 use crate::fleet;
 use crate::poll;
 
@@ -50,7 +52,11 @@ use crate::poll;
 pub struct Runner {
     store: PgStore,
     metrics: ChStore,
-    transports: Mutex<Transports>,
+    /// Where a device's transport comes from. A trait object so the loop can be
+    /// measured against simulated agents — see `tests/scale.rs`, which is how SPEC §M2's
+    /// *1 000 simulated agents* criterion is checked through the binary rather than
+    /// through the library underneath it.
+    transports: Arc<dyn TransportSource>,
     devices: poll::Devices,
     /// Each device's discovery rule, from its profile. The schedule holds jobs, not
     /// profiles, and `Work::Discovery` carries only the table — not the column that
@@ -76,19 +82,48 @@ impl Runner {
     pub fn new(
         store: PgStore,
         metrics: ChStore,
-        transports: Transports,
+        transports: Arc<dyn TransportSource>,
         timeout: Duration,
     ) -> Self {
         Self {
             store,
             metrics,
-            transports: Mutex::new(transports),
+            transports,
             devices: poll::Devices::new(),
             discovery: Mutex::new(HashMap::new()),
             reported: Mutex::new(HashSet::new()),
             suppressed: std::sync::atomic::AtomicUsize::new(0),
             timeout,
         }
+    }
+
+    /// Put a fleet into the schedule, and keep what the schedule cannot hold.
+    ///
+    /// A `Schedule` holds jobs, and `Work::Discovery` carries only the table — not the
+    /// column that names a row, nor the identifiers to read off it. Those live here, in
+    /// a map beside it.
+    ///
+    /// The two go together and this is the only way to do either, deliberately. The
+    /// first version had `reload` update the map and let callers call
+    /// `Schedule::reload` themselves, and the scale test did exactly that: a thousand
+    /// devices, correctly scheduled, every one of whose discovery jobs failed with "a
+    /// discovery task with no discovery rule". Nothing was wrong with the poller; the
+    /// trap was that two things had to be done and only one of them was hard to forget.
+    ///
+    /// Returns `(added, removed)`.
+    pub async fn load(
+        &self,
+        schedule: &mut Schedule,
+        devices: &[(Device, Profile)],
+    ) -> (usize, usize) {
+        {
+            let mut discovery = self.discovery.lock().await;
+            discovery.clear();
+            for (device, profile) in devices {
+                discovery.insert(device.resource, profile.discovery.first().cloned());
+            }
+        }
+        schedule.reload(devices)
     }
 
     /// Run one task, reporting whatever went wrong.
@@ -99,19 +134,16 @@ impl Runner {
     async fn run_one(&self, task: Task) -> Result<usize, ()> {
         let device = task.device.resource;
 
-        let transport = {
-            let mut transports = self.transports.lock().await;
-            match transports.for_credential(
-                task.device.tenant,
-                device,
-                task.device.credential,
-                self.timeout,
-            ) {
-                Ok(t) => t,
-                Err(problem) => {
-                    self.report(device, &problem.to_string()).await;
-                    return Err(());
-                }
+        let transport = match self.transports.for_device(
+            task.device.tenant,
+            device,
+            task.device.credential,
+            self.timeout,
+        ) {
+            Ok(t) => t,
+            Err(problem) => {
+                self.report(device, &problem.to_string()).await;
+                return Err(());
             }
         };
 
@@ -291,15 +323,7 @@ pub async fn reload(
         );
     }
 
-    {
-        let mut discovery = runner.discovery.lock().await;
-        discovery.clear();
-        for (device, profile) in &loaded.devices {
-            discovery.insert(device.resource, profile.discovery.first().cloned());
-        }
-    }
-
-    let (added, removed) = schedule.reload(&loaded.devices);
+    let (added, removed) = runner.load(schedule, &loaded.devices).await;
 
     // Per-device memory follows the schedule. Without this the map grows for the life of
     // the process and a poller that has been up for a year holds state for every device
@@ -307,7 +331,7 @@ pub async fn reload(
     let live: HashSet<ResourceId> = loaded.devices.iter().map(|(d, _)| d.resource).collect();
     let forgotten = runner.devices.retain(&live).await;
 
-    let retried = runner.transports.lock().await.retry_failures();
+    let retried = runner.transports.retry_failures();
     let (reported, suppressed) = runner.new_window().await;
 
     println!(

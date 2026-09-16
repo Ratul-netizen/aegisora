@@ -90,7 +90,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let runner = Arc::new(run::Runner::new(
         store,
         metrics,
-        credentials::Transports::new(vault),
+        Arc::new(credentials::Transports::new(vault)),
         config.limits.device_budget,
     ));
 

@@ -28,11 +28,11 @@
 //! once and retried on reload, when the operator may have fixed it.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use uops_core::{CredentialRef, ResourceId, TenantId};
 use uops_secrets::{KekRing, LocalVault, MemoryAccessLog, RustCryptoAead};
-use uops_snmp::UdpTransport;
+use uops_snmp::{Transport, UdpTransport};
 use uops_store_pg::{PgSealedStore, PgStore};
 
 use crate::config::{Config, KekSource};
@@ -83,25 +83,60 @@ impl std::fmt::Display for CredentialProblem {
     }
 }
 
+/// Where a device's transport comes from.
+///
+/// One implementation in this crate — [`Transports`], which opens a credential and
+/// builds an SNMP session from it. The trait exists so the loop can be run against
+/// something else, and the something else that matters is the simulator: SPEC §M2's
+/// first acceptance criterion is *1 000 simulated agents*, and measuring it through the
+/// binary means the binary has to be able to talk to simulated ones.
+///
+/// `&self`, not `&mut self`: the cache is behind the implementation's own lock, so the
+/// loop can hold one of these in an `Arc` and every task can reach it at once.
+pub trait TransportSource: Send + Sync {
+    /// The transport for a device.
+    ///
+    /// # Errors
+    ///
+    /// When the device has no credential, or the credential cannot be opened.
+    fn for_device(
+        &self,
+        tenant: TenantId,
+        resource: ResourceId,
+        credential: Option<CredentialRef>,
+        timeout: std::time::Duration,
+    ) -> Result<Arc<dyn Transport>, CredentialProblem>;
+
+    /// Forget which credentials failed, so the next poll tries them again. Returns how
+    /// many were forgotten.
+    fn retry_failures(&self) -> usize;
+}
+
 /// Transports, one per credential, opened on demand.
 ///
-/// Not `Clone`, and held behind a `Mutex` by the loop rather than an `RwLock`: opening
-/// a credential is rare (once per credential per process) and the read path is a hash
-/// lookup, so the contention this would save does not exist.
+/// The caches are behind a `Mutex` rather than an `RwLock`: opening a credential is rare
+/// — once per credential per process — and the read path is a hash lookup, so the
+/// contention an `RwLock` would save does not exist.
 pub struct Transports {
     vault: Vault,
-    open: HashMap<(TenantId, CredentialRef), Arc<UdpTransport>>,
+    open: Mutex<HashMap<(TenantId, CredentialRef), Arc<UdpTransport>>>,
     /// Credentials that failed, so the error is reported once rather than per device
-    /// per poll. Cleared by [`Transports::retry_failures`].
-    failed: HashMap<(TenantId, CredentialRef), CredentialProblem>,
+    /// per poll. Cleared by [`TransportSource::retry_failures`].
+    failed: Mutex<HashMap<(TenantId, CredentialRef), CredentialProblem>>,
 }
 
 impl std::fmt::Debug for Transports {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Counts only. Everything inside is either a credential or derived from one.
         f.debug_struct("Transports")
-            .field("open", &self.open.len())
-            .field("failed", &self.failed.len())
+            .field(
+                "open",
+                &self.open.lock().map(|m| m.len()).unwrap_or_default(),
+            )
+            .field(
+                "failed",
+                &self.failed.lock().map(|m| m.len()).unwrap_or_default(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -111,49 +146,66 @@ impl Transports {
     pub fn new(vault: Vault) -> Self {
         Self {
             vault,
-            open: HashMap::new(),
-            failed: HashMap::new(),
+            open: Mutex::new(HashMap::new()),
+            failed: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// A poisoned lock means a panic while holding it, which cannot happen here — the
+    /// critical sections are hash lookups and inserts. Recovering the guard beats
+    /// propagating a panic into every device's poll.
+    fn open(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<(TenantId, CredentialRef), Arc<UdpTransport>>> {
+        self.open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn failed(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<(TenantId, CredentialRef), CredentialProblem>> {
+        self.failed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// How many credentials are open.
     #[must_use]
     pub fn open_count(&self) -> usize {
-        self.open.len()
+        self.open().len()
     }
+}
 
+impl TransportSource for Transports {
     /// Forget which credentials failed, so the next poll tries them again.
     ///
     /// Called on reload rather than on a timer: reload is when an operator's fix — a
     /// re-assigned credential, a restored KEK — would have landed.
-    pub fn retry_failures(&mut self) -> usize {
-        let n = self.failed.len();
-        self.failed.clear();
+    fn retry_failures(&self) -> usize {
+        let mut failed = self.failed();
+        let n = failed.len();
+        failed.clear();
         n
     }
 
     /// The transport for a device, opening its credential the first time.
-    ///
-    /// # Errors
-    ///
-    /// When the device has no credential, or the vault will not open it. A credential
-    /// that has already failed returns the remembered problem without asking again.
-    pub fn for_credential(
-        &mut self,
+    fn for_device(
+        &self,
         tenant: TenantId,
         resource: ResourceId,
         credential: Option<CredentialRef>,
         timeout: std::time::Duration,
-    ) -> Result<Arc<UdpTransport>, CredentialProblem> {
+    ) -> Result<Arc<dyn Transport>, CredentialProblem> {
         let Some(credential) = credential else {
             return Err(CredentialProblem::NotAssigned);
         };
         let key = (tenant, credential);
 
-        if let Some(transport) = self.open.get(&key) {
-            return Ok(Arc::clone(transport));
+        if let Some(transport) = self.open().get(&key) {
+            return Ok(Arc::clone(transport) as Arc<dyn Transport>);
         }
-        if let Some(problem) = self.failed.get(&key) {
+        if let Some(problem) = self.failed().get(&key) {
             return Err(problem.clone());
         }
 
@@ -163,7 +215,7 @@ impl Transports {
         let ctx = uops_snmp::credential::poll_context(resource);
         let opened = self.vault.get(tenant, credential, &ctx).map_err(|e| {
             let problem = CredentialProblem::Unopenable(e.to_string());
-            self.failed.insert(key, problem.clone());
+            self.failed().insert(key, problem.clone());
             problem
         })?;
 
@@ -171,7 +223,7 @@ impl Transports {
         // plaintext is never owned outside one and is zeroized when the last transport
         // holding it is dropped.
         let transport = Arc::new(UdpTransport::new(opened).with_timeout(timeout));
-        self.open.insert(key, Arc::clone(&transport));
-        Ok(transport)
+        self.open().insert(key, Arc::clone(&transport));
+        Ok(transport as Arc<dyn Transport>)
     }
 }

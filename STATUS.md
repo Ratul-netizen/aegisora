@@ -400,7 +400,7 @@ because it reads as covered.
 | Interface discovery creates child resources **and** `member_of` relationships | Met. Asserted against the real agent in `tests/live.rs` — the container's `eth0` and `lo` become resources with edges — and two CI mutations require the suite to fail: one writes the wrong edge kind, one breaks the rediscovery key |
 | A 32-bit counter wrap produces no negative rate in any query | Met. `Field::Rate` compiles to a window over each series in `ClickHouse`; a backwards step yields `NULL`, which the aggregates skip. Asserted against real `ClickHouse` with a real wrap, and CI breaks the guard and requires the suite to fail — unguarded, the fixture reports −71 582 754 B/s |
 | An unknown-vendor device gets interfaces and availability via `generic-snmp` | Half, and now genuinely half: interfaces become resources under `generic-snmp` with no vendor profile involved. Availability is ICMP and is counted as unsupported |
-| Dead device does not delay healthy devices (measured, not assumed) | Met, measured, and guarded in CI by a mutation that serialises the executor |
+| Dead device does not delay healthy devices (measured, not assumed) | Met at both levels. `uops-poll`'s fleet test measures the executor; the scale test measures the loop above it, which is a different claim — a lock held across an await in the loop would serialise the fleet with the executor entirely innocent. Healthy p95 270 ms; with 100 silent devices, 258 ms. Guarded in CI by a mutation that serialises the executor |
 
 ## How to pick this up
 

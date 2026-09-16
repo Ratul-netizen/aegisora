@@ -289,7 +289,7 @@ async fn a_device_in_postgres_becomes_rows_in_clickhouse() {
     let runner = Arc::new(Runner::new(
         store.clone(),
         metrics(),
-        Transports::new(vault(&store)),
+        Arc::new(Transports::new(vault(&store))),
         // Generous: the agent is local, but a loaded CI runner is not a quiet laptop and
         // a budget that fails under load would make this test flake rather than fail.
         Duration::from_secs(5),
@@ -375,7 +375,7 @@ async fn the_agents_interfaces_become_child_resources_and_member_of_edges() {
     let runner = Arc::new(Runner::new(
         store.clone(),
         metrics(),
-        Transports::new(vault(&store)),
+        Arc::new(Transports::new(vault(&store))),
         Duration::from_secs(5),
     ));
     let mut schedule = Schedule::new();
@@ -519,7 +519,7 @@ async fn a_device_with_no_credential_is_reported_and_does_not_stop_the_others() 
     let runner = Arc::new(Runner::new(
         store.clone(),
         metrics(),
-        Transports::new(vault(&store)),
+        Arc::new(Transports::new(vault(&store))),
         Duration::from_secs(5),
     ));
     let mut schedule = Schedule::new();
