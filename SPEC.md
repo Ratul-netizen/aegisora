@@ -2,7 +2,25 @@
 
 Codename `uops`. Companion to [PLAN.md](./PLAN.md).
 Scope: everything needed to build v0.1. M5+ is deliberately absent.
-Revised: 2026-09-13
+Revised: 2026-09-16
+
+## Branding rule
+
+**Veyronis** is a provisional product brand. **`uops`** is the implementation codename.
+
+No product-facing identifier may be used as a persistence, crate, database,
+environment-variable, NATS subject, Docker image or encryption identifier until brand
+clearance is complete — GitHub org, crates.io, npm, `.com`/`.io`, USPTO TESS classes 9
+and 42, and Bangladesh RJSC if incorporating locally.
+
+Product-facing surfaces — README, documentation, the UI, marketing — say *Veyronis*.
+Everything in the tree says `uops`.
+
+This is not bookkeeping. It was measured: the product name changed from *Aegisora* to
+*Veyronis* on 2026-09-16 and the change touched **eight lines of documentation and no
+code**, because the name had never been allowed into an identifier. See
+[RENAME_AUDIT.md](./RENAME_AUDIT.md). The rule is what made that true, and it stays until
+clearance makes the rename permanent.
 
 > **How to read this.** M0 is design that must be finished before collectors exist; it is mostly
 > types, DDL and rules. M1–M4 are buildable milestones, each with acceptance criteria that are
