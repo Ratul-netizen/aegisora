@@ -9,6 +9,7 @@
 //! and the executor and is tested without a device; the *wire* is `uops-snmp`; the
 //! *rows* are `uops-store-ch`. This crate is the joins between them, and nothing else.
 
+pub mod check;
 pub mod config;
 pub mod credentials;
 pub mod fleet;

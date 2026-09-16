@@ -118,6 +118,12 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 
+# --- ICMP (M2) ------------------------------------------------------------------
+# For the availability check's unprivileged datagram socket. Already present as a
+# transitive dependency of tokio and hyper-util, so this is a version pin rather than a
+# new dependency. MIT OR Apache-2.0.
+socket2 = "0.6"
+
 # --- internal ---
 uops-core = { path = "crates/uops-core" }
 uops-query = { path = "crates/uops-query" }

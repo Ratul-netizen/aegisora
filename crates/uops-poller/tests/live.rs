@@ -153,6 +153,16 @@ fn fixed_kek() -> KekRing {
     if !path.exists() {
         std::fs::write(&path, "0".repeat(64)).expect("write the test kek");
     }
+    // Owner-only, because `KekRing::from_file` refuses a group- or world-readable key on
+    // Unix — rightly: a KEK other local accounts can read is not a root of trust. The
+    // default here is 0644, so without this every test in this file fails on Linux and
+    // passes on Windows, where the check does not apply. Which is exactly what happened.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict the test kek");
+    }
     KekRing::from_file(&path, uops_secrets::record::KeyId("test-kek".to_owned()))
         .expect("load the test kek")
 }
@@ -339,14 +349,20 @@ async fn a_device_in_postgres_becomes_rows_in_clickhouse() {
          {failed} did not, and ClickHouse has {written:?}"
     );
 
-    // The availability job is the one that cannot succeed yet — ICMP is not implemented
-    // — so some failures are expected and their absence would mean the job was not
-    // scheduled at all.
-    assert!(
-        failed > 0,
-        "the ICMP availability job must be counted as failing rather than silently \
-         passing; if this is 0 the planner stopped scheduling it"
-    );
+    // Nothing may fail. This assertion used to say the opposite — the availability job
+    // could not succeed while ICMP was unimplemented, so failures were expected and
+    // their absence would have meant the planner had stopped scheduling it. ICMP works
+    // now, and the assertion that pinned the old behaviour is what noticed.
+    //
+    // Conditional on ICMP being available at all: on a machine without an unprivileged
+    // ICMP socket the check reports a `CheckError`, which is a failure of the *poller*
+    // rather than of the device, and the run is not measuring what this asserts.
+    if icmp_available() {
+        assert_eq!(
+            failed, 0,
+            "a device that answers both SNMP and ICMP must fail nothing"
+        );
+    }
 
     scratch.drop_database().await;
 }
@@ -592,4 +608,148 @@ async fn the_binary_refuses_to_start_without_a_key_ring() {
     assert!(e.problem.contains("key-encryption key"), "{}", e.problem);
     // The message must say what to do, not only what is wrong.
     assert!(e.problem.contains("64 hex characters"), "{}", e.problem);
+}
+
+/// Whether this machine can open an unprivileged ICMP socket.
+///
+/// Same shape as `agent_or_skip!`: a developer on a platform without it should not get a
+/// red suite, and the skip says so out loud. CI runs on Linux and asserts the message is
+/// absent.
+fn icmp_available() -> bool {
+    #[cfg(unix)]
+    {
+        use socket2::{Domain, Protocol, Socket, Type};
+        Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4)).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_availability_check_writes_a_state_transition_and_updates_the_resource() {
+    // SPEC §M2's remaining criterion, end to end: the device answers an ICMP echo
+    // request, the poller notices its status changed, and the change lands in both
+    // places it has to — `states` in ClickHouse for the history, and `resource.status`
+    // in PostgreSQL for the inventory.
+    //
+    // The two are not redundant. The row is what an availability report is computed
+    // from and is retained for 1 095 days; the column is what a list of devices shows
+    // and holds only the latest value. Writing one without the other gives either an
+    // inventory that is right and a history that never happened, or a history nobody can
+    // see.
+    let address = agent_or_skip!();
+    if !icmp_available() {
+        // Note for anyone chasing this: a container on Docker's default bridge gets
+        // `net.ipv4.ping_group_range = 0 2147483647` and this works. A container run
+        // with `--network host` inherits the host's namespace instead, where the range
+        // is usually closed — so a skip here is about how the container was started,
+        // not about the code.
+        println!(
+            "SKIPPED: no unprivileged ICMP socket. On Linux, widen \
+             net.ipv4.ping_group_range to include this process's group."
+        );
+        return;
+    }
+
+    let scratch = Scratch::new().await;
+    let store = scratch.store.clone();
+    let (tenant, resource) = seed(&store, &address).await;
+    let scope = TenantScope::collector(tenant);
+
+    store
+        .seed_builtin_profiles(&uops_profile::builtin::all().expect("built-ins"))
+        .await
+        .expect("seed profiles");
+
+    // The device starts unknown, which is what `create_resource` leaves it as.
+    assert_eq!(
+        store
+            .resource(&scope, resource)
+            .await
+            .expect("device")
+            .status,
+        uops_core::ResourceStatus::Unknown
+    );
+
+    let runner = Arc::new(Runner::new(
+        store.clone(),
+        metrics(),
+        Arc::new(Transports::new(vault(&store))),
+        Duration::from_secs(5),
+    ));
+    let mut schedule = Schedule::new();
+    run::reload(&runner, &mut schedule, 10_000)
+        .await
+        .expect("reload");
+
+    let executor = Executor::new(Limits {
+        global: 16,
+        per_device: 4,
+        device_budget: Duration::from_secs(5),
+    });
+    let mut due = Vec::new();
+    // The check is on a 30-second interval; 120 slots is two cycles with room for the
+    // jitter that spreads it.
+    for _ in 0..120 {
+        run::tick_once(&runner, &executor, &mut schedule, &mut due).await;
+    }
+
+    // The address is the SNMP fixture's, which is loopback — so the device answers.
+    assert_eq!(
+        store
+            .resource(&scope, resource)
+            .await
+            .expect("device")
+            .status,
+        uops_core::ResourceStatus::Up,
+        "the device answered an echo request and its status was not updated"
+    );
+
+    // ClickHouse batches; give the insert a moment to be visible.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let rows = states_for(resource).await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly one transition: unknown → up. A row per check would make an \
+         availability report a scan of a million identical rows: {rows:?}"
+    );
+    let (previous, current, severity, reason) = &rows[0];
+    assert_eq!(previous, "unknown");
+    assert_eq!(current, "up");
+    // Coming up is informational. An operator paged for a recovery stops reading pages.
+    assert_eq!(severity, "info");
+    assert!(
+        reason.contains("ICMP"),
+        "the reason is the only part of the row that says why: {reason}"
+    );
+}
+
+/// The state transitions recorded for a resource, oldest first.
+async fn states_for(resource: uops_core::ResourceId) -> Vec<(String, String, String, String)> {
+    let client = ChClient::new(ChConfig::from_env());
+    let result = client
+        .run(
+            "SELECT previous_status, current_status, severity, reason FROM states \
+             WHERE resource_id = {resource:UUID} ORDER BY observed_at FORMAT TSV",
+            &[("resource", resource.into_uuid().to_string())],
+        )
+        .await
+        .expect("query ClickHouse");
+    result
+        .body
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|line| {
+            let mut parts = line.split('\t');
+            (
+                parts.next().unwrap_or_default().to_owned(),
+                parts.next().unwrap_or_default().to_owned(),
+                parts.next().unwrap_or_default().to_owned(),
+                parts.next().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
 }

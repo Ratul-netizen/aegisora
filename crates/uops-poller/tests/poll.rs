@@ -148,7 +148,7 @@ fn context<'a>(
         transport,
         devices,
         metrics,
-        discovery: profile.discovery.first().cloned(),
+        profile: Some(Arc::new(profile.clone())),
         observed_at: chrono::Utc::now(),
     }
 }
@@ -359,19 +359,22 @@ async fn a_store_failure_is_not_reported_as_a_device_failure() {
 }
 
 #[tokio::test]
-async fn an_availability_check_is_counted_as_unsupported_rather_than_passing() {
-    // ICMP needs a raw socket and is not implemented. The honest failure is the one that
-    // says so: a check that silently "succeeded" would put every device permanently up,
-    // which is worse than no availability at all.
-    let (profile, device) = (generic(), device());
+async fn an_availability_task_whose_profile_has_no_check_is_refused() {
+    // `Work::Availability` carries an index into a list the schedule does not hold, so
+    // the index and the profile can disagree — a device reloaded onto a profile with
+    // fewer checks than the one it was scheduled under. Refused rather than silently
+    // treated as up, which would leave the device permanently green.
+    let (mut profile, device) = (generic(), device());
     let devices = Devices::new();
     let recorder = Recorder::default();
     let transport: Arc<dyn Transport> = Arc::new(healthy(1));
-    let ctx = context(transport, &devices, &recorder, &profile);
 
     let task = task(&device, &profile, |w| {
         matches!(w, Work::Availability { .. })
     });
+    profile.availability.clear();
+    let ctx = context(transport, &devices, &recorder, &profile);
+
     let err = poll::run(&task, &ctx).await.unwrap_err();
     assert!(matches!(err, PollError::Unsupported(_)), "{err:?}");
 }

@@ -269,6 +269,16 @@ jobs:
             exit 1
           fi
 
+      # The availability check uses an unprivileged ICMP datagram socket rather than a
+      # raw one, so it needs no CAP_NET_RAW — but it does need this sysctl to include the
+      # running process's group. A container on Docker's default bridge gets it for free;
+      # a VM runner does not, so it is set here explicitly. This line is also the
+      # deployment requirement, stated where it cannot drift from the code.
+      - name: Allow unprivileged ICMP
+        run: |
+          sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+          cat /proc/sys/net/ipv4/ping_group_range
+
       # The binary's own end-to-end: a device in PostgreSQL, polled over real SNMP,
       # becoming rows in ClickHouse. Every other test in uops-poller replaces one end or
       # the other; this is the only one with nothing simulated in it, which is where the
@@ -282,7 +292,7 @@ jobs:
           # Same reasoning as the agent tests above: a skipped test is a green suite that
           # proves nothing, so the skip message is itself a failure here.
           if echo "$output" | grep -q "SKIPPED:"; then
-            echo "::error::the live poller test skipped; the fixture was not reachable"
+            echo "::error::the live poller test skipped; the fixture or unprivileged ICMP was unavailable"
             exit 1
           fi
 
@@ -424,6 +434,27 @@ jobs:
           fi
           cp "$RUNNER_TEMP/identity.bak" "$F"
           echo "ok: a review that outlives its own answer fails the suite"
+
+      # The availability check sends a real ICMP echo request. A wrong packet is silent:
+      # the kernel sends it, nothing replies, and every device in the fleet reports down
+      # for ever. Type 13 is a timestamp request — well-formed, and not what an echo
+      # reply answers.
+      - name: The check tests fail when the ICMP packet is not an echo request
+        run: |
+          F=crates/uops-poller/src/check.rs
+          cp "$F" "$RUNNER_TEMP/check.bak"
+          sed -i 's|if v6 { 128 } else { 8 }, // type|if v6 { 128 } else { 13 }, // type|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-poller --lib check > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/check.bak" "$F"
+            echo "::error::the check tests passed with a packet no device answers"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/check.bak" "$F"
+          echo "ok: a malformed echo request fails the suite"
 
       # SPEC §M2: "a 32-bit counter wrap produces no negative rate in any query".
       #

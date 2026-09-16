@@ -179,17 +179,16 @@ fn generic() -> Profile {
 
 /// `generic-snmp` with its availability check removed.
 ///
-/// Not a convenience. The check is ICMP, which is not implemented — the poller counts it
-/// as unsupported rather than silently succeeding — so leaving it in means a fifth of
-/// every tick is a job that fails instantly, and `failed` counts four thousand of them.
-/// That drowns the number the measurement exists to produce, which is whether a *poll*
-/// failed.
+/// The check works — see `check.rs` — and it is left out because of where these agents
+/// live. A simulated fleet is a thousand entries in a `HashMap` behind a thousand
+/// loopback addresses, so an ICMP check here would ping `127.0.0.1` a thousand times and
+/// measure the loopback interface rather than the poller. A number that good would be
+/// meaningless, and a number that good in a scale test is how a regression hides.
 ///
-/// It also makes the measurement slightly optimistic, and by a knowable amount: one
-/// availability check per device per 30 seconds, which is 2 000 checks over the 120
-/// seconds measured here against roughly 6 000 SNMP jobs. When ICMP exists, this line
-/// goes and the numbers move. Said out loud rather than left for a reader to notice the
-/// job count does not match the profile.
+/// It makes the measurement optimistic by a knowable amount: one check per device per
+/// 30 seconds, about 2 000 over the 120 seconds measured here against roughly 6 000 SNMP
+/// jobs. Said out loud rather than left for a reader to notice that the job count does
+/// not match the profile.
 fn measured_profile() -> Profile {
     let mut p = generic();
     p.availability.clear();

@@ -86,6 +86,17 @@ fn fixed_kek(dir: &std::path::Path) -> KekRing {
     if !path.exists() {
         std::fs::write(&path, "0".repeat(64)).expect("write the test kek");
     }
+    // Owner-only. `KekRing::from_file` refuses a group- or world-readable key on Unix —
+    // rightly, since a KEK other local accounts can read is not a root of trust — and
+    // `fs::write` leaves 0644. Without this every test in this file passes on Windows,
+    // where the check does not apply, and fails on Linux, where CI runs. Which is what
+    // it did, undetected, until the suite was run on both.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict the test kek");
+    }
     let mut ring = KekRing::from_file(&path, uops_secrets::record::KeyId("test-kek".to_owned()))
         .expect("load the test kek");
     ring.add_retired(

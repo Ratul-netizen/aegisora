@@ -25,6 +25,10 @@ chrono.workspace = true
 # block_in_place and a current-thread runtime would panic on the first credential read.
 tokio = { workspace = true, features = ["net", "signal", "time", "rt-multi-thread", "macros", "sync"] }
 async-trait.workspace = true
+# The ICMP availability check. Already in the tree through tokio and hyper-util, so this
+# adds no download and no licence; naming it directly is what lets the check open a
+# SOCK_DGRAM ICMP socket without CAP_NET_RAW. See src/check.rs.
+socket2.workspace = true
 
 [dev-dependencies]
 # The end-to-end poll test runs against uops-snmp's simulator: no network, and the
@@ -34,6 +38,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 # The live test seeds its own tenant, device and credential: sqlx to write the rows,
 # uops-profile for the built-ins it polls under.
 sqlx.workspace = true
+# The live availability test checks whether this machine has unprivileged ICMP before
+# asserting anything, the same way the SNMP tests check for the agent fixture.
+socket2.workspace = true
 uops-profile.workspace = true
 uops-secrets.workspace = true
 uuid.workspace = true

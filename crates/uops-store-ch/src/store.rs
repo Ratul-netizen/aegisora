@@ -24,7 +24,7 @@ use uops_query::{Query, ResolvedResources, compile};
 
 use crate::client::ChClient;
 use crate::error::{Error, Result};
-use crate::rows::{LogRow, MetricRow, ResultSet};
+use crate::rows::{LogRow, MetricRow, ResultSet, StateRow};
 
 /// Reading telemetry.
 #[async_trait]
@@ -51,6 +51,12 @@ pub trait LogStore: TelemetryStore {
 #[async_trait]
 pub trait MetricStore: TelemetryStore {
     async fn insert_metrics(&self, rows: &[MetricRow]) -> Result<()>;
+}
+
+/// Writing state transitions.
+#[async_trait]
+pub trait StateStore: TelemetryStore {
+    async fn insert_states(&self, rows: &[StateRow]) -> Result<()>;
 }
 
 /// What `/api/v1/health` reports about telemetry storage.
@@ -152,6 +158,13 @@ impl LogStore for ChStore {
 impl MetricStore for ChStore {
     async fn insert_metrics(&self, rows: &[MetricRow]) -> Result<()> {
         self.insert("metrics", rows).await
+    }
+}
+
+#[async_trait]
+impl StateStore for ChStore {
+    async fn insert_states(&self, rows: &[StateRow]) -> Result<()> {
+        self.insert("states", rows).await
     }
 }
 

@@ -30,10 +30,12 @@ use uops_core::{Identifier, ResourceId};
 use uops_poll::plan::{MetricRequest, Work};
 use uops_poll::poller::{InterfaceNames, Task};
 use uops_poll::sample::{self, Numeric, Reading};
-use uops_profile::Oid;
+use uops_profile::{Oid, Profile};
 use uops_snmp::bulk::Tuning;
 use uops_snmp::{Target, Transport, TransportError, Value, VarBind, walk};
 use uops_store_ch::MetricRow;
+
+use crate::check;
 
 /// `SNMPv2-MIB::sysObjectID`. What profile resolution matches on.
 const SYSOBJECTID: &str = "1.3.6.1.2.1.1.2";
@@ -132,6 +134,9 @@ pub enum PollError {
     Store(String),
     /// Work this binary does not carry out yet. Counted rather than silently succeeding.
     Unsupported(&'static str),
+    /// The availability check could not be carried out — which is not the same as the
+    /// device being down. See `check::CheckError`.
+    Check(check::CheckError),
 }
 
 impl std::fmt::Display for PollError {
@@ -141,6 +146,7 @@ impl std::fmt::Display for PollError {
             Self::Walk(e) => write!(f, "{e}"),
             Self::Store(e) => write!(f, "the samples could not be stored: {e}"),
             Self::Unsupported(what) => write!(f, "{what} is not implemented yet"),
+            Self::Check(e) => write!(f, "{e}"),
         }
     }
 }
@@ -176,13 +182,14 @@ pub struct Context<'a, S: Sink + ?Sized> {
     pub transport: Arc<dyn Transport>,
     pub devices: &'a Devices,
     pub metrics: &'a S,
-    /// The profile's discovery rule. `None` for a profile that discovers nothing, in
-    /// which case a discovery task cannot have been scheduled.
+    /// The device's profile.
     ///
-    /// The whole rule rather than the name column alone: discovery also reads the
-    /// identifiers the rule declares, and a `Context` carrying only the name would make
-    /// those columns unreachable from the one function that needs them.
-    pub discovery: Option<uops_profile::Discovery>,
+    /// The whole profile, not the one field each arm needs. The first version carried
+    /// the discovery rule alone, and when availability arrived it wanted a different
+    /// field of the same document — two side maps, populated in one place and read in
+    /// another, which is the shape that had already drifted once. `Arc` because a fleet
+    /// is a thousand devices and a handful of distinct profiles.
+    pub profile: Option<Arc<Profile>>,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -192,7 +199,7 @@ impl<S: Sink + ?Sized> std::fmt::Debug for Context<'_, S> {
         // the one implementation holds a credential, and a trait object that could be
         // printed is a credential that could be printed by accident.
         f.debug_struct("Context")
-            .field("discovery", &self.discovery.is_some())
+            .field("profile", &self.profile.as_ref().map(|p| p.id.as_str()))
             .field("observed_at", &self.observed_at)
             .finish_non_exhaustive()
     }
@@ -203,6 +210,13 @@ impl<S: Sink + ?Sized> std::fmt::Debug for Context<'_, S> {
 pub struct Polled {
     /// Metric rows written.
     pub rows: usize,
+    /// What an availability check found, and the sentence describing it. `None` for
+    /// every other kind of task.
+    ///
+    /// Returned rather than acted on here for the same reason as `discovered`: deciding
+    /// that this is a *transition* means knowing what the status was, and writing one
+    /// means a `PostgreSQL` update and a `ClickHouse` row.
+    pub reachability: Option<(check::Reachability, String)>,
     /// Rows of a discovery walk, for the caller to persist. Empty for every other kind
     /// of task.
     ///
@@ -243,19 +257,43 @@ pub async fn run<S: Sink + ?Sized>(task: &Task, ctx: &Context<'_, S>) -> Result<
             columns(task, ctx, &target, metrics).await.map(rows_only)
         }
         Work::Discovery { table } => discovery(task, ctx, &target, table).await,
-        // ICMP needs a raw socket, which needs a privilege this process should not have
-        // by default; TCP needs a port the built-in profiles do not set. Both are real
-        // work rather than a line of code, and counting them is the honest thing to do
-        // until they exist. See STATUS.
-        Work::Availability { .. } => Err(PollError::Unsupported("the availability check")),
+        Work::Availability { index } => availability(ctx, &target, *index).await,
     }
 }
 
+/// Is the device there at all.
+///
+/// Writes no metric rows: availability is a *state*, and a state row is written on a
+/// transition rather than on every check — see `uops_store_ch::StateRow`. What the
+/// caller does with this is decide whether anything changed.
+async fn availability<S: Sink + ?Sized>(
+    ctx: &Context<'_, S>,
+    target: &Target,
+    index: usize,
+) -> Result<Polled, PollError> {
+    let check = ctx
+        .profile
+        .as_ref()
+        .and_then(|p| p.availability.get(index))
+        .ok_or(PollError::Unsupported(
+            "an availability task whose profile has no check at that index",
+        ))?;
+
+    let outcome = check::run(check, target.address)
+        .await
+        .map_err(PollError::Check)?;
+
+    Ok(Polled {
+        reachability: Some((outcome, check::describe(check, outcome))),
+        ..Polled::default()
+    })
+}
+
 /// A task that discovers nothing, as a [`Polled`].
-const fn rows_only(rows: usize) -> Polled {
+fn rows_only(rows: usize) -> Polled {
     Polled {
         rows,
-        discovered: Vec::new(),
+        ..Polled::default()
     }
 }
 
@@ -331,7 +369,11 @@ async fn discovery<S: Sink + ?Sized>(
     target: &Target,
     table: &Oid,
 ) -> Result<Polled, PollError> {
-    let Some(rule) = ctx.discovery.clone() else {
+    let Some(rule) = ctx
+        .profile
+        .as_ref()
+        .and_then(|p| p.discovery.first().cloned())
+    else {
         // Profile::validate refuses interface metrics with no discovery rule, and plan()
         // only schedules discovery when there is one — so this is a consistency check on
         // the caller rather than a case that arises.
@@ -413,8 +455,8 @@ async fn discovery<S: Sink + ?Sized>(
         .collect();
 
     Ok(Polled {
-        rows: 0,
         discovered,
+        ..Polled::default()
     })
 }
 

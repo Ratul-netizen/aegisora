@@ -31,19 +31,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Mutex;
-use uops_core::{ResourceId, TenantScope};
+use uops_core::{ResourceId, ResourceStatus, TenantScope};
 use uops_poll::plan::Device;
 use uops_poll::poller::{JobKey, Schedule, Task, run_tick, tasks, tick_instant};
 use uops_poll::{Executor, TickReport};
 use uops_profile::Profile;
 use uops_snmp::Target;
-use uops_store_ch::ChStore;
+use uops_store_ch::{ChStore, StateRow, StateStore};
 use uops_store_pg::PgStore;
 
 use crate::config::Config;
 use crate::credentials::TransportSource;
 use crate::fleet;
-use crate::poll;
+use crate::{check, poll};
 
 /// Everything a task needs, shared across the tick's tasks.
 ///
@@ -58,10 +58,14 @@ pub struct Runner {
     /// through the library underneath it.
     transports: Arc<dyn TransportSource>,
     devices: poll::Devices,
-    /// Each device's discovery rule, from its profile. The schedule holds jobs, not
-    /// profiles, and `Work::Discovery` carries only the table — not the column that
-    /// names a row, nor the identifiers to read off it.
-    discovery: Mutex<HashMap<ResourceId, Option<uops_profile::Discovery>>>,
+    /// Each device's profile. A `Schedule` holds jobs, and a job carries only what the
+    /// wheel needs: `Work::Discovery` names a table but not the column that names a row,
+    /// and `Work::Availability` names an index into a list the schedule does not have.
+    profiles: Mutex<HashMap<ResourceId, Arc<Profile>>>,
+    /// What each device's status was last time a check ran, so a transition can be told
+    /// from a repetition. Empty at startup: the first check of every device after a
+    /// restart is a transition from whatever `resource.status` says, which is read then.
+    status: Mutex<HashMap<ResourceId, ResourceStatus>>,
     /// Devices whose failure has already been reported this reload window.
     reported: Mutex<HashSet<ResourceId>>,
     /// Failures not printed because the device had already been reported.
@@ -90,7 +94,8 @@ impl Runner {
             metrics,
             transports,
             devices: poll::Devices::new(),
-            discovery: Mutex::new(HashMap::new()),
+            profiles: Mutex::new(HashMap::new()),
+            status: Mutex::new(HashMap::new()),
             reported: Mutex::new(HashSet::new()),
             suppressed: std::sync::atomic::AtomicUsize::new(0),
             timeout,
@@ -117,10 +122,17 @@ impl Runner {
         devices: &[(Device, Profile)],
     ) -> (usize, usize) {
         {
-            let mut discovery = self.discovery.lock().await;
-            discovery.clear();
+            // One `Arc` per distinct profile rather than per device: a fleet is a
+            // thousand devices and a handful of profiles, and cloning the document per
+            // device would hold a thousand copies of the same OIDs.
+            let mut shared: HashMap<String, Arc<Profile>> = HashMap::new();
+            let mut profiles = self.profiles.lock().await;
+            profiles.clear();
             for (device, profile) in devices {
-                discovery.insert(device.resource, profile.discovery.first().cloned());
+                let entry = shared
+                    .entry(profile.id.clone())
+                    .or_insert_with(|| Arc::new(profile.clone()));
+                profiles.insert(device.resource, Arc::clone(entry));
             }
         }
         schedule.reload(devices)
@@ -147,16 +159,19 @@ impl Runner {
             }
         };
 
-        let rule = self.discovery.lock().await.get(&device).cloned().flatten();
+        let profile = self.profiles.lock().await.get(&device).map(Arc::clone);
         // The profile's `resource_kind` is `uops_core::ResourceKind` already — a profile
         // is validated against the same vocabulary the schema uses, so there is nothing
         // to convert.
-        let kind = rule.as_ref().map(|r| r.creates.resource_kind);
+        let kind = profile
+            .as_ref()
+            .and_then(|p| p.discovery.first())
+            .map(|d| d.creates.resource_kind);
         let ctx = poll::Context {
             transport: Arc::clone(&transport) as Arc<dyn uops_snmp::Transport>,
             devices: &self.devices,
             metrics: &self.metrics,
-            discovery: rule,
+            profile,
             observed_at: tick_instant(),
         };
 
@@ -177,6 +192,10 @@ impl Runner {
             if let Some(kind) = kind {
                 self.record_discovery(&task, kind, &polled.discovered).await;
             }
+        }
+
+        if let Some((outcome, reason)) = polled.reachability {
+            self.record_reachability(&task, outcome, reason).await;
         }
 
         Ok(polled.rows)
@@ -233,6 +252,107 @@ impl Runner {
                 .await;
             }
         }
+    }
+
+    /// Record what an availability check found, if it changed anything.
+    ///
+    /// # Why only on a change
+    ///
+    /// A device checked every 30 seconds is a million checks a year and, with luck, a
+    /// handful of transitions. The `states` table is ordered and retained on the
+    /// assumption that it holds the second — 1 095 days, against the metrics' 30 — and a
+    /// row per check would make an availability report a scan of a million identical
+    /// rows to find four interesting ones.
+    ///
+    /// # Where the previous status comes from after a restart
+    ///
+    /// From `resource.status` in `PostgreSQL`, read once per device per process. A
+    /// poller that assumed `Unknown` at startup would write a transition for every
+    /// device in the fleet every time it was deployed, and a deploy is not an outage.
+    async fn record_reachability(&self, task: &Task, outcome: check::Reachability, reason: String) {
+        let device = task.device.resource;
+        let scope = TenantScope::collector(task.device.tenant);
+        let current = match outcome {
+            check::Reachability::Up { .. } => ResourceStatus::Up,
+            check::Reachability::Down => ResourceStatus::Down,
+        };
+
+        let previous = {
+            let remembered = self.status.lock().await.get(&device).copied();
+            match remembered {
+                Some(status) => status,
+                // First check since this process started. Whatever PostgreSQL says is
+                // what an operator last saw, so that is what this transitions *from*.
+                None => match self.store.resource(&scope, device).await {
+                    Ok(resource) => resource.status,
+                    // The device is not in PostgreSQL — which happens under the scale
+                    // test, and would happen to a device deleted mid-tick. Treat it as
+                    // unknown rather than failing: the check itself succeeded.
+                    Err(_) => ResourceStatus::Unknown,
+                },
+            }
+        };
+
+        self.status.lock().await.insert(device, current);
+        if previous == current {
+            return;
+        }
+
+        // Maintenance is an operator's decision and outranks a check. Suppressing
+        // alerting without losing history is what the status is *for*, and a poller that
+        // overwrote it would page somebody for a device that was deliberately unplugged.
+        if previous == ResourceStatus::Maintenance || previous == ResourceStatus::Decommissioned {
+            return;
+        }
+
+        let row = StateRow {
+            tenant_id: task.device.tenant,
+            resource_id: device,
+            site_id: task.device.site,
+            observed_at: tick_instant(),
+            ingested_at: chrono::Utc::now(),
+            // Down is an error; coming back is informational. An operator paged for a
+            // recovery stops reading pages.
+            severity: match current {
+                ResourceStatus::Up => "info".to_owned(),
+                _ => "error".to_owned(),
+            },
+            previous_status: previous.as_str().to_owned(),
+            current_status: current.as_str().to_owned(),
+            reason,
+            attributes: std::collections::BTreeMap::new(),
+        };
+
+        if let Err(e) = self.metrics.insert_states(std::slice::from_ref(&row)).await {
+            self.report(
+                device,
+                &format!("its status change could not be stored: {e}"),
+            )
+            .await;
+            // Not remembered as written: leaving the map on the *new* status would mean
+            // the next check sees no change and the transition is lost for good.
+            self.status.lock().await.insert(device, previous);
+            return;
+        }
+
+        // And the current status in PostgreSQL, which is what the inventory shows.
+        // Best effort: the history is already written, and that is the part that cannot
+        // be reconstructed.
+        if let Err(e) = self
+            .store
+            .set_resource_status(&scope, device, current)
+            .await
+        {
+            self.report(device, &format!("its status could not be updated: {e}"))
+                .await;
+        }
+
+        println!(
+            "uops-poller: {device} {} → {}: {}",
+            previous.as_str(),
+            current.as_str(),
+            row.reason
+        );
     }
 
     /// Fetch and persist the device's `sysObjectID`, if it has changed.

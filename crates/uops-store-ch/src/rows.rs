@@ -65,6 +65,34 @@ pub struct MetricRow {
     pub labels: std::collections::BTreeMap<String, String>,
 }
 
+/// One row of `states` — an availability or status transition.
+///
+/// Written on a *change*, never on every check. A device polled every 30 seconds for a
+/// year is a million checks and a handful of transitions, and the table is ordered and
+/// retained (1 095 days, against the metrics' 30) on the assumption that it holds the
+/// second. A row per check would make the availability report a scan of a million
+/// identical rows to find four interesting ones.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StateRow {
+    pub tenant_id: TenantId,
+    pub resource_id: ResourceId,
+    pub site_id: SiteId,
+    #[serde(serialize_with = "clickhouse_datetime")]
+    pub observed_at: DateTime<Utc>,
+    #[serde(serialize_with = "clickhouse_datetime")]
+    pub ingested_at: DateTime<Utc>,
+    /// How loud this transition is. A device going down is an error; coming back is
+    /// informational, and an operator who is paged for a recovery stops reading pages.
+    pub severity: String,
+    pub previous_status: String,
+    pub current_status: String,
+    /// What the check saw, in words. This is the sentence an operator reads first and
+    /// it is the only part of the row that says *why* — "no reply to 3 ICMP echo
+    /// requests within 2s" rather than "down".
+    pub reason: String,
+    pub attributes: std::collections::BTreeMap<String, String>,
+}
+
 /// One column of a result.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
