@@ -75,7 +75,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M3 · 50 000 msg/s, drop counter at zero** | ✅ **measured** — 49 986/s offered, all received, 0 dropped, 501 000 rows queryable |
 | M3 · ceiling | ✅ **~100 000/s**, twice the target, every overflow datagram counted |
 | **M3 · OTLP decoding** | ✅ logs and metrics → the same rows syslog produces — 21 tests |
-| M3 · the OTLP receiver, Log Explorer | ⬜ |
+| **M3 · the OTLP receiver** | ✅ `uops-collector-otlp` — OTLP/HTTP, logs + metrics + traces, end to end |
+| M3 · Log Explorer | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -657,6 +658,59 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The OTLP receiver, and a bug that had already shipped.**
+
+`uops-collector-otlp` speaks OTLP/HTTP on `/v1/logs`, `/v1/metrics` and `/v1/traces`, with
+the same tenant-per-listener attribution, the same pipeline, the same batcher and the same
+spill as the syslog daemon. Five live tests against real `PostgreSQL` and real
+`ClickHouse`.
+
+**The batcher and the spill are now generic over the row type,** because metrics deserve
+the same durability logs get — a `ClickHouse` outage loses a metric exactly as permanently
+as it loses a log. Two batchers, because they write different tables; **not** one per
+tenant, because a batcher exists to make inserts few and large and splitting by tenant
+would divide every batch by the number of customers.
+
+The spill's segments do not record their row type, so logs and metrics get **separate
+directories**. That is met structurally rather than by a check: a different path is simply
+not the same place, where a tag in the file would be a runtime error.
+
+**Backpressure is where OTLP differs from syslog.** The handler waits on a bounded
+channel, which becomes the exporter waiting on its HTTP response — which is what HTTP is
+for. Nothing is dropped and nothing gets a 429; telling a collector to go away and come
+back is worse than making it wait. UDP had no such back channel, which is why the syslog
+receiver drops and counts instead.
+
+**Partial success is used properly.** OTLP defines a `rejected_*` count and an error
+message in every export response, and a receiver that converted nine records of ten and
+answered `200 {}` would be lying by omission. Histograms, summaries and timestamp-less
+data points are counted and *named* in the response, so an operator whose latency
+histograms never appear learns it from their own collector's logs rather than from an
+absent chart three weeks later. Traces are accepted, counted and discarded — with a
+message saying so, because *"not stored yet"* and *"the endpoint is broken"* must not look
+identical from the outside.
+
+**The bug: `uops-collector-syslog` was never in the Docker image.** The compose service
+had named `/usr/local/bin/uops-collector-syslog` as its entrypoint for two commits while
+the Dockerfile did not copy it. `docker compose config` validated — the YAML was correct —
+and the container would have exited instantly with *no such file*. The compose smoke test
+did not catch it because it only waits for `server`.
+
+Both collectors are in the image now, verified by building it and listing
+`/usr/local/bin`. And there is a CI guard that greps every `/usr/local/bin/...` entrypoint
+out of the compose file and requires each to exist in the built image — read from the
+compose file rather than listed, so a service added next year is checked without anybody
+remembering to.
+
+What let it through is worth naming: the edit was applied by a script whose pattern did
+not match, and which reported success from a *different* substitution in the same run.
+A script that edits several things and prints one "ok" cannot say which of them happened.
+
+**And the retention trap, for the third time.** The new live fixtures were dated
+`1_700_000_000` against `metrics`' **30-day** TTL, so the gauge was deleted before the
+test could read it. The log beside it passed only by racing the merge, because `logs` has
+a 365-day TTL — a flake waiting to happen. Fixtures are anchored to now.
 
 **OTLP decodes into the same rows syslog produces, and that took almost no code.**
 `uops-otlp` is protobuf in, `LogRow` and `MetricRow` out — no I/O, no async, 21 tests.
@@ -1296,6 +1350,8 @@ integration suites.
 | **The simulator modelled a GET as a GETNEXT** | a scalar that was invisible in tests but present on the real agent | `entPhysicalSoftwareRev` could never have been read. The simulator now has a real `get_scalars`. A simulator that is wrong in the same direction as the code under test proves nothing |
 | **`Runner::load` had a trap** | the scale test was measuring nothing | discovery rules lived in a side map populated only inside `run::reload`, so the 1 000-device scale test measured 1 000 devices whose every discovery job failed. `load()` now does both and is the only way in |
 | **Two routes leaked tenant existence** | the isolation harness, once it was given a real vault | `revoke` returned 204 for another tenant's credential and `identifiers_for` returned `200 []`. Both now `NotFound` — 404-never-403 |
+| **A collector was never in the Docker image** | adding the second one, and looking | the syslog service named an entrypoint the Dockerfile did not copy, for two commits. `docker compose config` validates YAML, not existence, and the smoke test only waits for `server`. Now a CI guard greps every entrypoint out of the compose file and requires it in the image. The edit had been applied by a script whose pattern did not match and which printed "ok" from a different substitution in the same run |
+| **The retention trap, a third time** | a gauge that never appeared while the log beside it did | fixtures dated 2023 against `metrics`' 30-day TTL are deleted at the next merge; `logs` has 365 days, so its row survived long enough to pass — a flake rather than a pass. Fixtures are anchored to now, and the helper says why |
 | **The load generator blamed the daemon twice** | the 50 000 msg/s test failing at 49 914/s | a fixed-slice-per-tick generator is systematically slow because sleeps overshoot and nothing catches up; and then the assertion `rate >= TARGET` is unsatisfiable by construction for a clock-paced generator. Both reported a shortfall while the daemon had received every message and dropped none. A measurement harness is code, and its bugs look like the thing it measures |
 | **`LogRow` had never round-tripped** | the first WAL segment replaying as empty | the timestamp fields had `serialize_with` and no matching `deserialize_with`, so the derived `Deserialize` parsed RFC 3339 against a string written as `YYYY-MM-DD HH:MM:SS.mmm`. Every line failed. The types have looked round-trippable since M0 and never were, because nothing read a row back until the spill did |
 | **The memory bound pre-empted the spill** | the test written to prove the spill worked | the `max_buffered` trim ran on every failed insert, including the ones before `spill_after`, so it discarded half a batch one retry before those rows would have been written to disk. Both are answers to the same question and only one can go first |

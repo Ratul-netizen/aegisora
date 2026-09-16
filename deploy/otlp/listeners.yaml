@@ -1,0 +1,27 @@
+# Which tenant an OTLP request belongs to.
+#
+# The same answer as syslog, and for the same reason: one listener per tenant. An OTLP
+# request carries resource attributes that describe the EMITTER -- host.id, service.name --
+# and nothing that says which customer it belongs to. Anything that did would be a field
+# the sender controls.
+#
+# The alternative is stronger here than it was for syslog and is still not taken: OTLP
+# exporters send arbitrary headers, so a per-tenant token would be idiomatic and would let
+# one endpoint serve every tenant. It is deferred because it is a new credential type --
+# something to mint, show once, rotate, revoke and audit -- and uops-secrets already owns
+# those decisions.
+#
+# An unknown emitter inside a listener's tenant is not rejected. The resolver creates a
+# provisional resource and a review item, so an application that starts reporting before
+# anybody adds it to inventory still has its telemetry.
+
+listeners:
+  # The slug in PostgreSQL, not a uuid. A mistyped slug fails at startup with a message
+  # that names it; a mistyped uuid would be a plausible-looking id that never matches.
+  - tenant: example
+    # 4318 is the port OTLP/HTTP uses by convention, and it is above 1024 -- so unlike
+    # syslog's 514 this needs no capability and the compose file maps it straight through.
+    bind: 0.0.0.0:4318
+    # What source_vendor says when the resource itself does not know. A fallback, never an
+    # override.
+    vendor: ""

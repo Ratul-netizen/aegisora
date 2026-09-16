@@ -46,9 +46,16 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-use uops_store_ch::LogRow;
+use uops_store_ch::{LogRow, MetricRow};
 
 use crate::wal::Wal;
+
+/// What a row has to be for this module to batch it.
+///
+/// `Serialize` for the insert, `DeserializeOwned` for the spill's replay — the two halves
+/// of the same requirement, which is why they are one bound and not two scattered ones.
+pub trait Row: serde::Serialize + serde::de::DeserializeOwned + Send + 'static {}
+impl<T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static> Row for T {}
 
 /// Somewhere to put a batch.
 ///
@@ -57,7 +64,7 @@ use crate::wal::Wal;
 /// module could only be tested against something that answers a compiled query — which is
 /// `ClickHouse` and nothing else.
 #[async_trait]
-pub trait Sink: Send + Sync {
+pub trait Sink<R>: Send + Sync {
     /// Store these rows, or say why not.
     ///
     /// # Errors
@@ -65,13 +72,29 @@ pub trait Sink: Send + Sync {
     /// Whatever the store said. The string is for the operator's log; the batcher only
     /// distinguishes success from failure, because there is no failure it could act on
     /// differently — every one of them means "try again shortly".
-    async fn write(&self, rows: &[LogRow]) -> Result<(), String>;
+    async fn write(&self, rows: &[R]) -> Result<(), String>;
 }
 
 #[async_trait]
-impl Sink for uops_store_ch::ChStore {
+impl Sink<LogRow> for uops_store_ch::ChStore {
     async fn write(&self, rows: &[LogRow]) -> Result<(), String> {
         uops_store_ch::LogStore::insert_logs(self, rows)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The same batching, the same spill, a different table.
+///
+/// Metrics arrive at a fraction of the rate logs do — `hostmetrics` sends a scrape every
+/// ten seconds, not fifty thousand messages a second — so the row count rarely fills a
+/// batch and the deadline is what usually fires. That is fine and is the reason the
+/// deadline exists; what matters is that they get the same **durability**, because a
+/// `ClickHouse` outage loses a metric exactly as permanently as it loses a log.
+#[async_trait]
+impl Sink<MetricRow> for uops_store_ch::ChStore {
+    async fn write(&self, rows: &[MetricRow]) -> Result<(), String> {
+        uops_store_ch::MetricStore::insert_metrics(self, rows)
             .await
             .map_err(|e| e.to_string())
     }
@@ -140,9 +163,9 @@ pub struct Stats {
 /// Returns when the sender is dropped and the last batch has been written — so a
 /// shutdown does not lose what is buffered, which is the same reason the buffer survives
 /// a failed insert.
-pub async fn run<S: Sink>(
+pub async fn run<R: Row, S: Sink<R>>(
     sink: S,
-    rows: mpsc::Receiver<LogRow>,
+    rows: mpsc::Receiver<R>,
     config: Config,
     report: impl Fn(Stats) + Send,
 ) -> Stats {
@@ -155,9 +178,9 @@ pub async fn run<S: Sink>(
 /// counter, and putting one in a `Copy` config would make it something a caller could
 /// duplicate by accident — two batchers writing segments into one directory under the
 /// same names, overwriting each other's.
-pub async fn run_with_wal<S: Sink>(
+pub async fn run_with_wal<R: Row, S: Sink<R>>(
     sink: S,
-    mut rows: mpsc::Receiver<LogRow>,
+    mut rows: mpsc::Receiver<R>,
     config: Config,
     mut wal: Option<Wal>,
     report: impl Fn(Stats) + Send,
@@ -171,7 +194,7 @@ pub async fn run_with_wal<S: Sink>(
         stats.rows_pending = pending_rows(wal);
         replay(&sink, wal, &mut stats).await;
     }
-    let mut buffer: Vec<LogRow> = Vec::with_capacity(config.max_rows);
+    let mut buffer: Vec<R> = Vec::with_capacity(config.max_rows);
     let mut deadline = tokio::time::interval(config.max_delay);
     // The first tick of an interval is immediate, and an immediate empty flush is a
     // wasted wake-up.
@@ -216,9 +239,9 @@ pub async fn run_with_wal<S: Sink>(
 }
 
 /// Write the buffer, retrying until it succeeds, is spilled, or has to be trimmed.
-async fn flush<S: Sink>(
+async fn flush<R: Row, S: Sink<R>>(
     sink: &S,
-    buffer: &mut Vec<LogRow>,
+    buffer: &mut Vec<R>,
     config: Config,
     mut wal: Option<&mut Wal>,
     stats: &mut Stats,
@@ -321,13 +344,13 @@ fn pending_rows(wal: &mut Wal) -> u64 {
 ///
 /// A segment is unlinked **only** after its insert succeeds. Doing it first would turn a
 /// failed replay into silent loss, which is the one thing the spill exists to prevent.
-async fn replay<S: Sink>(sink: &S, wal: &mut Wal, stats: &mut Stats) {
+async fn replay<R: Row, S: Sink<R>>(sink: &S, wal: &mut Wal, stats: &mut Stats) {
     let Ok(segments) = wal.segments() else {
         return;
     };
 
     for path in segments {
-        let rows = match wal.read(&path) {
+        let rows: Vec<R> = match wal.read(&path) {
             Ok(rows) => rows,
             Err(e) => {
                 eprintln!("pipeline: a spilled segment could not be read: {e}");
@@ -380,7 +403,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Sink for Arc<Recorder> {
+    impl Sink<LogRow> for Arc<Recorder> {
         async fn write(&self, rows: &[LogRow]) -> Result<(), String> {
             if self.fail_next.load(Ordering::SeqCst) > 0 {
                 self.fail_next.fetch_sub(1, Ordering::SeqCst);

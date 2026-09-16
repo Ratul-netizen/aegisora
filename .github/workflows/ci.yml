@@ -1010,6 +1010,33 @@ jobs:
           docker compose -f deploy/docker-compose.yml logs
           exit 1
 
+      # Every entrypoint a compose service names must exist in the image.
+      #
+      # `uops-collector-syslog` was referenced by a service for two commits while the
+      # Dockerfile did not copy it: `docker compose config` validated, the YAML was
+      # correct, and the container would have exited instantly with "no such file". The
+      # smoke test did not catch it because it only waits for `server`.
+      #
+      # Read out of the compose file rather than listed here, so a service added next year
+      # is checked without anybody remembering to.
+      - name: Every compose entrypoint exists in the image
+        run: |
+          MISSING=0
+          ENTRYPOINTS=$(grep -oE '/usr/local/bin/[a-z-]+' deploy/docker-compose.yml | sort -u)
+          if [ -z "$ENTRYPOINTS" ]; then
+            echo "::error::no entrypoints found in the compose file; this guard is not guarding anything"
+            exit 1
+          fi
+          for BIN in $ENTRYPOINTS; do
+            if docker run --rm --entrypoint test uops:dev -x "$BIN"; then
+              echo "ok: $BIN"
+            else
+              echo "::error::$BIN is a compose entrypoint and is not in the image"
+              MISSING=1
+            fi
+          done
+          exit $MISSING
+
       # Migrations are a separate service that must run to completion. If it did not,
       # `server` would not have started at all — but a green `up` with a silently
       # skipped migration is exactly the failure this criterion is about.

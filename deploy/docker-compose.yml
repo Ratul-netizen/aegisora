@@ -289,6 +289,44 @@ services:
     entrypoint: ["/usr/local/bin/uops-collector-syslog"]
     restart: unless-stopped
 
+  otlp:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: uops:dev
+    container_name: uops-otlp
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports:
+      # 4318 is OTLP/HTTP's conventional port and is above 1024, so unlike syslog's 514
+      # it needs no capability and maps straight through.
+      #
+      # Not 4317: that is OTLP/gRPC, which this build does not speak. Publishing it would
+      # be worse than not -- an exporter would connect and then fail on every request,
+      # which looks like a broken endpoint rather than an unconfigured one.
+      - "4318:4318"
+    environment:
+      DATABASE_URL: postgres://uops:uops@postgres:5432/uops
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: uops
+      CLICKHOUSE_USER: uops
+      CLICKHOUSE_PASSWORD: uops
+      UOPS_OTLP_CONFIG: /srv/otlp/listeners.yaml
+      # Logs and metrics get separate subdirectories underneath: a spill segment does not
+      # record its row type, so one directory holding both would read a metric back as a
+      # log and fail every line.
+      UOPS_OTLP_SPILL: /srv/spill
+      # No UOPS_KEK_FILE. An OTLP receiver opens no credentials -- it reads a socket and
+      # writes rows -- so it is not given the key that decrypts every credential.
+    volumes:
+      - ./otlp:/srv/otlp:ro
+      - otlp-spill:/srv/spill
+    # No TLS. The same licence posture as every other transport here: an OTLP endpoint on
+    # a network terminates TLS at a proxy, which the Collector's otlphttp exporter talks
+    # to happily. See STATUS.
+    entrypoint: ["/usr/local/bin/uops-collector-otlp"]
+    restart: unless-stopped
+
 volumes:
   pg-data:
   ch-data:
@@ -300,3 +338,6 @@ volumes:
   # on the next start -- so it must survive a restart, which is the whole reason it is a
   # named volume rather than a tmpfs.
   syslog-spill:
+  # The same, for OTLP. Separate from syslog's because the two processes have separate
+  # spills and a segment does not record which collector wrote it.
+  otlp-spill:

@@ -13,6 +13,9 @@ async-trait.workspace = true
 chrono.workspace = true
 lru.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+# The row types are the store's; these are the bounds the batcher and the spill need to
+# encode one and read it back.
+serde.workspace = true
 serde_json.workspace = true
 uops-core.workspace = true
 uops-identity.workspace = true

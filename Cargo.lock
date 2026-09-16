@@ -2334,6 +2334,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-collector-otlp"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "bytes",
+ "chrono",
+ "opentelemetry-proto",
+ "prost",
+ "serde",
+ "serde_yaml_ng",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "uops-core",
+ "uops-identity",
+ "uops-otlp",
+ "uops-pipeline",
+ "uops-store-ch",
+ "uops-store-pg",
+ "uuid",
+]
+
+[[package]]
 name = "uops-collector-syslog"
 version = "0.0.1"
 dependencies = [
@@ -2402,6 +2425,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "lru",
+ "serde",
  "serde_json",
  "tokio",
  "uops-core",

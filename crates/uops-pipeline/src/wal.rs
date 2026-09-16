@@ -28,6 +28,18 @@
 //! that fails is that replayed rows are subtly wrong in a way nothing notices until
 //! somebody queries the hour of the outage.
 //!
+//! # One `Wal`, any row type
+//!
+//! [`spill`](Wal::spill) and [`read`](Wal::read) are generic, so metrics get the same
+//! durability logs do. The type is **not** recorded in the segment, which means a
+//! directory holds one row type and mixing them would read a metric back as a log and
+//! fail every line.
+//!
+//! That is a real constraint and it is met structurally rather than by a check: a `Wal`
+//! is constructed with a directory, and each collector gives its logs and its metrics
+//! **different directories**. A tag in the file would be a runtime error where a
+//! separate path is simply not the same place.
+//!
 //! # What durability this actually gives
 //!
 //! `fsync` once per segment, at close. **Not** per row, which would cap throughput far
@@ -52,8 +64,6 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-use uops_store_ch::LogRow;
 
 /// How the spill behaves.
 #[derive(Clone, Debug)]
@@ -170,7 +180,7 @@ impl Wal {
     /// The write failed, in which case the caller still has the rows and should keep
     /// them in memory — a spill that cannot spill is a reason to hold on, not a reason to
     /// drop.
-    pub fn spill(&mut self, rows: &[LogRow]) -> std::io::Result<()> {
+    pub fn spill<R: serde::Serialize>(&mut self, rows: &[R]) -> std::io::Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -244,13 +254,13 @@ impl Wal {
     ///
     /// The file could not be read at all. A segment with *some* unreadable lines is not
     /// an error — see the body.
-    pub fn read(&mut self, path: &Path) -> std::io::Result<Vec<LogRow>> {
+    pub fn read<R: serde::de::DeserializeOwned>(&mut self, path: &Path) -> std::io::Result<Vec<R>> {
         let text = std::fs::read_to_string(path)?;
         let mut rows = Vec::new();
         let mut bad = 0usize;
 
         for line in text.lines().filter(|l| !l.is_empty()) {
-            match serde_json::from_str::<LogRow>(line) {
+            match serde_json::from_str::<R>(line) {
                 Ok(row) => rows.push(row),
                 // One unreadable line loses one row. Failing the segment would lose all
                 // of them, and the likeliest cause of a bad line is a partial last write
@@ -354,6 +364,8 @@ pub(crate) mod tests_support {
 
 #[cfg(test)]
 mod tests {
+    use uops_store_ch::LogRow;
+
     use super::*;
 
     fn row(body: &str) -> LogRow {
@@ -408,7 +420,7 @@ mod tests {
         let segments = wal.segments().expect("segments");
         assert_eq!(segments.len(), 1);
 
-        let read = wal.read(&segments[0]).expect("read");
+        let read: Vec<LogRow> = wal.read(&segments[0]).expect("read");
         let stored: Vec<LogRow> = batch
             .iter()
             .cloned()
@@ -448,7 +460,7 @@ mod tests {
 
         let bodies: Vec<String> = segments
             .iter()
-            .map(|p| wal.read(p).expect("read")[0].body.clone())
+            .map(|p| wal.read::<LogRow>(p).expect("read")[0].body.clone())
             .collect();
         let expected: Vec<String> = (0..12).map(|n| format!("batch {n}")).collect();
         assert_eq!(
@@ -481,7 +493,7 @@ mod tests {
         let mut after = after;
         let segments = after.segments().expect("segments");
         assert_eq!(
-            after.read(&segments[0]).expect("read")[0].body,
+            after.read::<LogRow>(&segments[0]).expect("read")[0].body,
             "written before the crash"
         );
     }
@@ -514,7 +526,7 @@ mod tests {
         wal.spill(&[row("owed")]).expect("spill");
 
         let segments = wal.segments().expect("segments");
-        let rows = wal.read(&segments[0]).expect("read");
+        let rows: Vec<LogRow> = wal.read(&segments[0]).expect("read");
         // Reading does not remove.
         assert!(wal.has_pending(), "reading a segment must not consume it");
 
@@ -550,7 +562,7 @@ mod tests {
         // And what survived is the newest, which is the whole point of dropping the
         // oldest.
         let segments = wal.segments().expect("segments");
-        let last = wal.read(segments.last().expect("a segment")).expect("read");
+        let last: Vec<LogRow> = wal.read(segments.last().expect("a segment")).expect("read");
         assert_eq!(last[0].body, "batch 5");
     }
 
@@ -567,7 +579,7 @@ mod tests {
         text.push_str("{ this is not json\n");
         std::fs::write(&path, text).expect("rewrite");
 
-        let rows = wal.read(&path).expect("read");
+        let rows: Vec<LogRow> = wal.read(&path).expect("read");
         assert_eq!(rows.len(), 2, "the readable rows survive");
         assert_eq!(wal.stats().segments_corrupt, 1);
 
@@ -596,7 +608,7 @@ mod tests {
     #[test]
     fn spilling_nothing_writes_nothing() {
         let (_dir, mut wal) = scratch();
-        wal.spill(&[]).expect("spill");
+        wal.spill::<LogRow>(&[]).expect("spill");
         assert!(!wal.has_pending());
         assert_eq!(wal.stats().segments_written, 0);
     }
