@@ -48,14 +48,14 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | web shell | ✅ shell, auth, tenant switcher, inventory, detail, explorer |
 | 10 000-resource p95 | ✅ measured through the router, worst 75 ms |
 | `docker compose up` | ✅ one 30 MB image, migrations as their own step, CI-verified |
-| **M2 — 5 of 6 acceptance criteria met** | 🟡 |
+| **M2 — all 6 acceptance criteria met** | ✅ |
 | `uops-profile` | ✅ 40 — 5 built-ins, schema, resolution |
 | `uops-poll` | ✅ 56 — wheel, jitter, counters, executor, planner, samples |
 | `uops-snmp` | ✅ 42 — walk, simulator, `snmp2` over UDP, real net-snmp |
 | `uops-poller` | ✅ 32 — the binary, end to end against real everything |
 | interface discovery | ✅ children + `member_of`, matched on name |
 | counter wrap → no negative rate | ✅ computed in `ClickHouse` at query time |
-| ICMP availability | ⬜ needs a raw-socket privilege decision |
+| ICMP availability | ✅ unprivileged datagram socket, no capability needed |
 | p95 through the binary | ⬜ measured in the library only |
 | M3–M4 | ⬜ |
 
@@ -270,6 +270,35 @@ if `.expose()` appears inside a logging macro; a grep that fails if a crypto pri
 used outside `uops-secrets`; `cargo-deny`; a CycloneDX SBOM; and a matrix building **both**
 the standard and FIPS crypto artifacts.
 
+### Six tests that passed on Windows and failed on Linux
+
+`KekRing::from_file` refuses a group- or world-readable key on Unix — rightly, since a
+KEK other local accounts can read is not a root of trust — and `std::fs::write` leaves
+`0644`. Two test fixtures wrote a KEK that way. On Windows the check does not apply and
+they passed; on Linux, which is where CI runs, all six sealed-credential tests failed.
+
+They had been failing since they were written and nothing said so, because the suite had
+only ever been run on Windows. Found by running the whole workspace in a Linux container
+while verifying ICMP — which is worth doing before any commit touching anything
+platform-sensitive, not just that one.
+
+### ICMP needs no capability
+
+`SOCK_DGRAM` + `IPPROTO_ICMP`, not a raw socket. `CAP_NET_RAW` would also permit forging
+arbitrary packets and putting an interface into promiscuous mode, granted to the whole
+process for the life of the container — a large grant for a ping.
+
+The unprivileged socket is gated by `net.ipv4.ping_group_range`, and Docker sets that to
+`0 2147483647` on its default bridge. Verified in a container, as root and as uid 1000,
+rather than assumed. A container run with `--network host` inherits the host namespace
+instead, where the range is usually closed; CI runs on a VM and sets the sysctl in a
+named step, which is also where the deployment requirement is written down so it cannot
+drift from the code.
+
+Where the sysctl is narrowed, the check reports which sysctl to widen rather than
+reporting every device as down — the distinction `CheckError` exists to make, because a
+poller that cannot open a socket looks exactly like a catastrophic outage.
+
 ### Rates are computed in `ClickHouse`, not in Rust
 
 `uops_poll::counter` states the wrap rule and is thoroughly tested, and nothing executes
@@ -399,7 +428,7 @@ because it reads as covered.
 | SNMPv3 authPriv SHA-256/AES-256 against a real device, credential through `SecretStore` with an access-log entry | Met. `tests/agent.rs` for the wire, `tests/live.rs` for the credential path. The access-log entry is written but the log is in-memory — the `credential_access` table is M3 |
 | Interface discovery creates child resources **and** `member_of` relationships | Met. Asserted against the real agent in `tests/live.rs` — the container's `eth0` and `lo` become resources with edges — and two CI mutations require the suite to fail: one writes the wrong edge kind, one breaks the rediscovery key |
 | A 32-bit counter wrap produces no negative rate in any query | Met. `Field::Rate` compiles to a window over each series in `ClickHouse`; a backwards step yields `NULL`, which the aggregates skip. Asserted against real `ClickHouse` with a real wrap, and CI breaks the guard and requires the suite to fail — unguarded, the fixture reports −71 582 754 B/s |
-| An unknown-vendor device gets interfaces and availability via `generic-snmp` | Half, and now genuinely half: interfaces become resources under `generic-snmp` with no vendor profile involved. Availability is ICMP and is counted as unsupported |
+| An unknown-vendor device gets interfaces and availability via `generic-snmp` | Met. Interfaces become resources; the ICMP check runs over an **unprivileged datagram socket**, so no `CAP_NET_RAW`. Verified on Linux against a real container — a state transition lands in `states` and in `resource.status` |
 | Dead device does not delay healthy devices (measured, not assumed) | Met at both levels. `uops-poll`'s fleet test measures the executor; the scale test measures the loop above it, which is a different claim — a lock held across an await in the loop would serialise the fleet with the executor entirely innocent. Healthy p95 270 ms; with 100 silent devices, 258 ms. Guarded in CI by a mutation that serialises the executor |
 
 ## How to pick this up
@@ -428,6 +457,7 @@ M1 is where they start.
 | **Shared-database contamination** | intermittent local failures | **Recurred, larger.** The development database had accumulated **2 608 tenants** from every integration test that ever panicked before its clean-up. Harmless until the poller existed; now a reload reads *every* tenant and issues two queries each, so an unswept database turned one reload into five thousand round trips and the live poller test from 2.6 s into 29 s. `db.sh sweep` now removes every tenant but `default` and everything under it, and the poller's live test takes its own scratch database rather than sharing. Earlier instance: the scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
+| **The poller is not in `docker compose`** | a stack that polls | The image builds every workspace binary but copies only `uops-server`, `uops-ch-migrate` and `uops-pg-migrate`, and compose has no poller service. So `docker compose up` gives an API and a UI over a database nothing is filling. Adding it needs a KEK in the compose environment, which is a decision about what a development stack may ship with |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |
