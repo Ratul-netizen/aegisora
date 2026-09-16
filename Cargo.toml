@@ -127,6 +127,14 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 
+# --- OTLP (M3) ------------------------------------------------------------------
+# Apache-2.0, both of them. `gen-tonic-messages` rather than `gen-tonic`: the first is
+# the generated prost structs, the second adds tonic's gRPC service stubs and with them
+# tonic, h2 and tower. OTLP/HTTP carries the same protobuf bodies and needs only the
+# messages -- see crates/uops-otlp/src/lib.rs for why HTTP first.
+opentelemetry-proto = { version = "0.32", default-features = false }
+prost = "0.14"
+
 # --- ICMP (M2) ------------------------------------------------------------------
 # For the availability check's unprivileged datagram socket. Already present as a
 # transitive dependency of tokio and hyper-util, so this is a version pin rather than a
@@ -146,6 +154,7 @@ uops-snmp = { path = "crates/uops-snmp" }
 uops-syslog = { path = "crates/uops-syslog" }
 uops-pipeline = { path = "crates/uops-pipeline" }
 uops-collector-syslog = { path = "crates/uops-collector-syslog" }
+uops-otlp = { path = "crates/uops-otlp" }
 uops-api = { path = "crates/uops-api" }
 uops-server = { path = "crates/uops-server" }
 uops-store-ch = { path = "crates/uops-store-ch" }

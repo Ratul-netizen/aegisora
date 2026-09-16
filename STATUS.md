@@ -74,7 +74,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M3 · WAL spill** | ✅ segments on disk, replayed oldest-first, survives a crash |
 | **M3 · 50 000 msg/s, drop counter at zero** | ✅ **measured** — 49 986/s offered, all received, 0 dropped, 501 000 rows queryable |
 | M3 · ceiling | ✅ **~100 000/s**, twice the target, every overflow datagram counted |
-| M3 · OTLP, Log Explorer | ⬜ |
+| **M3 · OTLP decoding** | ✅ logs and metrics → the same rows syslog produces — 21 tests |
+| M3 · the OTLP receiver, Log Explorer | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -656,6 +657,61 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**OTLP decodes into the same rows syslog produces, and that took almost no code.**
+`uops-otlp` is protobuf in, `LogRow` and `MetricRow` out — no I/O, no async, 21 tests.
+
+That it is small is the point rather than a shortcut. SPEC §M0.3 required
+OpenTelemetry semantic conventions instead of a bespoke schema; `uops-syslog::normalize`
+had to *translate* `hostname` into `host.name`, and this does not, because OTLP is already
+in them. A syslog message and an OTLP record become the **same type**, resolved by the same
+resolver and batched by the same batcher. That is the M0 decision paying out.
+
+**HTTP first, gRPC deferred, and the reason is the dependency tree.** SPEC names
+`opentelemetry-proto` with `gen-tonic`, which generates gRPC service stubs and pulls
+**tonic, h2 and tower** with them. `gen-tonic-messages` generates the same protobuf
+structs and pulls neither — OTLP/HTTP carries **byte-identical protobuf bodies**, and the
+difference is the framing, not the payload. So the receiver will speak OTLP/HTTP on the
+axum stack that already exists, and this crate adds `prost` and `opentelemetry-proto` and
+nothing else. Both Apache-2.0; `cargo deny` clean. The Collector's `otlphttp` exporter is
+first-class, so this is a complete answer rather than a stopgap.
+
+**Severity spreads FATAL rather than collapsing it.** OTLP's 21–24 map to `critical`,
+`alert` and `emergency` — syslog devices really do use all three, and an alert rule
+written against `emergency` must not be unreachable from OTLP. A platform where the same
+severity means different things depending on which collector produced it has alert rules
+that are wrong for half the estate. `severity_text` is kept untouched beside the number,
+because the number is an interpretation.
+
+**`host.id` first, `service.name` last.** Tier 1 at 1.00 versus 0.60, and the ordering
+matters: a service name maps to *many* resources rather than one host — twenty containers
+running `checkout` share it — so a payload carrying only `service.name` resolves weakly and
+lands in the review queue, which is correct. The fix is the Collector's `resourcedetection`
+processor, which is configuration rather than something this can infer.
+
+**Metrics: Gauge and Sum convert; histograms are counted and dropped.** Those two are what
+`hostmetrics` emits, which is what the acceptance criterion names. A histogram is a bucket
+array and the table holds one `f64` per row; flattening it multiplies the row count by the
+bucket count and makes the `metrics_1h` rollup meaningless, because averaging a bucket
+boundary is meaningless. That is an M4 decision, made where somebody will query it.
+Dropping them **quietly** would be the mistake, so they are counted.
+
+A Sum is stored as the counter it is, not converted to a rate — same reason the SNMP path
+does not: a rate computed at ingest is wrong across a restart, wrong at the first sample,
+and impossible to re-derive at another window. `uops-query` does it in `ClickHouse`, where
+the counter-wrap guard lives. Monotonicity is recorded as a label, because that guard needs
+to know a non-monotonic Sum going down is not a wrap.
+
+**Resource attributes are not repeated as metric labels.** They identify the resource,
+which the row already carries as `resource_id`, and repeating them would multiply the sort
+key's cardinality by the size of the estate — the exact trap W1 flagged for
+high-cardinality grouping.
+
+**`scripts/linux-test.sh`,** because the disk filled a third time. It reads the container
+IPs from Docker rather than hard-coding them — they are reassigned on every stack restart,
+and a stale address looks exactly like a test failure — and it sets `CARGO_INCREMENTAL=0`,
+which is the whole problem: the two incremental caches had regrown to 9.3 GB in a single
+session. Incremental buys very little in a container that is fresh each run.
 
 **SPEC §M3's first acceptance criterion is met, and measured through the daemon.**
 
@@ -1243,6 +1299,7 @@ integration suites.
 | **The load generator blamed the daemon twice** | the 50 000 msg/s test failing at 49 914/s | a fixed-slice-per-tick generator is systematically slow because sleeps overshoot and nothing catches up; and then the assertion `rate >= TARGET` is unsatisfiable by construction for a clock-paced generator. Both reported a shortfall while the daemon had received every message and dropped none. A measurement harness is code, and its bugs look like the thing it measures |
 | **`LogRow` had never round-tripped** | the first WAL segment replaying as empty | the timestamp fields had `serialize_with` and no matching `deserialize_with`, so the derived `Deserialize` parsed RFC 3339 against a string written as `YYYY-MM-DD HH:MM:SS.mmm`. Every line failed. The types have looked round-trippable since M0 and never were, because nothing read a row back until the spill did |
 | **The memory bound pre-empted the spill** | the test written to prove the spill worked | the `max_buffered` trim ran on every failed insert, including the ones before `spill_after`, so it discarded half a batch one retry before those rows would have been written to disk. Both are answers to the same question and only one can go first |
+| **The disk filled, three times** | a Linux build failing to link, twice | `target/debug/incremental` and its Linux twin regrow to several gigabytes per session and had taken the host to zero bytes free — twice stopping Docker's engine, whose virtual disk could not grow. Reclaimed 26 GB, then 9.3 GB. Now `scripts/linux-test.sh` sets `CARGO_INCREMENTAL=0`, which is the actual fix rather than a reminder to sweep |
 | **The disk filled and took Docker with it** | a Linux build failing to link | `target/debug/incremental` had reached 20.4 GB and its Linux twin 5.5 GB, leaving the host at zero bytes free. Docker Desktop's virtual disk could not grow, so the engine refused to start and every container stopped. Twenty-six GB reclaimed from the incremental caches alone, which cost one non-incremental rebuild and nothing else. See Housekeeping — the recovery is much longer than the prevention |
 | **Every device would have duplicated itself** | writing a test for the ordinary syslog case | a hostname plus an address is 0.93, under the 0.95 bar, so the steady state filed a review and a provisional twin for every device. The confidence model was being asked whether two independently discovered resources are the same box, when the real question was whether an observation is the resource its identifiers already belong to. `exclusive_match`, and the same rule in the cache — where the bar had made the hit rate 0%, so both of M3's numeric criteria were unreachable |
 | **Eight foreign keys had no index** | the API scale test timing out in its own clean-up | PostgreSQL never indexes the referencing side, so every parent `DELETE` scanned each child once per row. `ON DELETE CASCADE` from `tenant` made removing a tenant scan every role grant in the installation. Migration 0010, plus a schema guard that fails if a new foreign key arrives without one |

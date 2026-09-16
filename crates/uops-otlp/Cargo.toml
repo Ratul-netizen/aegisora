@@ -1,0 +1,28 @@
+[package]
+name = "uops-otlp"
+description = "OTLP decoding, and the conversion to the same rows syslog produces. SPEC M3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[dependencies]
+chrono.workspace = true
+prost.workspace = true
+# `gen-tonic-messages`, NOT `gen-tonic`. The first is the generated prost structs; the
+# second adds tonic's gRPC service stubs and with them tonic, h2 and tower. OTLP/HTTP
+# needs only the messages, and the HTTP body is the same protobuf either way.
+#
+# See src/lib.rs for why HTTP and not gRPC.
+opentelemetry-proto = { workspace = true, default-features = false, features = [
+    "gen-tonic-messages", "logs", "metrics", "trace",
+] }
+uops-core.workspace = true
+uops-pipeline.workspace = true
+uops-store-ch.workspace = true
+
+[lints]
+workspace = true
