@@ -62,7 +62,10 @@ React · TypeScript · Vite
 - [x] **M1** — core platform: API, auth, inventory, telemetry, web shell, first run
 - [x] **M2** — NMS: SNMP polling, profiles, discovery, rates, availability. All six
       acceptance criteria met and measured
-- [ ] **M3** — logs ← next
+- [ ] **M3** — logs ← in progress. Both syslog wire formats, RFC 6587 framing, UDP and
+      TCP receivers, normalization onto OpenTelemetry semantic conventions and batched
+      inserts are done. The daemon that joins them, OTLP and the Log Explorer are not.
+      TLS is terminated at a proxy by decision, not built in — see STATUS.md
 - [ ] M4 — dashboards and alerting
 
 Taken out of order because they were asked for: MAC vendor lookup, device make/model/

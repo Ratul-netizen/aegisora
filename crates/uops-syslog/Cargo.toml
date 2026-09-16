@@ -17,10 +17,15 @@ thiserror.workspace = true
 # network. `socket2` is for SO_RCVBUF, which SPEC asks to be raised explicitly and which
 # tokio's UdpSocket does not expose.
 socket2.workspace = true
+async-trait.workspace = true
+uops-core.workspace = true
+# The output type. A syslog message and an OTLP one become the same row, which is what
+# makes them correlatable — so the row type is the store's rather than this crate's.
+uops-store-ch.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "io-util", "time", "macros"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
 
 [lints]
 workspace = true

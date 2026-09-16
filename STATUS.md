@@ -1,6 +1,6 @@
 # Status — pick up from here
 
-Last updated: 2026-09-14 · repo: `github.com/Ratul-netizen/aegisora`
+Last updated: 2026-09-16 · repo: `github.com/Ratul-netizen/aegisora`
 
 > Read this first on a new machine. [PLAN.md](./PLAN.md) is strategy,
 > [SPEC.md](./SPEC.md) is the M0–M4 implementation spec, this is *where we are*.
@@ -63,8 +63,9 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | p95 through the binary | ⬜ measured in the library only |
 | **M3 · syslog parsing** | ✅ RFC 5424, RFC 3164, RFC 6587 framing |
 | **M3 · syslog receivers** | ✅ UDP with drop counting, TCP with backpressure — 46 tests |
-| M3 · syslog over TLS | ⬜ blocked on a crypto-provider licence decision |
-| M3 · pipeline, OTLP, Log Explorer | ⬜ |
+| **M3 · normalize + batch** | ✅ syslog → `LogRow` on semconv keys, batched inserts — 59 tests |
+| M3 · syslog over TLS | ✅ **decided: terminated at a proxy**, not in-process |
+| M3 · the syslog daemon, OTLP, Log Explorer | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -545,6 +546,15 @@ because it reads as covered.
 
 ## Next, in dependency order
 
+0. **M3 · the syslog daemon.** Every piece from the wire to a batched insert now
+   exists and is tested; what is missing is the process that joins them, and the one
+   decision it needs is **how a message is attributed to a tenant**. A syslog message
+   carries no tenant and cannot be made to. My proposal is a listener per tenant —
+   address or port identifies the tenant, which is how every multi-tenant collector
+   does it — with `create_provisional` for a sender that resolves to nothing, so the
+   logs are kept and land in the review queue rather than being dropped. That is a
+   product decision about what an unknown sender means, so it is named here rather
+   than chosen quietly.
 1. **The review queue has no way to say "no"** — found while writing the scenario
    above. A case leaves the queue when the provisional is merged away, and that is the
    only way out. An operator who decides two resources are genuinely *different* has no
@@ -630,7 +640,6 @@ M1 is where they start.
 | **Shared-database contamination** | intermittent local failures | **Recurred, larger.** The development database had accumulated **2 608 tenants** from every integration test that ever panicked before its clean-up. Harmless until the poller existed; now a reload reads *every* tenant and issues two queries each, so an unswept database turned one reload into five thousand round trips and the live poller test from 2.6 s into 29 s. `db.sh sweep` now removes every tenant but `default` and everything under it, and the poller's live test takes its own scratch database rather than sharing. Earlier instance: the scale test seeded 10 000 resources and did not remove them; four runs left 40 400 rows in the database every other suite shares, which changes what the planner chooses for all of them. It cleans up after itself now, and `db.sh sweep` removes what an interrupted run leaves. This is the likely cause of the "one unreproduced failure" recorded earlier — both occurrences followed scale-test runs. Not proven, because it has not recurred since the purge |
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
-| **Syslog over TLS needs a crypto provider** | SPEC §M3's TLS transport | `rustls` has two production providers and both carry OpenSSL-licensed code: `aws-lc-rs` is `ISC AND MIT AND OpenSSL`, and `ring` includes BoringSSL-derived sources under the same terms. Neither is on `deny.toml`'s allow-list, which is why this product has no TLS anywhere — the ClickHouse and PostgreSQL clients were both built without it for the same reason. Three ways out: add the OpenSSL licence to the allow-list; use a pure-RustCrypto provider such as `rustls-rustcrypto`, which is unaudited; or terminate syslog-over-TLS at a proxy the way HTTP already is. **My recommendation is the proxy**, because it is what every other transport here already does and it needs no new dependency — but it is a product decision about what an on-premise install is expected to run |
 | **The bundled IEEE data's terms** | a commercial release | `crates/uops-oui/data/assignments.tsv` is derived from the four public IEEE registries. They are redistributed widely — Wireshark, nmap and Debian's `ieee-data` all ship them — which is the basis for bundling. It is **not** a licence review: IEEE attaches no SPDX identifier, and `cargo deny` checks crate licences rather than the terms of embedded data, so nothing in CI is looking at this |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |
@@ -639,6 +648,57 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**Syslog over TLS is terminated at a proxy.** The open item asked for a decision and
+this is it: no TLS in this process, for syslog or anything else. `rustls`' two
+production crypto providers both carry OpenSSL-licensed code — `aws-lc-rs` is
+`ISC AND MIT AND OpenSSL`, `ring` includes BoringSSL-derived sources under the same
+terms — and neither is on `deny.toml`'s allow-list, which is already why the ClickHouse
+and PostgreSQL clients were built without it.
+
+The three ways out were: allow the OpenSSL licence, adopt the unaudited
+`rustls-rustcrypto`, or terminate at a proxy. The proxy wins because it is what every
+other transport here already does, it adds no dependency, and it keeps the licence
+posture — no OpenSSL-derived crypto anywhere in the tree — that `deny.toml` exists to
+hold. The cost is honest and belongs in the deployment docs rather than in a crate: an
+on-premise install that needs syslog-over-TLS runs stunnel, HAProxy or rsyslog in front
+of the TCP receiver and forwards plaintext over the loopback. That is a real
+requirement on the operator, and the alternative was an unaudited TLS stack handling
+untrusted input from the network, which is worse.
+
+**The pipeline is where syslog stops being syslog.** `normalize` and `batch` are the
+two halves of it, and both are deliberately about *not* being syslog-shaped.
+
+`normalize::to_row` maps `hostname` → `host.name`, `app_name` → `service.name` and
+`proc_id` → `process.pid` — OpenTelemetry semantic conventions, the same keys the
+metrics path already writes and the Query AST already knows. This is the whole product
+in one function: a log from a switch and a metric from the same switch are only
+correlatable if they agree what the host is called, and the moment one of them stores
+`syslog.hostname` instead, the join silently stops existing while both tables still
+look fine on their own. The fields with no semconv equivalent keep a `syslog.` prefix
+so they cannot be mistaken for a convention that exists.
+
+Which clock wins is decided here too. `observed_at` is the device's timestamp when
+there is one and the receipt time when there is not; `ingested_at` is always receipt.
+A device with an unreadable clock would otherwise land at the Unix epoch and sort to
+the top of every search, which is worse than being a few seconds out — and when the
+substitution happens it is recorded in `syslog.timestamp.missing`, so a timeline nobody
+can trust is at least one somebody can question.
+
+`batch` turns a stream of rows into the few large inserts ClickHouse wants: 10 000 rows
+or one second, whichever comes first. A failed insert retries with doubling backoff to
+30 s rather than dropping, because a ClickHouse restart is a routine event and losing
+the logs written during one is exactly the failure syslog receivers are notorious for.
+The buffer is bounded at 500 000 rows and past that it drops the **oldest** — the
+newest rows are the ones an operator is looking at during the incident that caused the
+backlog.
+
+`normalize::identifiers` offers the resolver the sender's address as `mgmt_ip` (0.80)
+before the claimed hostname (0.65). The address is the strong one in practice because
+it is the identifier the poller already wrote, so a switch that is both polled and
+logging resolves to one resource with nothing configured; the hostname is whatever
+somebody typed into the device, and a relay forwards messages whose hostname is not its
+own. Both are offered and the resolver weighs them.
 
 **CI was red and nothing said so.** The `check` job ran `cargo test --workspace
 --all-targets` with no databases, so every integration test added since `uops-store-pg`
@@ -733,6 +793,51 @@ every telemetry query. The collapse buys one flat invariant — no `historical_i
 also a `current_id` — which is what lets alias expansion be a single lookup. It lives in
 the database because that is only true if *every* writer collapses, including a DBA
 fixing something by hand.
+
+## The ledger — progress, and what went wrong getting here
+
+Asked for explicitly. Progress is easy to find above; the failures are the part worth
+keeping, because each one changed how something is built.
+
+### Progress
+
+| Milestone | State | Evidence |
+|---|---|---|
+| W1 storage benchmark | ✅ | `docs/benchmarks/w1.md` — the architecture bet, measured |
+| M0 primitives | ✅ | envelope, identity, Query AST, secrets, migrations, bus |
+| M1 core platform | ✅ | API, auth, inventory, telemetry, web shell, 10 000-resource p95 75 ms |
+| M2 NMS | ✅ | all six acceptance criteria met **and measured**, each with a CI mutation guard |
+| M5 device identity, M6 map, OUI | ✅ | taken out of order because they were asked for |
+| M3 logs | 🟡 | wire → row is done; the daemon, OTLP and the Explorer are not |
+| M4 dashboards & alerting | ⬜ | |
+
+Roughly 690 tests on Windows, one more on Linux, against real PostgreSQL, real
+ClickHouse and a real net-snmp agent. No mocked infrastructure anywhere in the
+integration suites.
+
+### Failures, and what each one cost
+
+| What broke | How it was found | What changed because of it |
+|---|---|---|
+| **KEK rotation destroyed credentials** | reading the code while writing `PgSealedStore` | `rotate_kek` read a row, unwrapped its DEK and wrote the wrapping back *unconditionally*. A concurrent `put` on the same id left the row wrapping the old DEK over new ciphertext — silently undecryptable. Now a compare-and-set on `wrapped_dek`, returning `Rewrapped::Superseded`. This is the worst bug found so far: it destroys data and nothing reports it until someone needs the credential |
+| **CI was red and nothing said so** | five commits later | the `check` job ran the workspace suite with no databases. The suite now runs once, in the job that has both engines |
+| **2 608 leaked test tenants** | the live poller test went from 2.6 s to 29 s | every integration test that panicked before its cleanup left a tenant. Harmless until the poller existed, then a reload read all of them. `db.sh sweep` rewritten; the poller's live test takes its own scratch database |
+| **ClickHouse fixtures outside the retention TTL** | intermittent, then reproducible | fixtures dated `1_700_000_000` against 30- and 365-day TTLs; background merges deleted them mid-run. Anchored to now and bucket-aligned. My first fix recomputed per call and broke three tests whenever a run crossed a 5-minute boundary — memoised with `OnceLock` |
+| **Six tests passed on Windows and failed on Linux** | the Linux container | `fs::write` leaves 0644 and `KekRing::from_file` refuses a group-readable key. The fixtures now `set_permissions(0o600)` under `#[cfg(unix)]`. The refusal was correct; the tests were wrong |
+| **A pre-aggregated query floored the wrong way** | a real histogram against a real rollup | a window starting partway through a bucket dropped the leftmost bar of every histogram. An Explorer opened at 14:37 silently omitted 14:35 |
+| **The simulator modelled a GET as a GETNEXT** | a scalar that was invisible in tests but present on the real agent | `entPhysicalSoftwareRev` could never have been read. The simulator now has a real `get_scalars`. A simulator that is wrong in the same direction as the code under test proves nothing |
+| **`Runner::load` had a trap** | the scale test was measuring nothing | discovery rules lived in a side map populated only inside `run::reload`, so the 1 000-device scale test measured 1 000 devices whose every discovery job failed. `load()` now does both and is the only way in |
+| **Two routes leaked tenant existence** | the isolation harness, once it was given a real vault | `revoke` returned 204 for another tenant's credential and `identifiers_for` returned `200 []`. Both now `NotFound` — 404-never-403 |
+| **My own documentation was false** | checking the claim against the data | I wrote that a 24-bit-only OUI lookup returns the *wrong* vendor. The data shows zero MA-M/MA-S nesting inside listed MA-L blocks, so it returns *nothing*. The wrong version was the intuitive one, which is why it survived review |
+| **A runaway Python process** | 86 000 s of CPU over 25 hours | an orphan from a malformed heredoc. Heredocs through this shell are now written with a file tool instead |
+| **Two test fixtures had arithmetic errors** | writing the assertions | a framed length off by one, and `<189>` asserted as `error` when it is `notice`. Both mine, both in the tests rather than the code |
+
+The pattern that catches most of these: implement → test against real infrastructure →
+**mutate the code and require the suite to fail** → add that mutation as a CI guard.
+Every M2 acceptance criterion has one. A test that has never been seen to fail is not
+evidence.
+
+---
 
 ## Housekeeping
 

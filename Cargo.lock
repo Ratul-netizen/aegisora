@@ -2379,10 +2379,13 @@ dependencies = [
 name = "uops-syslog"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "chrono",
  "socket2",
  "thiserror 2.0.20",
  "tokio",
+ "uops-core",
+ "uops-store-ch",
 ]
 
 [[package]]

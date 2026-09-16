@@ -26,15 +26,18 @@
 //!
 //! # What this crate does not do
 //!
-//! No identity resolution and no enrichment: those need a database and a cache, and
-//! belong to the pipeline above this. What is here is the wire — [`rfc5424`] and
-//! [`rfc3164`] parse one message, [`framing`] divides a TCP stream into messages, and
-//! [`receiver`] reads them off a socket.
+//! No identity resolution: that needs a database and a cache, and belongs to the daemon
+//! that owns both. What is here is everything from the wire to a row — [`rfc5424`] and
+//! [`rfc3164`] parse one message, [`framing`] divides a TCP stream into messages,
+//! [`receiver`] reads them off a socket, [`normalize`] turns one into a `LogRow`, and
+//! [`batch`] accumulates rows into the few large inserts `ClickHouse` wants.
 //!
 //! The parsers themselves touch no I/O at all, which is what lets both wire formats be
 //! tested exhaustively without a network.
 
+pub mod batch;
 pub mod framing;
+pub mod normalize;
 pub mod receiver;
 pub mod rfc3164;
 pub mod rfc5424;
