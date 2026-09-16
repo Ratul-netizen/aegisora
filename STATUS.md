@@ -61,7 +61,9 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | counter wrap → no negative rate | ✅ computed in `ClickHouse` at query time |
 | ICMP availability | ✅ unprivileged datagram socket, no capability needed |
 | p95 through the binary | ⬜ measured in the library only |
-| M3–M4 | ⬜ |
+| **M3 · syslog parsing** | ✅ RFC 5424, RFC 3164, RFC 6587 framing — 39 tests |
+| M3 · receivers, pipeline, Log Explorer | ⬜ |
+| M4 | ⬜ |
 
 ## Resume in three commands
 

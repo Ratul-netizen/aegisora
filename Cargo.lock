@@ -2376,6 +2376,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-syslog"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "ureq"
 version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
