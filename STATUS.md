@@ -1,6 +1,6 @@
 # Status — pick up from here
 
-Last updated: 2026-09-16 · repo: `github.com/Ratul-netizen/aegisora`
+Last updated: 2026-09-16 · repo: `github.com/Ratul-netizen/veyronis`
 
 > Read this first on a new machine. [PLAN.md](./PLAN.md) is strategy,
 > [SPEC.md](./SPEC.md) is the M0–M4 implementation spec, this is *where we are*.
@@ -71,7 +71,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 ## Resume in three commands
 
 ```bash
-git clone https://github.com/Ratul-netizen/aegisora && cd aegisora
+git clone https://github.com/Ratul-netizen/veyronis && cd veyronis
 cargo test --workspace --all-targets && cargo test --workspace --doc   # 527 tests, green
 cd web && npm ci && npm test                                            # 13 more
 cargo clippy --workspace --all-targets -- -D warnings
@@ -669,13 +669,11 @@ state in a way the documentation rename does not: the database and role, the Doc
 volumes, and `UOPS_KEK_FILE`, which points at the key that decrypts every stored
 credential. That migration gets written when it is worth writing.
 
-**Still to do, and not by me:** renaming the GitHub repository to
-`Ratul-netizen/veyronis`. `gh` is not installed on this machine and the operation needs
-repo-admin credentials, so it is `gh repo rename veyronis` from an authenticated shell or
-the Settings page. The four `github.com/Ratul-netizen/aegisora` URLs in `Cargo.toml` and
-this file are left pointing at the real repository until that happens — documentation
-that names a URL which does not resolve is worse than documentation that is a rename
-behind. **The repository has not been renamed.**
+**The repository is now `github.com/Ratul-netizen/veyronis`.** Renamed by hand — `gh` is
+not installed here and it needs repo-admin credentials. The four URLs in `Cargo.toml` and
+this file followed in the same commit, `origin` was re-pointed, and a `git fetch` against
+the new URL confirms it. GitHub keeps a redirect from the old name, so an existing clone
+keeps working.
 
 **Syslog over TLS is terminated at a proxy.** The open item asked for a decision and
 this is it: no TLS in this process, for syslog or anything else. `rustls`' two

@@ -132,15 +132,24 @@ changed.
 
 ---
 
-## Manual actions I cannot take
+## The GitHub rename — done
 
-| Action | Why |
-|---|---|
-| Rename the GitHub repository | Needs repo-admin credentials. `gh repo rename veyronis` from an authenticated shell, or the Settings page |
-| Set the repository description and topics | Same |
-| Verify the redirect from the old URL | Only after the rename |
+`Ratul-netizen/aegisora` → **`Ratul-netizen/veyronis`**, renamed by hand on 2026-09-16.
+`gh` is not installed on this machine and the operation needs repo-admin credentials, so
+it was not something I could do.
 
-I will not claim the GitHub repository has been renamed. It has not been.
+What followed in this repository, once it was done:
+
+- `Cargo.toml` line 14 and `STATUS.md` lines 3 and 73 now name the new URL.
+- `origin` re-pointed with `git remote set-url`, verified by a `git fetch` that succeeds
+  against the new URL.
+
+GitHub keeps a redirect from the old name, so an existing clone and the old URL both keep
+working; nothing is required of anyone who has already cloned.
+
+Still outstanding, and also needing repo-admin: the repository **description** and
+**topics**. Suggested description: `Veyronis — Unified Infrastructure Observability &
+Operations Platform`.
 
 ---
 
