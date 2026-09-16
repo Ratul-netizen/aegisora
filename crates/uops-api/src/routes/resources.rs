@@ -261,6 +261,7 @@ mod tests {
             profile_id: None,
             credential_ref: None,
             attributes: uops_core::AttrMap::new(),
+            tags: uops_core::Tags::new(),
             first_seen: chrono::Utc::now(),
             last_seen: chrono::Utc::now(),
         }

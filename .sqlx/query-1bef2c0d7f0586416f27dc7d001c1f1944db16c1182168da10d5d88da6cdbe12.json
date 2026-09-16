@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id            AS \"id: ResourceId\",\n                tenant_id     AS \"tenant_id: uops_core::TenantId\",\n                site_id       AS \"site_id: SiteId\",\n                parent_id     AS \"parent_id: ResourceId\",\n                kind          AS \"kind: ResourceKind\",\n                name,\n                display_name,\n                vendor, model, os, os_version,\n                status        AS \"status: ResourceStatus\",\n                profile_id,\n                credential_ref AS \"credential_ref: CredentialRef\",\n                attributes    AS \"attributes: Json<AttrMap>\",\n                first_seen, last_seen\n            FROM resource\n            WHERE id = $1 AND tenant_id = $2\n            ",
+  "query": "\n            INSERT INTO resource\n                (id, tenant_id, site_id, parent_id, kind, name, display_name,\n                 vendor, model, os, os_version, attributes)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)\n            RETURNING\n                id            AS \"id: ResourceId\",\n                tenant_id     AS \"tenant_id: uops_core::TenantId\",\n                site_id       AS \"site_id: SiteId\",\n                parent_id     AS \"parent_id: ResourceId\",\n                kind          AS \"kind: ResourceKind\",\n                name,\n                display_name,\n                vendor, model, os, os_version,\n                status        AS \"status: ResourceStatus\",\n                profile_id,\n                credential_ref AS \"credential_ref: CredentialRef\",\n                attributes    AS \"attributes: Json<AttrMap>\",\n                tags          AS \"tags: Json<Tags>\",\n                first_seen, last_seen\n            ",
   "describe": {
     "columns": [
       {
@@ -112,11 +112,16 @@
       },
       {
         "ordinal": 15,
+        "name": "tags: Json<Tags>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 16,
         "name": "first_seen",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "last_seen",
         "type_info": "Timestamptz"
       }
@@ -124,7 +129,35 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid"
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "resource_kind",
+            "kind": {
+              "Enum": [
+                "device",
+                "interface",
+                "host",
+                "vm",
+                "container",
+                "service",
+                "application",
+                "database",
+                "cloud_resource",
+                "site"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb"
       ]
     },
     "nullable": [
@@ -144,8 +177,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "8b64e7b2f885f4568a03c43fdd623bd1975091e7889c831909be8a3ec4f4268e"
+  "hash": "1bef2c0d7f0586416f27dc7d001c1f1944db16c1182168da10d5d88da6cdbe12"
 }

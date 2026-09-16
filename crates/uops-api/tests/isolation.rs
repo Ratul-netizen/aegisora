@@ -187,6 +187,69 @@ const CASES: &[RouteCase] = &[
         body: Some("[]"),
     },
     RouteCase {
+        // Which groups a resource is in. Scoped, and pointed at the *other* tenant's
+        // resource — an empty list here would be the same bug the credential
+        // identifiers route had, where a 200 [] told the caller the id was real.
+        path: "/api/v1/resources/{id}/groups",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        // Tagging. The path names another tenant's resource; a 204 would mean it worked.
+        path: "/api/v1/resources/{id}/tags",
+        probe: None,
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"owner":"intruder"}"#),
+    },
+    RouteCase {
+        path: "/api/v1/groups",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/groups",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"name":"intruder"}"#),
+    },
+    RouteCase {
+        // `{id}` is substituted with the other tenant's *resource* id rather than a
+        // group id, which is fine and is the point: an id that is not a group of this
+        // tenant must answer exactly as an id that is not a group at all.
+        path: "/api/v1/groups/{id}",
+        probe: None,
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"name":"stolen"}"#),
+    },
+    RouteCase {
+        path: "/api/v1/groups/{id}",
+        probe: None,
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/groups/{id}/members",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"resources":[]}"#),
+    },
+    RouteCase {
+        path: "/api/v1/groups/{id}/members",
+        probe: None,
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"resources":[]}"#),
+    },
+    RouteCase {
         path: "/api/v1/sites",
         probe: None,
         method: "GET",

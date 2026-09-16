@@ -8,7 +8,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::attr::AttrMap;
-use crate::ids::{CredentialRef, ResourceId, SiteId, TenantId};
+use crate::ids::{CredentialRef, ResourceGroupId, ResourceId, SiteId, TenantId};
+use crate::tags::Tags;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -112,8 +113,18 @@ pub struct Resource {
     pub profile_id: Option<uuid::Uuid>,
     /// Reference to sealed credential material — never the material itself.
     pub credential_ref: Option<CredentialRef>,
-    /// OpenTelemetry semantic-convention keys.
+    /// OpenTelemetry semantic-convention keys. **Written by collectors**, on every walk.
+    ///
+    /// A human editing these would have their edit overwritten by the next discovery
+    /// run, silently. What a human decides goes in [`tags`](Self::tags).
     pub attributes: AttrMap,
+    /// Operator-managed labels: `environment=production`, `criticality=critical`.
+    ///
+    /// **Never written automatically** — the same rule as
+    /// [`display_name`](Self::display_name), and for the same reason. A collector that
+    /// wrote here would overwrite the judgement an alert routing rule depends on, and
+    /// the resulting bug would be unreproducible because the evidence would be gone too.
+    pub tags: Tags,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
 }
@@ -124,6 +135,38 @@ impl Resource {
     pub fn label(&self) -> &str {
         self.display_name.as_deref().unwrap_or(&self.name)
     }
+}
+
+/// An operator-defined set of resources.
+///
+/// The fourth way to talk about a group of things, and the only one nothing can infer:
+///
+/// | | what it means | who decides |
+/// |---|---|---|
+/// | site | where a thing physically is | discovery, or a human placing it |
+/// | `parent_id` | what it is part of — interface → device | discovery |
+/// | [`Relationship`] | how it is connected | discovery, LLDP, CDP |
+/// | **group** | **which resources matter together** | **a human, and only a human** |
+///
+/// "Critical Servers" is not a place, a containment or a link. It is a sentence somebody
+/// wrote down, and every M4 feature needs to be able to name one: an alert rule's scope,
+/// a dashboard's filter, a notification routing rule, a maintenance window's target.
+///
+/// Membership is an explicit list rather than a stored predicate. A rule-based group —
+/// "everything tagged `criticality=critical`" — is a later feature and materialises into
+/// the same table, because an alert scoped to a rule that silently starts matching 400
+/// more devices is a genuinely bad surprise, and an explicit list is what an operator can
+/// audit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceGroup {
+    pub id: ResourceGroupId,
+    pub tenant_id: TenantId,
+    /// Unique within the tenant, not globally: two customers of one MSP both have core
+    /// routers.
+    pub name: String,
+    pub description: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// How two resources relate. Populated by discovery from M2 onward; the topology UI
@@ -207,6 +250,7 @@ mod tests {
             profile_id: None,
             credential_ref: None,
             attributes: AttrMap::new(),
+            tags: Tags::new(),
             first_seen: Utc::now(),
             last_seen: Utc::now(),
         };

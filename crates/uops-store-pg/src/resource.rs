@@ -11,7 +11,7 @@
 use sqlx::types::Json;
 use uops_core::{
     AttrMap, CredentialRef, Error, Resource, ResourceId, ResourceKind, ResourceStatus, Result,
-    SiteId, TenantScope,
+    SiteId, Tags, TenantScope,
 };
 
 use crate::error::map;
@@ -82,6 +82,7 @@ struct Row {
     profile_id: Option<uuid::Uuid>,
     credential_ref: Option<CredentialRef>,
     attributes: Json<AttrMap>,
+    tags: Json<Tags>,
     first_seen: chrono::DateTime<chrono::Utc>,
     last_seen: chrono::DateTime<chrono::Utc>,
 }
@@ -104,6 +105,7 @@ impl From<Row> for Resource {
             profile_id: r.profile_id,
             credential_ref: r.credential_ref,
             attributes: r.attributes.0,
+            tags: r.tags.0,
             first_seen: r.first_seen,
             last_seen: r.last_seen,
         }
@@ -140,6 +142,7 @@ impl PgStore {
                 profile_id,
                 credential_ref AS "credential_ref: CredentialRef",
                 attributes    AS "attributes: Json<AttrMap>",
+                tags          AS "tags: Json<Tags>",
                 first_seen, last_seen
             "#,
             id as ResourceId,
@@ -239,6 +242,7 @@ impl PgStore {
                 profile_id,
                 credential_ref AS "credential_ref: CredentialRef",
                 attributes    AS "attributes: Json<AttrMap>",
+                tags          AS "tags: Json<Tags>",
                 first_seen, last_seen
             FROM resource
             WHERE id = $1 AND tenant_id = $2
@@ -286,6 +290,7 @@ impl PgStore {
                 profile_id,
                 credential_ref AS "credential_ref: CredentialRef",
                 attributes    AS "attributes: Json<AttrMap>",
+                tags          AS "tags: Json<Tags>",
                 first_seen, last_seen
             FROM resource
             WHERE tenant_id = $1

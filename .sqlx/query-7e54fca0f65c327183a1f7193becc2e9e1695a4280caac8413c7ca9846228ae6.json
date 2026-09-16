@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id AS \"id!: ResourceId\"\n              FROM resource\n             WHERE tenant_id = $1\n               AND tags @> jsonb_build_object($2::text, $3::text)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: ResourceId",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7e54fca0f65c327183a1f7193becc2e9e1695a4280caac8413c7ca9846228ae6"
+}

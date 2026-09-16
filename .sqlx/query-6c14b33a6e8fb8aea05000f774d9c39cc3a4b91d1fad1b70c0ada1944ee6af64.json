@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                g.id        AS \"id: ResourceGroupId\",\n                g.tenant_id AS \"tenant_id: uops_core::TenantId\",\n                g.name,\n                g.description,\n                g.created_at,\n                g.updated_at\n              FROM resource_group g\n              JOIN resource_group_member m\n                    ON m.group_id = g.id AND m.tenant_id = g.tenant_id\n             WHERE m.tenant_id = $1 AND m.resource_id = $2\n             ORDER BY g.name\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: ResourceGroupId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: uops_core::TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6c14b33a6e8fb8aea05000f774d9c39cc3a4b91d1fad1b70c0ada1944ee6af64"
+}

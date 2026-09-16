@@ -119,6 +119,14 @@ id_type!(
     ResourceId
 );
 id_type!(
+    /// An operator-defined set of resources.
+    ///
+    /// Not a site (where a thing is), not a parent (what it is part of) and not a
+    /// relationship (how it is connected). Those are discovered; a group is *decided* —
+    /// "Critical Servers" is a sentence somebody wrote down, and nothing can infer it.
+    ResourceGroupId
+);
+id_type!(
     /// A reference to sealed credential material. Never the material itself.
     CredentialRef
 );

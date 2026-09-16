@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uops_core::{ResourceId, ResourceKind, SiteId};
+use uops_core::{ResourceGroupId, ResourceId, ResourceKind, SiteId};
 use uuid::Uuid;
 
 /// Which telemetry table family a query addresses.
@@ -93,6 +93,29 @@ pub enum ResourceSelector {
     Descendants {
         root: ResourceId,
         max_depth: u8,
+    },
+    /// Everything in an operator-defined group.
+    ///
+    /// The one selector that names a set nothing can infer. `Site` is geography and
+    /// `Descendants` is topology; a group is somebody's judgement about which resources
+    /// matter together, which is what an alert rule's scope and a maintenance window's
+    /// target actually need.
+    Group {
+        group: ResourceGroupId,
+    },
+    /// Everything carrying this operator tag.
+    ///
+    /// `environment=production`, `criticality=critical`. A containment question, which
+    /// is what `resource_tags_idx` — a `jsonb_path_ops` GIN index — is built for.
+    ///
+    /// Deliberately one key and one value rather than a map or an expression. A tag
+    /// *language* (`criticality=critical AND environment!=staging`) is a real future
+    /// feature and belongs in the query parser alongside the log one, not bolted onto a
+    /// selector variant where it would arrive without precedence rules or a way to
+    /// explain what it matched.
+    Tagged {
+        key: String,
+        value: String,
     },
 }
 

@@ -9,6 +9,7 @@
 
 pub mod auth;
 pub mod credentials;
+pub mod groups;
 pub mod health;
 pub mod query;
 pub mod resources;
@@ -49,6 +50,19 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/resources/{id}/identifiers",
             get(credentials::identifiers).put(credentials::set_identifiers),
+        )
+        .route("/api/v1/resources/{id}/groups", get(groups::of_resource))
+        // Tags, not attributes. PUT replaces the whole map, which is how a tag is
+        // removed; see the route's own docs.
+        .route("/api/v1/resources/{id}/tags", put(groups::set_tags))
+        .route("/api/v1/groups", get(groups::list).post(groups::create))
+        .route(
+            "/api/v1/groups/{id}",
+            put(groups::rename).delete(groups::delete),
+        )
+        .route(
+            "/api/v1/groups/{id}/members",
+            post(groups::add_members).delete(groups::remove_members),
         )
         .route("/api/v1/sites", get(sites::list))
         .route("/api/v1/sites/{id}/location", put(sites::place))

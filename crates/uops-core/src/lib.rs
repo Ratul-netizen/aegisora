@@ -26,6 +26,7 @@ pub mod ids;
 pub mod resource;
 pub mod scope;
 pub mod secret;
+pub mod tags;
 
 pub use attr::{AttrMap, AttrValue, semconv};
 pub use envelope::{
@@ -38,7 +39,13 @@ pub use identity::{
     ObservedIdentity, Outcome, OutcomeReason, REVIEW_FLOOR, Resolution, classify,
     combine_confidence,
 };
-pub use ids::{ActorId, CredentialRef, DecisionId, OrgId, ResourceId, SessionId, SiteId, TenantId};
-pub use resource::{Relationship, RelationshipKind, Resource, ResourceKind, ResourceStatus};
+pub use ids::{
+    ActorId, CredentialRef, DecisionId, OrgId, ResourceGroupId, ResourceId, SessionId, SiteId,
+    TenantId,
+};
+pub use resource::{
+    Relationship, RelationshipKind, Resource, ResourceGroup, ResourceKind, ResourceStatus,
+};
 pub use scope::{Role, TenantScope};
 pub use secret::{AuthProtocol, CredentialMaterial, PrivProtocol, Secret};
+pub use tags::{TagError, Tags};

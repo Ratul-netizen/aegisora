@@ -18,7 +18,7 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use uops_core::{ResourceId, ResourceKind, SiteId, TenantId, TenantScope};
+use uops_core::{ResourceGroupId, ResourceId, ResourceKind, SiteId, TenantId, TenantScope};
 
 use crate::ast::ResourceSelector;
 use crate::error::{Error, Result};
@@ -45,6 +45,17 @@ pub trait ResourceCatalog: Sync {
     async fn of_kind(&self, tenant: TenantId, kind: ResourceKind) -> Result<Vec<ResourceId>>;
 
     async fn at_site(&self, tenant: TenantId, site: SiteId) -> Result<Vec<ResourceId>>;
+
+    /// Members of an operator-defined group.
+    ///
+    /// A group that does not exist, or belongs to another tenant, resolves to **nothing**
+    /// rather than erroring — the same choice `canonical` makes for an unknown ID, and
+    /// for the same reason: an error here would tell a caller whether a group id exists
+    /// in a tenant they cannot see.
+    async fn in_group(&self, tenant: TenantId, group: ResourceGroupId) -> Result<Vec<ResourceId>>;
+
+    /// Resources carrying `key=value` as an operator tag.
+    async fn tagged(&self, tenant: TenantId, key: &str, value: &str) -> Result<Vec<ResourceId>>;
 
     /// `resource_dependents()`, bounded by `max_depth`.
     async fn descendants(
@@ -151,6 +162,15 @@ pub async fn resolve(
             }
             catalog.descendants(tenant, *root, *max_depth).await?
         }
+        ResourceSelector::Group { group } => catalog.in_group(tenant, *group).await?,
+        ResourceSelector::Tagged { key, value } => {
+            if key.is_empty() {
+                return Err(Error::Invalid(
+                    "a tag selector needs a key; an empty one would match every resource                      that has any tag, which is not what anybody means".into(),
+                ));
+            }
+            catalog.tagged(tenant, key, value).await?
+        }
     };
 
     // Sorted and deduplicated: the sort key leads with resource_id, so a sorted IN list
@@ -174,7 +194,9 @@ pub(crate) mod testing {
 
     use async_trait::async_trait;
 
-    use super::{ResourceCatalog, ResourceId, ResourceKind, Result, SiteId, TenantId};
+    use super::{
+        ResourceCatalog, ResourceGroupId, ResourceId, ResourceKind, Result, SiteId, TenantId,
+    };
 
     /// An in-memory catalog. Also the shape the `PostgreSQL` implementation must match.
     #[derive(Debug, Default)]
@@ -184,6 +206,9 @@ pub(crate) mod testing {
         pub aliases: HashMap<ResourceId, ResourceId>,
         pub members: Vec<ResourceId>,
         pub tree: HashMap<ResourceId, Vec<ResourceId>>,
+        pub groups: HashMap<ResourceGroupId, Vec<ResourceId>>,
+        /// `(key, value)` → resources carrying it.
+        pub tags: HashMap<(String, String), Vec<ResourceId>>,
     }
 
     impl FakeCatalog {
@@ -226,6 +251,34 @@ pub(crate) mod testing {
             self.of_kind(tenant, ResourceKind::Device).await
         }
 
+        async fn in_group(
+            &self,
+            tenant: TenantId,
+            group: ResourceGroupId,
+        ) -> Result<Vec<ResourceId>> {
+            Ok(if self.mine(tenant) {
+                self.groups.get(&group).cloned().unwrap_or_default()
+            } else {
+                Vec::new()
+            })
+        }
+
+        async fn tagged(
+            &self,
+            tenant: TenantId,
+            key: &str,
+            value: &str,
+        ) -> Result<Vec<ResourceId>> {
+            Ok(if self.mine(tenant) {
+                self.tags
+                    .get(&(key.to_owned(), value.to_owned()))
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            })
+        }
+
         async fn descendants(
             &self,
             tenant: TenantId,
@@ -265,6 +318,109 @@ mod tests {
         let mut cat = FakeCatalog::new(tenant);
         cat.members = ids.clone();
         (TenantScope::system(tenant), cat, ids)
+    }
+
+    #[tokio::test]
+    async fn a_group_resolves_to_its_members() {
+        let (scope, mut cat, ids) = setup();
+        let group = ResourceGroupId::new();
+        cat.groups.insert(group, vec![ids[0], ids[2]]);
+
+        let r = resolve(&ResourceSelector::Group { group }, &scope, &cat)
+            .await
+            .unwrap();
+        assert_eq!(r.ids().unwrap(), &[ids[0], ids[2]]);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_group_resolves_to_nothing_rather_than_erroring() {
+        // The same choice `canonical` makes for an unknown ID, and for the same reason:
+        // an error here tells the caller whether a group id exists in a tenant they
+        // cannot see. Nothing is a correct answer; 404-never-403 applies to selectors too.
+        let (scope, cat, _) = setup();
+        let r = resolve(
+            &ResourceSelector::Group {
+                group: ResourceGroupId::new(),
+            },
+            &scope,
+            &cat,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(r.ids().unwrap(), &[] as &[ResourceId]);
+        assert!(
+            r.is_empty_set(),
+            "and it is an empty set, not the whole tenant — those compile to opposite queries"
+        );
+    }
+
+    #[tokio::test]
+    async fn another_tenants_group_is_empty_here() {
+        let (_, mut cat, ids) = setup();
+        let group = ResourceGroupId::new();
+        cat.groups.insert(group, ids.clone());
+
+        // A scope for some other tenant. The catalog holds the group; the tenant does not.
+        let elsewhere = TenantScope::system(TenantId::new());
+        let r = resolve(&ResourceSelector::Group { group }, &elsewhere, &cat)
+            .await
+            .unwrap();
+        assert!(r.is_empty_set());
+    }
+
+    #[tokio::test]
+    async fn a_tag_selector_resolves_to_what_carries_it() {
+        let (scope, mut cat, ids) = setup();
+        cat.tags.insert(
+            ("environment".to_owned(), "production".to_owned()),
+            vec![ids[1], ids[3]],
+        );
+
+        let r = resolve(
+            &ResourceSelector::Tagged {
+                key: "environment".to_owned(),
+                value: "production".to_owned(),
+            },
+            &scope,
+            &cat,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.ids().unwrap(), &[ids[1], ids[3]]);
+
+        // A different value of the same key is a different set, which is the whole
+        // reason a tag is a pair and not a flag.
+        let staging = resolve(
+            &ResourceSelector::Tagged {
+                key: "environment".to_owned(),
+                value: "staging".to_owned(),
+            },
+            &scope,
+            &cat,
+        )
+        .await
+        .unwrap();
+        assert!(staging.is_empty_set());
+    }
+
+    #[tokio::test]
+    async fn an_empty_tag_key_is_refused() {
+        // It would otherwise mean "every resource that has any tag at all", which is not
+        // what anybody typing an empty box means — and an alert rule that quietly widened
+        // to the whole estate is the failure mode worth refusing outright.
+        let (scope, cat, _) = setup();
+        let err = resolve(
+            &ResourceSelector::Tagged {
+                key: String::new(),
+                value: "production".to_owned(),
+            },
+            &scope,
+            &cat,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{err:?}");
     }
 
     #[tokio::test]

@@ -66,6 +66,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M3 · normalize + batch** | ✅ syslog → `LogRow` on semconv keys, batched inserts |
 | **M3 · `uops-pipeline`** | ✅ resolve + enrich + batch, shared by every collector — 17 tests |
 | identity cache hit rate > 99% | ✅ measured, once the resolver stopped asking the wrong question |
+| **Resource groups** | ✅ schema, selector, store, five routes — 11 tests against real `PostgreSQL` |
+| **Operator tags** | ✅ a column and a type of their own, apart from `attributes` |
 | M3 · syslog over TLS | ✅ **decided: terminated at a proxy**, not in-process |
 | M3 · the syslog daemon, OTLP, Log Explorer | ⬜ |
 | M4 | ⬜ |
@@ -649,6 +651,55 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**Resource groups and operator tags.** The two items the architecture review classified
+FOUNDATIONAL, built before M4 starts rather than after it.
+
+**A group is the fourth way to talk about a set of resources, and the only one nothing
+can infer.** A site is where a thing is, `parent_id` is what it is part of, a
+relationship is how it is connected — all three are discovered. *Critical Servers* is a
+sentence somebody wrote down. Every M4 feature needs to name one: an alert rule's scope,
+a dashboard's filter, a notification routing rule, a maintenance window's target. Doing
+this after M4 would mean migrating every one of them; doing it now was two tables and one
+`ResourceSelector` variant.
+
+Membership is an explicit list rather than a stored predicate. A rule-based group —
+*everything tagged `criticality=critical`* — is a later feature and materialises into the
+same table, because an alert scoped to a rule that silently starts matching 400 more
+devices is a genuinely bad surprise, and an explicit list is what an operator can audit.
+
+**Tags are a separate column from attributes, and a separate type from `AttrMap`.**
+`attributes` is written by collectors on every walk; `tags` is written by humans and by
+nothing else. One map for both would work right up until the first time discovery
+overwrote `criticality=critical` — silently, and the resulting alert-routing bug would be
+unreproducible because the evidence would have been overwritten too.
+
+The precedent was already in the schema and was already right. From migration 0002:
+*"`display_name` — user override. Never written automatically: if a human named it,
+discovery must not silently rename it underneath them."* Tags are that argument applied
+to attributes, and `Tags` is a distinct type so that a collector holding an `AttrMap`
+cannot pass it where tags are wanted. The mistake is a compile error rather than an
+overwrite found six months later by an operator whose paging rule stopped firing.
+
+`PUT` replaces the whole map, deliberately: that is how a tag is *removed*. A merge-only
+API would need a second endpoint to delete one, and *"I removed `criticality=critical`
+and it came back"* is a bug report nobody should have to file.
+
+**What the schema enforces rather than the code.** Membership carries the tenant into
+both foreign keys — `(group_id, tenant_id)` and `(resource_id, tenant_id)` — so a group
+in one tenant cannot contain another's resource even if somebody guesses the uuid. Tags
+have a `CHECK` that every value is a string, because a routing rule silently ignoring
+`owner.team` for being an object is not a debugging session anybody should have. Both are
+asserted in `migrations/tests/` by attempting the thing they refuse, and both guards were
+verified by dropping the constraint and watching the suite fail.
+
+**Not done, and named rather than assumed:** there is no UI for either. The API is
+complete and the isolation harness covers all seven new routes; the sidebar, the group
+editor and the tag chips on the resource page are front-end work that belongs with the
+M4 dashboard pass. A tag *language* — `criticality=critical AND environment!=staging` —
+is also deliberately absent: `ResourceSelector::Tagged` takes one key and one value,
+because an expression grammar belongs in the query parser alongside the log one, not
+bolted onto a selector variant where it would arrive without precedence rules.
 
 **The licence is AGPL-3.0-only, with a Contributor License Agreement.** Chosen rather
 than allowed to happen: `LICENSE`, every crate manifest and `web/package.json` already

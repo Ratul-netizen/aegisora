@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO resource_group_member (tenant_id, group_id, resource_id)\n            SELECT $1, $2, given\n              FROM unnest($3::uuid[]) AS given\n            ON CONFLICT DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "24f5dfcd5cd7491609f2dd8fafe5d44a70b4efc9bc5b82524f1bc261065f9f77"
+}

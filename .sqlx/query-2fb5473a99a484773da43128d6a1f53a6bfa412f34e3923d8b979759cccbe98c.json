@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id            AS \"id: ResourceId\",\n                tenant_id     AS \"tenant_id: uops_core::TenantId\",\n                site_id       AS \"site_id: SiteId\",\n                parent_id     AS \"parent_id: ResourceId\",\n                kind          AS \"kind: ResourceKind\",\n                name,\n                display_name,\n                vendor, model, os, os_version,\n                status        AS \"status: ResourceStatus\",\n                profile_id,\n                credential_ref AS \"credential_ref: CredentialRef\",\n                attributes    AS \"attributes: Json<AttrMap>\",\n                first_seen, last_seen\n            FROM resource\n            WHERE tenant_id = $1\n              AND ($2::uuid IS NULL OR id > $2)\n              AND ($3::resource_kind IS NULL OR kind = $3)\n              AND ($4::uuid IS NULL OR site_id = $4)\n              AND ($5::resource_status IS NULL OR status = $5)\n              AND ($6::text IS NULL\n                   OR name ILIKE $6\n                   OR display_name ILIKE $6)\n            ORDER BY id\n            LIMIT $7\n            ",
+  "query": "\n            SELECT\n                id            AS \"id: ResourceId\",\n                tenant_id     AS \"tenant_id: uops_core::TenantId\",\n                site_id       AS \"site_id: SiteId\",\n                parent_id     AS \"parent_id: ResourceId\",\n                kind          AS \"kind: ResourceKind\",\n                name,\n                display_name,\n                vendor, model, os, os_version,\n                status        AS \"status: ResourceStatus\",\n                profile_id,\n                credential_ref AS \"credential_ref: CredentialRef\",\n                attributes    AS \"attributes: Json<AttrMap>\",\n                tags          AS \"tags: Json<Tags>\",\n                first_seen, last_seen\n            FROM resource\n            WHERE tenant_id = $1\n              AND ($2::uuid IS NULL OR id > $2)\n              AND ($3::resource_kind IS NULL OR kind = $3)\n              AND ($4::uuid IS NULL OR site_id = $4)\n              AND ($5::resource_status IS NULL OR status = $5)\n              AND ($6::text IS NULL\n                   OR name ILIKE $6\n                   OR display_name ILIKE $6)\n            ORDER BY id\n            LIMIT $7\n            ",
   "describe": {
     "columns": [
       {
@@ -112,11 +112,16 @@
       },
       {
         "ordinal": 15,
+        "name": "tags: Json<Tags>",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 16,
         "name": "first_seen",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "last_seen",
         "type_info": "Timestamptz"
       }
@@ -181,8 +186,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "23eb63bd027e805cacab3cb2c3b19fbf16fcd2f006ce34271cae5c06627ac7a8"
+  "hash": "2fb5473a99a484773da43128d6a1f53a6bfa412f34e3923d8b979759cccbe98c"
 }

@@ -12,7 +12,7 @@
 //! instead of a recursive walk on the hot path.
 
 use async_trait::async_trait;
-use uops_core::{ResourceId, ResourceKind, SiteId, TenantId};
+use uops_core::{ResourceGroupId, ResourceId, ResourceKind, SiteId, TenantId};
 use uops_query::{ResourceCatalog, Result as QueryResult};
 
 use crate::store::PgStore;
@@ -104,6 +104,68 @@ impl ResourceCatalog for PgCatalog {
             "#,
             tenant as TenantId,
             site as SiteId,
+        )
+        .fetch_all(self.store.pool())
+        .await
+        .map_err(|e| storage(&e))
+    }
+
+    /// Members of an operator-defined group.
+    ///
+    /// The join is on `(group_id, tenant_id)`, not on `group_id` alone. It cannot matter
+    /// — the composite foreign key in migration 0011 makes a cross-tenant member row
+    /// unwritable — but a query that reads correctly on its own is a query that stays
+    /// correct if that constraint is ever relaxed.
+    ///
+    /// A group that does not exist, or belongs to another tenant, returns an empty list
+    /// rather than an error. The same choice `canonical` makes, and for the same reason:
+    /// 404-never-403 applies to selectors too, and an error here would report whether a
+    /// group id exists in a tenant the caller cannot see.
+    async fn in_group(
+        &self,
+        tenant: TenantId,
+        group: ResourceGroupId,
+    ) -> QueryResult<Vec<ResourceId>> {
+        sqlx::query_scalar!(
+            r#"
+            SELECT resource_id AS "id!: ResourceId"
+              FROM resource_group_member
+             WHERE tenant_id = $1 AND group_id = $2
+            "#,
+            tenant as TenantId,
+            group as ResourceGroupId,
+        )
+        .fetch_all(self.store.pool())
+        .await
+        .map_err(|e| storage(&e))
+    }
+
+    /// Resources carrying one operator tag.
+    ///
+    /// `@>` containment rather than `tags ->> $2 = $3`, because containment is what
+    /// `resource_tags_idx` — a `jsonb_path_ops` GIN index — can answer. The `->>` form is
+    /// equivalent and reads better; it is also a sequential scan of every resource in the
+    /// tenant, which at 10 000 resources is the difference the index exists to make.
+    ///
+    /// `jsonb_build_object` rather than string-concatenating a literal: a tag value
+    /// containing a quote would otherwise produce malformed JSON, and the failure would
+    /// be a syntax error at runtime on exactly the input somebody typed by hand.
+    async fn tagged(
+        &self,
+        tenant: TenantId,
+        key: &str,
+        value: &str,
+    ) -> QueryResult<Vec<ResourceId>> {
+        sqlx::query_scalar!(
+            r#"
+            SELECT id AS "id!: ResourceId"
+              FROM resource
+             WHERE tenant_id = $1
+               AND tags @> jsonb_build_object($2::text, $3::text)
+            "#,
+            tenant as TenantId,
+            key,
+            value,
         )
         .fetch_all(self.store.pool())
         .await

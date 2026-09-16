@@ -61,6 +61,21 @@ impl ResourceCatalog for FixedCatalog {
     async fn at_site(&self, _t: TenantId, _s: SiteId) -> uops_query::Result<Vec<ResourceId>> {
         Ok(Self::all())
     }
+    async fn in_group(
+        &self,
+        _t: TenantId,
+        _g: uops_core::ResourceGroupId,
+    ) -> uops_query::Result<Vec<ResourceId>> {
+        Ok(Self::all())
+    }
+    async fn tagged(
+        &self,
+        _t: TenantId,
+        _k: &str,
+        _v: &str,
+    ) -> uops_query::Result<Vec<ResourceId>> {
+        Ok(Self::all())
+    }
     async fn descendants(
         &self,
         _t: TenantId,

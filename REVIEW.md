@@ -67,9 +67,14 @@ subtree.
 
 M1 is already met, so read this as "before M4 builds on it".
 
-### FOUNDATIONAL — do these now
+### FOUNDATIONAL — ~~do these now~~ **both done, 2026-09-16**
 
-#### 2.1 Resource groups
+#### 2.1 Resource groups ✅
+
+**Implemented.** Migration 0011, `uops_core::ResourceGroup`,
+`ResourceSelector::Group`, `PgStore::{create_group, group, groups, rename_group,
+delete_group, add_to_group, remove_from_group, groups_of}`, and five routes under
+`/api/v1/groups`. The design is below, unchanged.
 
 An operator-defined set: *Dhaka Core Routers*, *Branch Routers*, *Critical Servers*,
 *Internet Edge*, *Production*. Neither a site (geography) nor a topology subtree
@@ -87,7 +92,11 @@ Doing this after M4 means every alert rule, dashboard and notification policy wr
 against the old selector has to be migrated. Doing it now is two tables and one AST
 variant.
 
-#### 2.2 Operator tags, separate from system attributes
+#### 2.2 Operator tags, separate from system attributes ✅
+
+**Implemented.** `resource.tags` alongside `resource.attributes`, `uops_core::Tags` as a
+distinct type from `AttrMap`, `ResourceSelector::Tagged`, `PgStore::set_tags`, and
+`PUT /api/v1/resources/{id}/tags`. The design is below, unchanged.
 
 `resource.attributes` is currently one `jsonb` column holding both what a collector
 discovered and what a human decided. It has a GIN index and works, but the two are not
@@ -271,9 +280,8 @@ should not grow.
 
 Ranked by what they cost if deferred:
 
-1. **Resource groups** — §2.1. Every M4 feature selects a set of resources.
-2. **Operator tags distinct from system attributes** — §2.2. Discovery will silently
-   overwrite human intent, and the resulting bug reports will be unreproducible.
+1. ~~**Resource groups**~~ — §2.1. **Done.**
+2. ~~**Operator tags distinct from system attributes**~~ — §2.2. **Done.**
 3. **The maintenance-window model** — §2.3. The alert engine has to consult it, so it must
    exist before the alert engine does.
 4. **The notification policy shape** — §2.5. Retrofitting routing onto a direct

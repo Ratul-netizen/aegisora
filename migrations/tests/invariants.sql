@@ -380,6 +380,106 @@ SELECT pg_temp.check(
       WHERE id = '00000000-0000-0000-0000-0000000000a2'),
     'updated_at must be set by the trigger, overriding whatever the writer supplied');
 
+-- ---------------------------------------------------------------------------
+-- Resource groups: membership cannot cross a tenant (migration 0011)
+-- ---------------------------------------------------------------------------
+--
+-- The composite foreign keys are the structural half of tenant isolation — the half
+-- that does not depend on anyone remembering a WHERE clause. Asserted by trying the
+-- thing they exist to refuse.
+
+INSERT INTO resource_group (id, tenant_id, name) VALUES
+    ('00000000-0000-0000-0000-0000000000c1',
+     '00000000-0000-0000-0000-00000000000a', 'Core Routers');
+
+-- Tenant B may have a group of the same name. Scoped uniqueness, like every other name
+-- in this schema: two customers of one MSP both have core routers.
+INSERT INTO resource_group (id, tenant_id, name) VALUES
+    ('00000000-0000-0000-0000-0000000000d1',
+     '00000000-0000-0000-0000-00000000000b', 'Core Routers');
+
+SELECT pg_temp.check(
+    (SELECT count(*) FROM resource_group WHERE name = 'Core Routers') = 2,
+    'two tenants may each have a group of the same name');
+
+INSERT INTO resource_group_member (tenant_id, group_id, resource_id) VALUES
+    ('00000000-0000-0000-0000-00000000000a',
+     '00000000-0000-0000-0000-0000000000c1',
+     '00000000-0000-0000-0000-0000000000a2');
+
+-- Tenant A's group must not be able to contain tenant B's resource, even though both
+-- uuids exist and the inserting tenant_id is A's own.
+DO $$
+BEGIN
+    INSERT INTO resource_group_member (tenant_id, group_id, resource_id) VALUES
+        ('00000000-0000-0000-0000-00000000000a',
+         '00000000-0000-0000-0000-0000000000c1',
+         '00000000-0000-0000-0000-0000000000b2');
+    RAISE EXCEPTION 'FAILED: a group must not be able to contain another tenant''s resource';
+EXCEPTION WHEN foreign_key_violation THEN
+    NULL;
+END $$;
+
+-- And the mirror: naming tenant B's group with tenant A's id is refused by the same key.
+DO $$
+BEGIN
+    INSERT INTO resource_group_member (tenant_id, group_id, resource_id) VALUES
+        ('00000000-0000-0000-0000-00000000000a',
+         '00000000-0000-0000-0000-0000000000d1',
+         '00000000-0000-0000-0000-0000000000a2');
+    RAISE EXCEPTION 'FAILED: a member row must not reach a group in another tenant';
+EXCEPTION WHEN foreign_key_violation THEN
+    NULL;
+END $$;
+
+-- Removing a resource removes its memberships. A group listing a resource that no
+-- longer exists would break every alert scoped to it, one row at a time.
+DELETE FROM resource WHERE id = '00000000-0000-0000-0000-0000000000a2';
+SELECT pg_temp.check(
+    NOT EXISTS (SELECT 1 FROM resource_group_member
+                 WHERE resource_id = '00000000-0000-0000-0000-0000000000a2'),
+    'membership must not outlive the resource');
+
+-- ---------------------------------------------------------------------------
+-- Tags are a flat string map (migration 0011)
+-- ---------------------------------------------------------------------------
+--
+-- A nested tag is not a tag. Without this, a routing rule silently ignores `owner.team`
+-- because it is an object, and nothing reports it.
+
+UPDATE resource SET tags = '{"environment": "production", "criticality": "critical"}'
+ WHERE id = '00000000-0000-0000-0000-0000000000a3';
+
+SELECT pg_temp.check(
+    (SELECT tags ->> 'environment' FROM resource
+      WHERE id = '00000000-0000-0000-0000-0000000000a3') = 'production',
+    'a flat string map is accepted');
+
+DO $$
+BEGIN
+    UPDATE resource SET tags = '{"owner": {"team": "network"}}'
+     WHERE id = '00000000-0000-0000-0000-0000000000a3';
+    RAISE EXCEPTION 'FAILED: a nested tag value must be refused';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+DO $$
+BEGIN
+    UPDATE resource SET tags = '{"replicas": 3}'
+     WHERE id = '00000000-0000-0000-0000-0000000000a3';
+    RAISE EXCEPTION 'FAILED: a non-string tag value must be refused';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+-- Tags and attributes are separate columns, which is the entire point: discovery writes
+-- one and a human writes the other, and neither can silently overwrite the other's work.
+SELECT pg_temp.check(
+    (SELECT tags <> attributes FROM resource
+      WHERE id = '00000000-0000-0000-0000-0000000000a3'),
+    'tags and attributes must be distinct columns');
+
 -- Every foreign key has an index on its referencing side.
 --
 -- PostgreSQL indexes the referenced side automatically and the referencing side never,
