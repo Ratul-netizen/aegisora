@@ -473,3 +473,250 @@ h2 {
   margin-right: 8px;
   vertical-align: baseline;
 }
+
+/* --- the Log Explorer ------------------------------------------------------------
+   Three regions: the fields on the left, the rows in the middle, the detail on the
+   right. The detail is a column rather than an overlay because an operator reading a
+   row is comparing it with the ones around it, and a modal hides exactly that. */
+
+.explorer {
+  display: grid;
+  grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.explorer:has(.row-detail) {
+  grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) minmax(0, 22rem);
+}
+
+.explorer .rows {
+  min-width: 0;
+}
+
+/* Sticky so the values stay readable while the table scrolls past them. */
+.fields {
+  position: sticky;
+  top: 1rem;
+  font-size: 0.85rem;
+}
+
+.field-counts {
+  margin-bottom: 1rem;
+}
+
+.field-counts h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.field-counts ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.field-counts li {
+  position: relative;
+  margin-bottom: 1px;
+}
+
+.field-counts button {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.15rem 0.35rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  z-index: 1;
+}
+
+.field-counts button:hover {
+  background: rgba(127, 127, 127, 0.18);
+}
+
+.field-counts .value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-counts .count {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Behind the label, so the bar is a background rather than a second row to read. */
+.field-counts .meter {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(127, 127, 127, 0.14);
+  pointer-events: none;
+}
+
+.picked {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.chip {
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+/* --- histogram --- */
+
+.histogram {
+  margin: 0.75rem 0;
+}
+
+.histogram svg {
+  width: 100%;
+  height: 96px;
+  display: block;
+  /* The drag is the interaction; a text cursor over it would suggest selection. */
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.histogram .bar {
+  fill: currentColor;
+  opacity: 0.55;
+}
+
+.histogram .selection {
+  fill: currentColor;
+  opacity: 0.18;
+}
+
+.histogram figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.78rem;
+}
+
+.histogram .ticks {
+  display: flex;
+  gap: 1.5rem;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- row detail --- */
+
+.explorer tbody tr {
+  cursor: pointer;
+}
+
+.explorer tbody tr.open {
+  background: rgba(127, 127, 127, 0.18);
+}
+
+.row-detail {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  border-left: 1px solid rgba(127, 127, 127, 0.3);
+  padding-left: 1rem;
+  font-size: 0.85rem;
+}
+
+.row-detail header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.row-detail header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.row-detail header button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.row-detail dl {
+  margin: 0.5rem 0 1rem;
+}
+
+.row-detail dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+}
+
+.row-detail dd {
+  margin: 0 0 0.5rem;
+  /* Bodies and attribute maps are long and must not widen the column. */
+  overflow-wrap: anywhere;
+}
+
+.all-signals h3 {
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem;
+}
+
+.signal-group {
+  margin-bottom: 0.75rem;
+}
+
+.signal-group h4 {
+  margin: 0 0 0.2rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.signal-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.78rem;
+}
+
+.signal-rows li {
+  margin-bottom: 0.15rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 70rem) {
+  /* One column. The sidebar and the detail are aids; the rows are the page. */
+  .explorer,
+  .explorer:has(.row-detail) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fields,
+  .row-detail {
+    position: static;
+    max-height: none;
+    border-left: 0;
+    padding-left: 0;
+  }
+}

@@ -76,7 +76,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | M3 · ceiling | ✅ **~100 000/s**, twice the target, every overflow datagram counted |
 | **M3 · OTLP decoding** | ✅ logs and metrics → the same rows syslog produces — 21 tests |
 | **M3 · the OTLP receiver** | ✅ `uops-collector-otlp` — OTLP/HTTP, logs + metrics + traces, end to end |
-| M3 · Log Explorer | ⬜ |
+| **M3 · Log Explorer** | ✅ histogram with drag-to-zoom, field sidebar, row detail, **all signals for a resource** |
+| M3 · live tail, saved searches | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -658,6 +659,54 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**The Log Explorer, and the interaction SPEC says is the whole product.**
+
+Four things, and one of them matters more than the other three:
+
+* a **histogram** over the same filter as the rows, with drag-to-zoom;
+* a **field sidebar** counting the top values of each low-cardinality column, clickable
+  into a filter;
+* a **row detail** panel showing every column;
+* and **"show all signals for this resource around this timestamp"** — SPEC's own words
+  for it are *"the seed of the Investigation Workspace, and the one interaction that
+  demonstrates the product thesis in ten seconds."*
+
+That last one is four range reads on `(tenant_id, resource_id, observed_at)` — logs,
+events, states and metrics — centred on the clicked row's own timestamp rather than the
+page's window. It is cheap enough to run on a click **because of decisions made in M0 and
+held since**: one `resource_id` for every signal, and every telemetry table sorted the
+same way. A product that had let syslog and SNMP and OTLP each keep their own notion of a
+host would need four searches here instead of four seeks, and this would be a button
+somebody had to mean rather than a click.
+
+**Three queries, one filter.** The rows, the histogram and each sidebar facet are all
+*derived* from the single `Query` that was run — `toHistogram`, `toFieldCounts` — because
+a histogram that filtered differently from the rows beneath it would be a chart of
+something else and nobody would notice until they counted the bars.
+
+**The histogram fills empty buckets.** `ClickHouse` returns a row only for a bucket with
+data, so a gap in the result is a gap in *time*; packing the returned buckets side by side
+would draw a quiet hour and a busy hour at the same width and make the drag mean something
+other than it looks like. SVG, no chart library — the same call `map.tsx` made, for the
+same reason: a bar has to be the bucket it claims to be.
+
+**The sidebar is deliberately low-cardinality.** Severity, source, vendor, and the two
+*materialised* attributes `host.name` and `service.name`. A facet over `resource_id` would
+ask `ClickHouse` to group ten thousand values to show eight, which is exactly the
+high-cardinality grouping cost W1 measured and warned about.
+
+**And a bug that green TypeScript could not have caught.** The client's bucket sizing
+returned two-day and seven-day widths for long windows, and `uops_query`'s compiler
+rejects anything outside one second to one day — so the histogram would have been a **400
+on any range past about two months**, with the types perfectly satisfied. Found by reading
+the compiler rather than by running the app.
+
+The fix is a clamp; the *lesson* is a test. There are now four tests in `uops-api`'s
+`query_route` that post the exact shapes the Explorer sends — the histogram, the bucket
+bound, the field counts, and grouping on a materialised attribute — because a
+hand-written TypeScript mirror of an AST typechecks against itself and says nothing about
+whether the server accepts it.
 
 **The OTLP receiver, and a bug that had already shipped.**
 
@@ -1350,6 +1399,7 @@ integration suites.
 | **The simulator modelled a GET as a GETNEXT** | a scalar that was invisible in tests but present on the real agent | `entPhysicalSoftwareRev` could never have been read. The simulator now has a real `get_scalars`. A simulator that is wrong in the same direction as the code under test proves nothing |
 | **`Runner::load` had a trap** | the scale test was measuring nothing | discovery rules lived in a side map populated only inside `run::reload`, so the 1 000-device scale test measured 1 000 devices whose every discovery job failed. `load()` now does both and is the only way in |
 | **Two routes leaked tenant existence** | the isolation harness, once it was given a real vault | `revoke` returned 204 for another tenant's credential and `identifiers_for` returned `200 []`. Both now `NotFound` — 404-never-403 |
+| **The Explorer's histogram would 400 on any long window** | reading the compiler after the TypeScript was green | `bucketSeconds` returned two-day and seven-day widths; `uops_query` rejects anything over a day. A hand-written TypeScript mirror of an AST typechecks against itself and proves nothing about the server. Clamped, and four tests now post the Explorer's exact query shapes at the API |
 | **A collector was never in the Docker image** | adding the second one, and looking | the syslog service named an entrypoint the Dockerfile did not copy, for two commits. `docker compose config` validates YAML, not existence, and the smoke test only waits for `server`. Now a CI guard greps every entrypoint out of the compose file and requires it in the image. The edit had been applied by a script whose pattern did not match and which printed "ok" from a different substitution in the same run |
 | **The retention trap, a third time** | a gauge that never appeared while the log beside it did | fixtures dated 2023 against `metrics`' 30-day TTL are deleted at the next merge; `logs` has 365 days, so its row survived long enough to pass — a flake rather than a pass. Fixtures are anchored to now, and the helper says why |
 | **The load generator blamed the daemon twice** | the 50 000 msg/s test failing at 49 914/s | a fixed-slice-per-tick generator is systematically slow because sleeps overshoot and nothing catches up; and then the assertion `rate >= TARGET` is unsatisfiable by construction for a clock-paced generator. Both reported a shortfall while the daemon had received every message and dropped none. A measurement harness is code, and its bugs look like the thing it measures |

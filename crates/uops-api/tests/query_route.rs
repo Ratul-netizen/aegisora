@@ -295,6 +295,157 @@ impl Fixture {
     }
 }
 
+/// The exact shapes the Log Explorer sends, asserted server-side.
+///
+/// The web app typechecks against hand-written TypeScript mirrors of the AST, and
+/// typechecking a request says nothing about whether the server takes it. This was not
+/// hypothetical: `bucketSeconds` returned two-day and seven-day buckets for long windows
+/// and the compiler rejects anything over a day, so the histogram would have been a 422
+/// on any range past about two months — with the TypeScript perfectly green.
+///
+/// So these are the two derived queries — `toHistogram` and `toFieldCounts` — written the
+/// way the app writes them.
+#[tokio::test]
+async fn the_explorers_histogram_query_compiles_and_returns_buckets() {
+    let f = fixture("histogram", Role::Viewer).await;
+    f.telemetry
+        .insert_logs(&[
+            log_row(f.tenant, ResourceId::new(), "one", 10),
+            log_row(f.tenant, ResourceId::new(), "two", 20),
+            log_row(f.tenant, ResourceId::new(), "three", 30),
+        ])
+        .await
+        .unwrap();
+
+    let body = ast(&serde_json::json!({
+        "aggregations": [{ "func": "count", "field": null, "alias": "n" }],
+        "group_by": [{ "field": "time_bucket", "seconds": 300 }],
+        "order_by": [{ "key": { "by": "field", "field": { "field": "time_bucket", "seconds": 300 } } }],
+        "limit": 1000
+    }));
+
+    let (status, value) = f.call(f.post_query(&body, true)).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+
+    let columns: Vec<String> = value["columns"]
+        .as_array()
+        .expect("columns")
+        .iter()
+        .map(|c| c["name"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        columns.len(),
+        2,
+        "a bucket and a count, in that order, because the client reads row[0] and row[1]: {columns:?}"
+    );
+    assert!(
+        columns[1] == "n",
+        "the alias the client asks for must be the alias it gets: {columns:?}"
+    );
+    assert!(
+        !value["rows"].as_array().expect("rows").is_empty(),
+        "the fixtures are inside the window, so there is at least one bucket"
+    );
+}
+
+/// The bucket bound the client has to respect, asserted here rather than only in a
+/// comment on the client.
+#[tokio::test]
+async fn a_time_bucket_longer_than_a_day_is_refused() {
+    let f = fixture("bucket-bound", Role::Viewer).await;
+
+    let body = ast(&serde_json::json!({
+        "aggregations": [{ "func": "count", "field": null, "alias": "n" }],
+        // Two days. What `bucketSeconds` used to return for a window of a few months.
+        "group_by": [{ "field": "time_bucket", "seconds": 172_800 }],
+        "limit": 1000
+    }));
+
+    let (status, value) = f.call(f.post_query(&body, true)).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a bucket the compiler refuses must be refused, not silently reinterpreted: {value}"
+    );
+    // And the refusal says which bound was crossed. A client author reading
+    // "invalid query" learns nothing; this is what told me the client was wrong.
+    assert!(
+        value["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("time bucket")),
+        "the problem must name the bound: {value}"
+    );
+}
+
+/// The field sidebar's query: count per distinct value, biggest first.
+#[tokio::test]
+async fn the_explorers_field_counts_query_compiles_and_orders_by_the_count() {
+    let f = fixture("field-counts", Role::Viewer).await;
+    f.telemetry
+        .insert_logs(&[
+            log_row(f.tenant, ResourceId::new(), "alpha", 10),
+            log_row(f.tenant, ResourceId::new(), "beta", 20),
+            log_row(f.tenant, ResourceId::new(), "gamma", 30),
+        ])
+        .await
+        .unwrap();
+
+    let body = ast(&serde_json::json!({
+        "aggregations": [{ "func": "count", "field": null, "alias": "n" }],
+        "group_by": [{ "field": "severity" }],
+        "order_by": [{ "key": { "by": "alias", "alias": "n" }, "desc": true }],
+        "limit": 8
+    }));
+
+    let (status, value) = f.call(f.post_query(&body, true)).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+
+    let rows = value["rows"].as_array().expect("rows");
+    assert!(!rows.is_empty(), "the seeded rows have a severity");
+
+    // Descending, which is what makes a sidebar a *top* values list rather than an
+    // arbitrary eight.
+    let counts: Vec<i64> = rows
+        .iter()
+        .map(|r| {
+            r[1].as_i64()
+                .or_else(|| r[1].as_str().and_then(|s| s.parse().ok()))
+                .unwrap_or(0)
+        })
+        .collect();
+    assert!(
+        counts.windows(2).all(|w| w[0] >= w[1]),
+        "counts must come back descending: {counts:?}"
+    );
+}
+
+/// Grouping on a materialised attribute, which is what the Host and Service facets do.
+#[tokio::test]
+async fn the_sidebar_can_group_on_a_materialised_attribute() {
+    let f = fixture("attr-counts", Role::Viewer).await;
+    f.telemetry
+        .insert_logs(&[
+            log_row(f.tenant, ResourceId::new(), "one", 10),
+            log_row(f.tenant, ResourceId::new(), "two", 20),
+        ])
+        .await
+        .unwrap();
+
+    let body = ast(&serde_json::json!({
+        "aggregations": [{ "func": "count", "field": null, "alias": "n" }],
+        "group_by": [{ "field": "attr", "key": "host.name" }],
+        "order_by": [{ "key": { "by": "alias", "alias": "n" }, "desc": true }],
+        "limit": 8
+    }));
+
+    let (status, value) = f.call(f.post_query(&body, true)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "host.name is a materialised column, so grouping on it must not be refused: {value}"
+    );
+}
+
 #[tokio::test]
 async fn a_query_returns_this_tenants_telemetry() {
     let f = fixture("basic", Role::Viewer).await;

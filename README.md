@@ -68,8 +68,9 @@ React · TypeScript · Vite
       resource rather than a dropped message, and a ClickHouse outage spills to disk and
       replays rather than dropping — and it sustains **50 000 msg/s from 1 000 senders
       with nothing dropped**, measured, with roughly twice that as headroom. OTLP/HTTP
-      receives logs, metrics and traces on the same pipeline. The Log Explorer is not
-      built. TLS is terminated at a proxy by decision, not built in — see STATUS.md
+      receives logs, metrics and traces on the same pipeline. The Log Explorer has a
+      histogram, a field sidebar and **"show all signals for this resource"**. Live tail
+      and saved searches are not built. TLS is terminated at a proxy by decision, not built in — see STATUS.md
 - [ ] M4 — dashboards and alerting
 
 Taken out of order because they were asked for: MAC vendor lookup, device make/model/

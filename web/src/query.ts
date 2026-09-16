@@ -7,9 +7,8 @@
  * a resource selector, `op` on an expression, `field` on a field), because a mismatch
  * here is a 422 with a serde message rather than anything a person can act on.
  *
- * Only the parts the Explorer builds so far are modelled. Aggregations, grouping and
- * ordering exist in the Rust AST and will be added here alongside the UI that produces
- * them; declaring them now would be declaring an interface nothing implements.
+ * Only the parts the Explorer builds are modelled. Everything here has a control that
+ * produces it — declaring an interface nothing implements would be declaring a promise.
  */
 
 import { ApiError, request } from "./api";
@@ -47,13 +46,110 @@ export type Expr =
   | { op: "text"; field: Field; mode: TextMode; terms: string[] }
   | { op: "exists"; field: Field };
 
+/** The aggregate functions the Explorer asks for. The Rust AST has more. */
+export type AggFunc = "count" | "sum" | "avg" | "min" | "max";
+
+export interface Aggregation {
+  func: AggFunc;
+  /** `null` only for `count`. */
+  field?: Field | null;
+  /**
+   * The output column's name.
+   *
+   * Validated server-side as an identifier, because it is the one caller-supplied string
+   * that reaches the statement text. Kept short and fixed in this app rather than typed
+   * by a user.
+   */
+  alias: string;
+}
+
+export type SortKey = { by: "field"; field: Field } | { by: "alias"; alias: string };
+
+export interface Sort {
+  key: SortKey;
+  desc?: boolean;
+}
+
 export interface Query {
   signal: Signal;
   time: { start: string; end: string };
   resources: { type: "all" } | { type: "ids"; ids: string[] };
   filter?: Expr;
+  aggregations?: Aggregation[];
+  group_by?: Field[];
+  order_by?: Sort[];
   limit: number;
   offset?: number;
+}
+
+/**
+ * A bucket width that puts roughly `target` bars in a window.
+ *
+ * Snapped to a round number of seconds rather than computed exactly, because a histogram
+ * whose bars are 37 seconds wide is one nobody can reason about — "each bar is five
+ * minutes" is a sentence, and 37 seconds is an artefact of the window somebody happened
+ * to pick.
+ *
+ * The floor is one second: `time_bucket` is `toStartOfInterval` server-side and a
+ * sub-second bucket would ask ClickHouse for more bars than there are pixels.
+ *
+ * **The ceiling is one day, and it is the server's.** `uops_query`'s compiler rejects a
+ * bucket outside 1 second to 1 day outright — *"time bucket must be between 1 second and
+ * 1 day"* — so a window long enough to want two-day bars would have produced a 400 rather
+ * than a chart. A year of daily bars is 365 of them, which is more than 60 and perfectly
+ * readable; asking for wider ones buys nothing and fails.
+ */
+export const MAX_BUCKET_SECONDS = 86_400;
+
+export function bucketSeconds(fromMs: number, toMs: number, target = 60): number {
+  const span = Math.max(1, Math.round((toMs - fromMs) / 1000));
+  const ideal = span / target;
+  const steps = [
+    1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200,
+    MAX_BUCKET_SECONDS,
+  ];
+  // The fallback is named rather than `at(-1)`: the compiler cannot know the literal is
+  // non-empty, and an assertion would be a claim it cannot check.
+  return steps.find((s) => s >= ideal) ?? MAX_BUCKET_SECONDS;
+}
+
+/**
+ * The same query, counted per time bucket instead of listed.
+ *
+ * Deliberately derived from the query the table ran rather than assembled separately: a
+ * histogram that filtered differently from the rows beneath it would be a chart of
+ * something else, and nobody would notice until they counted the bars.
+ */
+export function toHistogram(query: Query, seconds: number): Query {
+  const bucket: Field = { field: "time_bucket", seconds };
+  return {
+    ...query,
+    aggregations: [{ func: "count", alias: "n" }],
+    group_by: [bucket],
+    order_by: [{ key: { by: "field", field: bucket } }],
+    // One row per bucket. The server caps this anyway; asking for the window's worth of
+    // buckets and no more is what makes the cap irrelevant.
+    limit: 1000,
+    offset: 0,
+  };
+}
+
+/**
+ * The same query, counted per distinct value of one field.
+ *
+ * What the field sidebar shows. `limit` is small because the sidebar shows a handful and
+ * a field with ten thousand distinct values — a resource id, say — would otherwise pull
+ * all of them across the wire to display eight.
+ */
+export function toFieldCounts(query: Query, field: Field, limit = 8): Query {
+  return {
+    ...query,
+    aggregations: [{ func: "count", alias: "n" }],
+    group_by: [field],
+    order_by: [{ key: { by: "alias", alias: "n" }, desc: true }],
+    limit,
+    offset: 0,
+  };
 }
 
 export interface Column {
