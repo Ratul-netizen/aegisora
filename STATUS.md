@@ -68,6 +68,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | identity cache hit rate > 99% | ✅ measured, once the resolver stopped asking the wrong question |
 | **Resource groups** | ✅ schema, selector, store, five routes — 11 tests against real `PostgreSQL` |
 | **Operator tags** | ✅ a column and a type of their own, apart from `attributes` |
+| **Maintenance windows** | ✅ model, occurrence arithmetic, five routes — 13 tests against real `PostgreSQL`, 11 on the DST cases |
 | M3 · syslog over TLS | ✅ **decided: terminated at a proxy**, not in-process |
 | M3 · the syslog daemon, OTLP, Log Explorer | ⬜ |
 | M4 | ⬜ |
@@ -651,6 +652,70 @@ M1 is where they start.
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update
+
+**Maintenance windows, and the thing the original sketch got wrong.** The review listed
+`timezone` as one field among seven. It is the whole problem.
+
+A one-off window really is two instants. A *recurring* one is not: **"every Saturday
+02:00–04:00" means 02:00 where the equipment is.** An installation that stored a UTC
+offset would move its maintenance window by an hour twice a year in every country that
+observes daylight saving — and would then either fire alerts during the work or stay
+silent for an hour afterwards. Both are found the hard way, at 3am, by the person the
+window existed to protect.
+
+So a window stores an IANA zone name and resolves each occurrence in it, via `chrono-tz`
+(MIT OR Apache-2.0; the embedded IANA database is public domain). That makes two cases
+real, and both are decisions rather than accidents:
+
+* **Spring forward** — 02:30 does not happen on the transition date, so a window at 02:00
+  has no occurrence that day. Inventing one would suppress alerts at a time nobody chose.
+* **Fall back** — 02:30 happens twice. The **earlier** one wins and the duration runs from
+  there, so a one-hour window across the transition covers two wall-clock hours.
+  Deliberately the safer direction: suppressing less than the operator asked for means an
+  alert storm during scheduled work, which is the failure this feature exists to prevent.
+
+`ResourceStatus::Maintenance` has existed since migration 0002 and nothing has ever
+written it. This is what will.
+
+**The occurrence arithmetic is in `uops-core`, pure, and the SQL knows none of it.**
+`live_windows` returns every window that has not expired and the caller asks each one
+`is_open_at`. Teaching PostgreSQL the DST rules would mean writing them twice in two
+languages, and the two copies would disagree eventually, silently, in whichever direction
+nobody tested. It is also cheap — windows are written by hand, a tenant has them in the
+tens, and an alert engine can hold the set and refresh it on an interval.
+
+**A window targets exactly one of a resource, a group or a site**, as three nullable
+columns with a `CHECK` rather than a polymorphic `(kind, id)` pair — so each keeps its
+composite foreign key and a window in one tenant cannot reach another's site even by
+guessing the uuid. The group target is why this waited for groups: *"everything I put in
+Dhaka Core Routers"* is what an operator means, and membership is resolved when the
+question is asked, so a device added on Friday is covered by Saturday's window without
+anybody editing the window.
+
+**Three refusals that are about operations rather than data integrity.** A window longer
+than a week is rejected — not a technical limit, but a mis-typed end date whose
+consequence is an estate that stops alerting with nobody noticing, which is the worst
+failure this feature can have. A window with no reason is rejected, because one somebody
+finds open six months later with no explanation is one nobody dares delete. And a
+`weekly` window with no weekday is unstorable, because it would be a window an operator
+created, can see in the UI, and which silently never opens.
+
+**Where it fails open.** An unparseable stored timezone means *no window* rather than
+*window open*. This is the one place where failing open and failing closed point in
+opposite directions: a `chrono-tz` upgrade that stopped recognising a zone must mean
+alerts keep working, never that an estate goes quiet and nobody notices.
+
+**Overlapping windows union their suppressions.** If either says to suppress alerts,
+alerts are suppressed. Any other rule would let adding a second window make the estate
+noisier than one, which is the opposite of what somebody scheduling maintenance is asking
+for.
+
+**Not done, and named:** no UI, and no alert-engine integration — there is no alert engine
+yet. `maintenance_for(tenant, resource, at)` is the interface it will call, and it stops
+there deliberately: building the suppression before the thing being suppressed exists
+would be guessing at a contract. A window targeting a device also does **not** expand to
+its interfaces, which is asserted rather than left to be discovered — silencing a switch
+must not silently silence forty-eight ports somebody may be watching individually.
 
 **Resource groups and operator tags.** The two items the architecture review classified
 FOUNDATIONAL, built before M4 starts rather than after it.

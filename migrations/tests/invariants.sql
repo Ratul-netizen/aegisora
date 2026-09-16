@@ -398,8 +398,15 @@ INSERT INTO resource_group (id, tenant_id, name) VALUES
     ('00000000-0000-0000-0000-0000000000d1',
      '00000000-0000-0000-0000-00000000000b', 'Core Routers');
 
+-- Scoped to this fixture's two tenants, not counted globally. An earlier version of
+-- this assertion counted every `Core Routers` in the database and passed only while the
+-- integration suites had not run — which is the same shared-database contamination that
+-- has bitten this project twice already.
 SELECT pg_temp.check(
-    (SELECT count(*) FROM resource_group WHERE name = 'Core Routers') = 2,
+    (SELECT count(*) FROM resource_group
+      WHERE name = 'Core Routers'
+        AND tenant_id IN ('00000000-0000-0000-0000-00000000000a',
+                          '00000000-0000-0000-0000-00000000000b')) = 2,
     'two tenants may each have a group of the same name');
 
 INSERT INTO resource_group_member (tenant_id, group_id, resource_id) VALUES
@@ -479,6 +486,140 @@ SELECT pg_temp.check(
     (SELECT tags <> attributes FROM resource
       WHERE id = '00000000-0000-0000-0000-0000000000a3'),
     'tags and attributes must be distinct columns');
+
+-- ---------------------------------------------------------------------------
+-- Maintenance windows (migration 0012)
+-- ---------------------------------------------------------------------------
+
+-- Exactly one target. Two would be ambiguous and zero would be a window that silences
+-- nothing while looking like it silences something, which is worse.
+DO $$
+BEGIN
+    INSERT INTO maintenance_window
+        (tenant_id, reason, starts_at, duration_minutes, timezone, recurrence)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'nothing at all',
+            now(), 60, 'UTC', 'once');
+    RAISE EXCEPTION 'FAILED: a window with no target must be refused';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+DO $$
+BEGIN
+    INSERT INTO maintenance_window
+        (tenant_id, reason, target_resource_id, target_site_id,
+         starts_at, duration_minutes, timezone, recurrence)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'two targets',
+            '00000000-0000-0000-0000-0000000000a3',
+            '00000000-0000-0000-0000-0000000000a1',
+            now(), 60, 'UTC', 'once');
+    RAISE EXCEPTION 'FAILED: a window with two targets must be refused';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+-- A window must not reach across tenants. The composite foreign key is what refuses it,
+-- not a predicate anybody has to remember.
+DO $$
+BEGIN
+    INSERT INTO maintenance_window
+        (tenant_id, reason, target_resource_id,
+         starts_at, duration_minutes, timezone, recurrence)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'someone else''s device',
+            '00000000-0000-0000-0000-0000000000b2',
+            now(), 60, 'UTC', 'once');
+    RAISE EXCEPTION 'FAILED: a window must not target another tenant''s resource';
+EXCEPTION WHEN foreign_key_violation THEN
+    NULL;
+END $$;
+
+-- A recurrence and its parameter have to agree. Without this a 'weekly' window with a
+-- NULL weekday is storable and silently never opens: a window an operator created, can
+-- see in the UI, and which does nothing.
+DO $$
+BEGIN
+    INSERT INTO maintenance_window
+        (tenant_id, reason, target_site_id,
+         starts_at, duration_minutes, timezone, recurrence)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'weekly with no weekday',
+            '00000000-0000-0000-0000-0000000000a1',
+            now(), 60, 'UTC', 'weekly');
+    RAISE EXCEPTION 'FAILED: a weekly window needs a weekday';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+DO $$
+BEGIN
+    INSERT INTO maintenance_window
+        (tenant_id, reason, target_site_id,
+         starts_at, duration_minutes, timezone, recurrence, recur_weekday)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'once with a weekday',
+            '00000000-0000-0000-0000-0000000000a1',
+            now(), 60, 'UTC', 'once', 5);
+    RAISE EXCEPTION 'FAILED: a one-off window must not carry a weekday';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+-- A month of silence is almost always a mis-typed end date, and the consequence is an
+-- estate that stops alerting with nobody noticing.
+DO $$
+BEGIN
+    INSERT INTO maintenance_window
+        (tenant_id, reason, target_site_id,
+         starts_at, duration_minutes, timezone, recurrence)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'a whole month',
+            '00000000-0000-0000-0000-0000000000a1',
+            now(), 30 * 24 * 60, 'UTC', 'once');
+    RAISE EXCEPTION 'FAILED: a window longer than a week must be refused';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+-- A window with no reason is one nobody dares delete six months later, so it goes on
+-- silencing alerts forever.
+DO $$
+BEGIN
+    INSERT INTO maintenance_window
+        (tenant_id, reason, target_site_id,
+         starts_at, duration_minutes, timezone, recurrence)
+    VALUES ('00000000-0000-0000-0000-00000000000a', '   ',
+            '00000000-0000-0000-0000-0000000000a1',
+            now(), 60, 'UTC', 'once');
+    RAISE EXCEPTION 'FAILED: a window needs a reason';
+EXCEPTION WHEN check_violation THEN
+    NULL;
+END $$;
+
+-- The valid shapes, one per target kind, so the constraints above are proven to refuse
+-- rather than to refuse everything.
+INSERT INTO maintenance_window
+    (id, tenant_id, reason, target_site_id,
+     starts_at, duration_minutes, timezone, recurrence, recur_weekday)
+VALUES ('00000000-0000-0000-0000-0000000000e1',
+        '00000000-0000-0000-0000-00000000000a', 'Saturday change window',
+        '00000000-0000-0000-0000-0000000000a1',
+        now(), 120, 'Asia/Dhaka', 'weekly', 5);
+
+INSERT INTO maintenance_window
+    (tenant_id, reason, target_group_id, starts_at, duration_minutes, timezone, recurrence)
+VALUES ('00000000-0000-0000-0000-00000000000a', 'core router firmware',
+        '00000000-0000-0000-0000-0000000000c1', now(), 60, 'UTC', 'once');
+
+SELECT pg_temp.check(
+    (SELECT count(*) FROM maintenance_window
+      WHERE tenant_id = '00000000-0000-0000-0000-00000000000a') = 2,
+    'the valid shapes must be accepted');
+
+-- Deleting the thing a window covers deletes the window. A window pointing at a site
+-- that no longer exists cannot be evaluated and cannot be found in any UI, so it would
+-- sit in the table forever.
+DELETE FROM site WHERE id = '00000000-0000-0000-0000-0000000000a1';
+SELECT pg_temp.check(
+    NOT EXISTS (SELECT 1 FROM maintenance_window
+                 WHERE id = '00000000-0000-0000-0000-0000000000e1'),
+    'a window must not outlive its target');
 
 -- Every foreign key has an index on its referencing side.
 --

@@ -10,6 +10,10 @@ publish.workspace = true
 authors.workspace = true
 
 [dependencies]
+# A maintenance window's id is a plain uuid rather than a typed newtype: nothing but a
+# window ever refers to one, so the class of mistake the newtypes exist to prevent --
+# passing a TenantId where a ResourceId belongs -- has no instance here.
+uuid.workspace = true
 uops-core.workspace = true
 uops-identity.workspace = true
 uops-query.workspace = true

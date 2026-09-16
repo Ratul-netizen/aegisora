@@ -11,6 +11,7 @@ pub mod auth;
 pub mod credentials;
 pub mod groups;
 pub mod health;
+pub mod maintenance;
 pub mod query;
 pub mod resources;
 pub mod sites;
@@ -63,6 +64,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/groups/{id}/members",
             post(groups::add_members).delete(groups::remove_members),
+        )
+        .route(
+            "/api/v1/resources/{id}/maintenance",
+            get(maintenance::for_resource),
+        )
+        .route(
+            "/api/v1/maintenance",
+            get(maintenance::list).post(maintenance::schedule),
+        )
+        .route(
+            "/api/v1/maintenance/{id}",
+            get(maintenance::get).delete(maintenance::cancel),
         )
         .route("/api/v1/sites", get(sites::list))
         .route("/api/v1/sites/{id}/location", put(sites::place))

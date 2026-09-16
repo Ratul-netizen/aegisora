@@ -23,6 +23,7 @@ pub mod envelope;
 pub mod error;
 pub mod identity;
 pub mod ids;
+pub mod maintenance;
 pub mod resource;
 pub mod scope;
 pub mod secret;
@@ -43,6 +44,7 @@ pub use ids::{
     ActorId, CredentialRef, DecisionId, OrgId, ResourceGroupId, ResourceId, SessionId, SiteId,
     TenantId,
 };
+pub use maintenance::{Recurrence, Schedule, Suppression, Target, WindowError};
 pub use resource::{
     Relationship, RelationshipKind, Resource, ResourceGroup, ResourceKind, ResourceStatus,
 };

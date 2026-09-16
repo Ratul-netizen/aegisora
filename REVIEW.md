@@ -119,7 +119,13 @@ notification routing, automation, and RBAC where appropriate.
 
 ### M1–M4 — design the model now, implement inside the v0.1 window
 
-#### 2.3 Maintenance windows
+#### 2.3 Maintenance windows ✅
+
+**Implemented.** Migration 0012, `uops_core::maintenance` (the occurrence arithmetic,
+pure), `uops_store_pg::maintenance` (the row, the CRUD, and `maintenance_for` — the
+question the alert engine will ask), and five routes under `/api/v1/maintenance`. The
+design is below, unchanged; what the implementation added to it is the timezone handling,
+which the original sketch listed as a field and which turns out to be the whole problem.
 
 `resource_status` already has a `maintenance` value and nothing populates it. That is the
 gap: when somebody reboots 500 switches on a Saturday night, the alert engine has no way
@@ -282,8 +288,7 @@ Ranked by what they cost if deferred:
 
 1. ~~**Resource groups**~~ — §2.1. **Done.**
 2. ~~**Operator tags distinct from system attributes**~~ — §2.2. **Done.**
-3. **The maintenance-window model** — §2.3. The alert engine has to consult it, so it must
-   exist before the alert engine does.
+3. ~~**The maintenance-window model**~~ — §2.3. **Done.**
 4. **The notification policy shape** — §2.5. Retrofitting routing onto a direct
    alert→email call is a rewrite.
 5. **Event/state/alert/incident semantics, written down** — §2.4. The correlation engine

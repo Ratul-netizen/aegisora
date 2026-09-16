@@ -23,6 +23,15 @@ publish = false
 # --- core ---
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+# --- timezones (M4 maintenance windows) -----------------------------------------
+# A recurring maintenance window is "02:00 where the equipment is". Storing a UTC
+# offset instead would move it by an hour twice a year in every country that observes
+# daylight saving -- either alerting during the work or staying silent for an hour
+# afterwards. Both are found the hard way.
+#
+# MIT OR Apache-2.0, and the IANA database it embeds is public domain. default-features
+# off drops the `filter-by-regex` build-script machinery; the zones are the point.
+chrono-tz = { version = "0.10", default-features = false, features = ["std", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # --- SNMP (M2) ------------------------------------------------------------------

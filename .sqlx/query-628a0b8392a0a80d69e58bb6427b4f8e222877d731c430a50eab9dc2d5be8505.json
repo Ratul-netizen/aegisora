@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                tenant_id              AS \"tenant_id: uops_core::TenantId\",\n                reason,\n                target_resource_id     AS \"target_resource_id: ResourceId\",\n                target_group_id        AS \"target_group_id: ResourceGroupId\",\n                target_site_id         AS \"target_site_id: SiteId\",\n                starts_at, duration_minutes, timezone,\n                recurrence, recur_weekday, recur_day, until,\n                suppress_alerts, suppress_notifications,\n                created_by             AS \"created_by: ActorId\",\n                created_at, updated_at\n              FROM maintenance_window\n             WHERE tenant_id = $1 AND id = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: uops_core::TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "target_resource_id: ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "target_group_id: ResourceGroupId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "target_site_id: SiteId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "starts_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "duration_minutes",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "timezone",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "recurrence",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "recur_weekday",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 11,
+        "name": "recur_day",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 12,
+        "name": "until",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "suppress_alerts",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 14,
+        "name": "suppress_notifications",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 15,
+        "name": "created_by: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 16,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "628a0b8392a0a80d69e58bb6427b4f8e222877d731c430a50eab9dc2d5be8505"
+}

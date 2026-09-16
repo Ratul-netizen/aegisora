@@ -250,6 +250,48 @@ const CASES: &[RouteCase] = &[
         body: Some(r#"{"resources":[]}"#),
     },
     RouteCase {
+        // What is being suppressed for one resource. Another tenant's device must be a
+        // 404 here, not a `null` — a null would confirm the id is real.
+        path: "/api/v1/resources/{id}/maintenance",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/maintenance",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        // Scheduling against another tenant's site. The composite foreign key refuses
+        // the write; what this asserts is that the refusal is not distinguishable from
+        // the site not existing.
+        path: "/api/v1/maintenance",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"reason":"intruder","target":"site","id":"00000000-0000-0000-0000-000000000001","starts_at":"2026-09-19T16:00:00Z","duration_minutes":60,"timezone":"UTC","recurrence":{"kind":"once"}}"#,
+        ),
+    },
+    RouteCase {
+        path: "/api/v1/maintenance/{id}",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/maintenance/{id}",
+        probe: None,
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
         path: "/api/v1/sites",
         probe: None,
         method: "GET",
