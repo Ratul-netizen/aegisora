@@ -618,3 +618,149 @@ async fn a_row_with_no_name_produces_telemetry_but_not_a_resource() {
         "both interfaces' counters are real measurements"
     );
 }
+
+#[tokio::test]
+async fn an_identity_job_reads_what_the_device_says_it_is() {
+    // The facts a profile's `identity` block names, in one request. `generic-snmp` points
+    // at ENTITY-MIB's chassis row plus sysDescr.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+
+    let mut agent = Agent::empty();
+    agent.set(
+        oid("1.3.6.1.2.1.47.1.1.1.1.12.1"),
+        Value::Bytes(b"Cisco Systems, Inc".to_vec()),
+    );
+    agent.set(
+        oid("1.3.6.1.2.1.47.1.1.1.1.13.1"),
+        Value::Bytes(b"WS-C2960X-48FPD-L".to_vec()),
+    );
+    agent.set(
+        oid("1.3.6.1.2.1.47.1.1.1.1.11.1"),
+        Value::Bytes(b"FOC1932X0AB".to_vec()),
+    );
+    agent.set(
+        oid("1.3.6.1.2.1.47.1.1.1.1.10.1"),
+        Value::Bytes(b"15.2(7)E3".to_vec()),
+    );
+    agent.set(
+        oid("1.3.6.1.2.1.1.1.0"),
+        Value::Bytes(b"Cisco IOS Software, C2960X Software".to_vec()),
+    );
+
+    let mut fleet = Fleet::new();
+    fleet.insert(ADDRESS.parse::<SocketAddr>().unwrap(), agent);
+    let transport: Arc<dyn Transport> = Arc::new(fleet);
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let task = task(&device, &profile, |w| matches!(w, Work::Identity { .. }));
+    let polled = poll::run(&task, &ctx).await.expect("identity");
+
+    assert_eq!(polled.rows, 0, "identity writes no metric rows");
+    let facts: Vec<(&str, &str)> = polled
+        .identity
+        .iter()
+        .map(|(fact, value)| (fact.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(
+        facts,
+        vec![
+            ("vendor", "Cisco Systems, Inc"),
+            ("model", "WS-C2960X-48FPD-L"),
+            ("serial", "FOC1932X0AB"),
+            ("os", "Cisco IOS Software, C2960X Software"),
+            ("os_version", "15.2(7)E3"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_device_that_answers_only_some_facts_is_not_misattributed() {
+    // The failure this is here to stop. A missing answer shortens the response, so a
+    // caller matching by *position* would record the model number as the serial — which
+    // is not an error anywhere, just a wrong inventory that looks right.
+    //
+    // Only sysDescr is answered, which is the common case: net-snmp, the Windows SNMP
+    // service and most non-enterprise equipment implement no ENTITY-MIB at all.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+
+    let mut agent = Agent::empty();
+    agent.set(
+        oid("1.3.6.1.2.1.1.1.0"),
+        Value::Bytes(b"Linux rtr-01 6.1.0-18-amd64".to_vec()),
+    );
+    let mut fleet = Fleet::new();
+    fleet.insert(ADDRESS.parse::<SocketAddr>().unwrap(), agent);
+    let transport: Arc<dyn Transport> = Arc::new(fleet);
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let task = task(&device, &profile, |w| matches!(w, Work::Identity { .. }));
+    let polled = poll::run(&task, &ctx).await.expect("identity");
+
+    assert_eq!(
+        polled
+            .identity
+            .iter()
+            .map(|(f, v)| (f.as_str(), v.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("os", "Linux rtr-01 6.1.0-18-amd64")],
+        "only the fact the device answered, attributed to the right field"
+    );
+}
+
+#[tokio::test]
+async fn a_fact_that_is_not_text_is_skipped_rather_than_recorded() {
+    // These are all DisplayStrings. An agent answering something else is answering a
+    // different question, and putting a number in a column a person reads as a model
+    // name would look like data.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+
+    let mut agent = Agent::empty();
+    agent.set(oid("1.3.6.1.2.1.47.1.1.1.1.13.1"), Value::Unsigned(2960));
+    agent.set(
+        oid("1.3.6.1.2.1.1.1.0"),
+        Value::Bytes(b"a real string".to_vec()),
+    );
+    let mut fleet = Fleet::new();
+    fleet.insert(ADDRESS.parse::<SocketAddr>().unwrap(), agent);
+    let transport: Arc<dyn Transport> = Arc::new(fleet);
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let task = task(&device, &profile, |w| matches!(w, Work::Identity { .. }));
+    let polled = poll::run(&task, &ctx).await.expect("identity");
+
+    assert!(
+        polled.identity.iter().all(|(f, _)| f.as_str() != "model"),
+        "a Gauge32 was recorded as a model name: {:?}",
+        polled.identity
+    );
+    assert_eq!(polled.identity.len(), 1);
+}
+
+#[tokio::test]
+async fn an_empty_answer_is_not_a_fact() {
+    // Plenty of agents answer ENTITY-MIB with an empty string rather than not at all.
+    // Recording it would overwrite a real value with nothing the next time the poll ran.
+    let (profile, device) = (generic(), device());
+    let devices = Devices::new();
+    let recorder = Recorder::default();
+
+    let mut agent = Agent::empty();
+    agent.set(
+        oid("1.3.6.1.2.1.47.1.1.1.1.13.1"),
+        Value::Bytes(b"   ".to_vec()),
+    );
+    let mut fleet = Fleet::new();
+    fleet.insert(ADDRESS.parse::<SocketAddr>().unwrap(), agent);
+    let transport: Arc<dyn Transport> = Arc::new(fleet);
+    let ctx = context(transport, &devices, &recorder, &profile);
+
+    let task = task(&device, &profile, |w| matches!(w, Work::Identity { .. }));
+    let polled = poll::run(&task, &ctx).await.expect("identity");
+    assert!(polled.identity.is_empty(), "{:?}", polled.identity);
+}

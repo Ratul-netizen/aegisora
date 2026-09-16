@@ -131,6 +131,7 @@ uops-secrets = { path = "crates/uops-secrets" }
 uops-identity = { path = "crates/uops-identity" }
 uops-store-pg = { path = "crates/uops-store-pg" }
 uops-profile = { path = "crates/uops-profile" }
+uops-oui = { path = "crates/uops-oui" }
 uops-poll = { path = "crates/uops-poll" }
 uops-snmp = { path = "crates/uops-snmp" }
 uops-api = { path = "crates/uops-api" }

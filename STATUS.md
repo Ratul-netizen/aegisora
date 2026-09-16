@@ -49,6 +49,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | 10 000-resource p95 | ✅ measured through the router, worst 75 ms |
 | `docker compose up` | ✅ one 30 MB image, migrations as their own step, CI-verified |
 | **M2 — all 6 acceptance criteria met** | ✅ |
+| `uops-oui` | ✅ 9 — IEEE MAC assignments, all four registries |
+| device identity | ✅ make, model, serial, OS from a profile's `identity` block |
 | `uops-profile` | ✅ 40 — 5 built-ins, schema, resolution |
 | `uops-poll` | ✅ 56 — wheel, jitter, counters, executor, planner, samples |
 | `uops-snmp` | ✅ 42 — walk, simulator, `snmp2` over UDP, real net-snmp |
@@ -270,6 +272,48 @@ if `.expose()` appears inside a logging macro; a grep that fails if a crypto pri
 used outside `uops-secrets`; `cargo-deny`; a CycloneDX SBOM; and a matrix building **both**
 the standard and FIPS crypto artifacts.
 
+### The OUI table reads all four IEEE registries
+
+A 24-bit prefix is what everybody means by "the OUI", and it is 39 815 of 53 487
+assignments. The other 13 672 are MA-M (28-bit) and MA-S (36-bit) blocks, issued to
+organisations that do not need sixteen million addresses — in practice, most companies
+that are not household names.
+
+The first draft of that module's documentation said a 24-bit-only lookup would return the
+*wrong* vendor, the one holding the parent block. The data disagrees: IEEE reserves the
+parent prefixes above the MA-M and MA-S ranges and does not list them in the MA-L
+registry, so the answer is nothing rather than somebody else. Checked before it was
+written down, and worth recording because the wrong version was the intuitive one.
+
+A locally administered address — every VM, veth, bond and VLAN interface — belongs to
+nobody, and returning a manufacturer for one would be inventing it. A CID is returned
+with a flag saying it is not a uniqueness guarantee, because an inventory wants it and
+identity resolution must not treat it as proof.
+
+### A serial number is what identity resolution was missing
+
+SPEC §M0.2 ranks identifiers by how much a match proves: a serial is tier 1, confidence
+1.00, proof on its own; a management address is 0.80 and a hostname 0.65. Nothing in this
+product produced a tier-1 identifier for an SNMP device, so resolution had been running
+entirely on the weak tiers — two collectors seeing one switch resolved to one resource
+only if they agreed about its address or its name, and a re-addressed device looked new.
+
+The profile's `identity` block is what fixes that, and it is a block rather than code
+because every vendor puts its model number at a different OID and a customer discovers
+that before we do.
+
+### The simulator modelled a GET as a GETNEXT
+
+Found by a profile reading `entPhysicalSoftwareRev`, the first column of ENTITY-MIB's
+chassis row. Every other fact came back and that one never did — against the simulator.
+The real transport returned all five.
+
+`Transport::get_scalars`' default implementation is a `GETNEXT` per OID, which is what a
+transport with no batching can do, and it cannot return the lowest OID of a contiguous
+block because nothing precedes it to ask after. `sim::Fleet` now implements a `GET` as a
+`GET`. A simulator that models a request as a different request hides exactly the bugs it
+exists to catch.
+
 ### Six tests that passed on Windows and failed on Linux
 
 `KekRing::from_file` refuses a group- or world-readable key on Unix — rightly, since a
@@ -458,6 +502,7 @@ M1 is where they start.
 | **Row-level security** | M1 API | Tenant isolation currently rests on `TenantScope`, composite foreign keys and sqlx. RLS would be a fourth layer and is worth having, but it needs an app role and a per-transaction `SET LOCAL` — a decision about connection pooling and the request lifecycle, so it belongs with the API |
 | **Credential rollback vs. the primary key** | rotation being undoable | Migration 0005 says "rotation writes a new row rather than overwriting one … a rotation that turns out to be wrong is undone by revoking a row". Neither implementation does that: `LocalVault::put` reuses the credential's id, so both `PgSealedStore` (upsert on id) and `MemorySealedStore` (a map keyed by id) *replace* the previous version. The previous material is gone and revoking leaves nothing to fall back to. Reconciling them is a choice — keep the stable id so `resource.credential_ref` survives a rotation and drop the rollback claim, or key on `(id, version)` and make every reference resolve a version — so it is recorded rather than patched over in one implementation |
 | **The poller is not in `docker compose`** | a stack that polls | The image builds every workspace binary but copies only `uops-server`, `uops-ch-migrate` and `uops-pg-migrate`, and compose has no poller service. So `docker compose up` gives an API and a UI over a database nothing is filling. Adding it needs a KEK in the compose environment, which is a decision about what a development stack may ship with |
+| **The bundled IEEE data's terms** | a commercial release | `crates/uops-oui/data/assignments.tsv` is derived from the four public IEEE registries. They are redistributed widely — Wireshark, nmap and Debian's `ieee-data` all ship them — which is the basis for bundling. It is **not** a licence review: IEEE attaches no SPDX identifier, and `cargo deny` checks crate licences rather than the terms of embedded data, so nothing in CI is looking at this |
 | **CLA reviewed by a lawyer** | accepting outside contributions | Draft is in `CLA.md`, modelled on Apache ICLA. **The only irreversible item** — an unsigned contribution permanently forecloses dual-licensing |
 | Product name | crate publishing only | `uops` codename unblocks everything else. Repo is still named `aegisora`, which was rejected (`aegisora-ai` is an active org in an adjacent market) |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |

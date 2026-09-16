@@ -38,7 +38,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use uops_core::{CredentialRef, ResourceId, SiteId, TenantId};
-use uops_profile::{Oid, Profile, Scope};
+use uops_profile::{Fact, Oid, Profile, Scope};
 
 /// A device the poller can reach.
 ///
@@ -69,6 +69,9 @@ pub enum Work {
     InterfaceColumns { metrics: Vec<MetricRequest> },
     /// The discovery walk that interface-scoped work depends on.
     Discovery { table: Oid },
+    /// Read what the device *is* — make, model, serial, software — rather than how it is
+    /// doing. See `uops_profile::Identity`.
+    Identity { facts: Vec<(Fact, Oid)> },
     /// An availability check.
     Availability { index: usize },
 }
@@ -118,6 +121,7 @@ impl Job {
             Work::Scalars { .. } => "scalars".to_owned(),
             Work::InterfaceColumns { .. } => "interfaces".to_owned(),
             Work::Discovery { .. } => "discovery".to_owned(),
+            Work::Identity { .. } => "identity".to_owned(),
             Work::Availability { index } => format!("availability:{index}"),
         }
     }
@@ -183,6 +187,19 @@ pub fn plan(device: &Device, profile: &Profile) -> Vec<Job> {
         !has_interface_work || !profile.discovery.is_empty(),
         "validate() should have refused interface metrics with no discovery"
     );
+    // On the discovery interval, not a metric one. A device's model number changes when
+    // somebody swaps the hardware, which is the same cadence `sysObjectID` is cached at
+    // and about as often as an interface is added.
+    if let Some(identity) = profile.identity.as_ref().filter(|i| !i.is_empty()) {
+        jobs.push(Job {
+            device: device.resource,
+            interval: DISCOVERY_INTERVAL,
+            work: Work::Identity {
+                facts: identity.facts(),
+            },
+        });
+    }
+
     if let Some(rule) = profile.discovery.first() {
         jobs.push(Job {
             device: device.resource,

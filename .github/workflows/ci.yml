@@ -435,6 +435,27 @@ jobs:
           cp "$RUNNER_TEMP/identity.bak" "$F"
           echo "ok: a review that outlives its own answer fails the suite"
 
+      # A vendor read off a MAC is an inference; a vendor the device reported is a
+      # statement, and so is one an operator typed. The `vendor IS NULL` predicate is
+      # what keeps the guess from overwriting either, in the statement rather than in a
+      # check somewhere above it.
+      - name: The discovery tests fail when a guessed vendor overwrites a known one
+        run: |
+          F=crates/uops-store-pg/src/discovery.rs
+          cp "$F" "$RUNNER_TEMP/discovery.bak"
+          sed -i 's|WHERE tenant_id = $1 AND id = $2 AND vendor IS NULL|WHERE tenant_id = $1 AND id = $2|' "$F"
+          if git diff --quiet -- "$F"; then
+            echo "::error::the mutation did not apply; this guard is no longer guarding anything"
+            exit 1
+          fi
+          if cargo test -p uops-store-pg --test discovery > /dev/null 2>&1; then
+            cp "$RUNNER_TEMP/discovery.bak" "$F"
+            echo "::error::a vendor inferred from a MAC overwrote what the device said about itself"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/discovery.bak" "$F"
+          echo "ok: an inference overwriting a statement fails the suite"
+
       # The availability check sends a real ICMP echo request. A wrong packet is silent:
       # the kernel sends it, nothing replies, and every device in the fleet reports down
       # for ever. Type 13 is a timestamp request — well-formed, and not what an echo

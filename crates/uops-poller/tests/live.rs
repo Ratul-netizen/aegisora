@@ -23,7 +23,7 @@
 //!
 //! ```bash
 //! docker compose -f deploy/docker-compose.yml --profile test up -d postgres clickhouse snmp-agent
-//! UOPS_SNMP_AGENT=127.0.0.1:16100 //!   CLICKHOUSE_DB=uops CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops //!   cargo test -p uops-poller --test live
+//! UOPS_SNMP_AGENT=127.0.0.1:16100 CLICKHOUSE_DB=uops //!   CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops //!   cargo test -p uops-poller --test live
 //! ```
 //!
 //! `ChConfig::from_env` defaults to the `default` user with no password, which is what a
@@ -752,4 +752,63 @@ async fn states_for(resource: uops_core::ResourceId) -> Vec<(String, String, Str
             )
         })
         .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_agent_says_what_it_is_and_the_inventory_records_it() {
+    // The identity job end to end. net-snmp implements no ENTITY-MIB — which is the
+    // common case, not an awkward one: the Windows SNMP service and most equipment that
+    // is not enterprise hardware are the same — so what comes back is `sysDescr` and
+    // nothing else. That is the fallback working, and it is worth asserting against a
+    // real agent rather than against a simulator that answers whatever it is told to.
+    let address = agent_or_skip!();
+    let scratch = Scratch::new().await;
+    let store = scratch.store.clone();
+    let (tenant, resource) = seed(&store, &address).await;
+    let scope = TenantScope::collector(tenant);
+
+    store
+        .seed_builtin_profiles(&uops_profile::builtin::all().expect("built-ins"))
+        .await
+        .expect("seed profiles");
+
+    let runner = Arc::new(Runner::new(
+        store.clone(),
+        metrics(),
+        Arc::new(Transports::new(vault(&store))),
+        Duration::from_secs(5),
+    ));
+    let mut schedule = Schedule::new();
+    run::reload(&runner, &mut schedule, 10_000)
+        .await
+        .expect("reload");
+
+    let executor = Executor::new(Limits {
+        global: 16,
+        per_device: 4,
+        device_budget: Duration::from_secs(5),
+    });
+    let mut due = Vec::new();
+    // Identity runs on the discovery interval — fifteen minutes — so the wheel has to be
+    // driven past it.
+    for _ in 0..1_000 {
+        run::tick_once(&runner, &executor, &mut schedule, &mut due).await;
+    }
+
+    let device = store.resource(&scope, resource).await.expect("device");
+    let os = device.os.clone().unwrap_or_default();
+    assert!(
+        os.to_lowercase().contains("linux"),
+        "sysDescr should have reached resource.os; got {os:?}"
+    );
+
+    // The vendor is not from ENTITY-MIB, which this agent does not implement. It comes
+    // from the MAC discovery found on the container's own interface — the OUI fallback,
+    // which is the only thing that puts a manufacturer on equipment like this.
+    println!(
+        "identified: vendor {:?}, model {:?}, os {:?}",
+        device.vendor, device.model, device.os
+    );
+
+    scratch.drop_database().await;
 }

@@ -57,6 +57,9 @@ pub struct DiscoveryReport {
     pub seen: usize,
     /// `member_of` edges written or refreshed.
     pub edges: usize,
+    /// Whether the parent's vendor was filled in from an interface's MAC. False when it
+    /// already had one, from the device itself or from an operator.
+    pub vendor_inferred: bool,
     /// Identifiers attached. Fewer than offered means some were already held by another
     /// resource — see `attach_identifiers`, which leaves an identifier with whoever owns
     /// it. Counted rather than asserted, because a device that gives every port the same
@@ -77,6 +80,64 @@ pub const SOURCE: &str = "snmp-iftable";
 /// The same string `uops_poll::sample::interface_columns` labels a sample with, so a row
 /// of telemetry and the resource it belongs to can be joined on it.
 pub const INDEX_KEY: &str = "network.interface.index";
+
+/// The manufacturer of whatever made these interfaces, if it can be told.
+///
+/// # Why an interface's MAC is the device's vendor
+///
+/// The address burned into a switch port was assigned to whoever built the switch. It is
+/// an inference rather than a statement — a device with a third-party line card would
+/// report that card's maker — but it is a good one, and it is the only thing available
+/// for equipment that does not implement `ENTITY-MIB`, which is most of what is not
+/// enterprise hardware.
+///
+/// It is written only where nothing better exists: `record_device_facts` writes what the
+/// device *says*, an operator can type one, and both outrank a guess from an address. The
+/// `vendor IS NULL` predicate is what enforces that, in the statement rather than in a
+/// check somewhere above it.
+///
+/// # What is skipped
+///
+/// Locally administered addresses, which every VM, bond and VLAN interface has, and
+/// which belong to nobody — `uops_oui` refuses them, and on a virtualised host they are
+/// most of the rows. The first interface with a real assignment wins; they are walked in
+/// index order, so it is the lowest-numbered physical port rather than whichever the
+/// agent happened to list first.
+fn vendor_from_macs(children: &[DiscoveredChild]) -> Option<&'static str> {
+    children
+        .iter()
+        .flat_map(|c| c.identifiers.iter())
+        .filter(|i| i.kind == uops_core::IdentifierKind::Mac)
+        .find_map(|i| uops_oui::vendor_of(&i.value))
+}
+
+/// Fill in the parent's vendor from an interface MAC, if it has none.
+///
+/// Returns whether anything was written. The `vendor IS NULL` predicate is the whole of
+/// the rule that an inference never overwrites a statement — in the statement, rather
+/// than in a check somewhere above it that a later caller could skip.
+async fn infer_vendor(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant: uops_core::TenantId,
+    parent: ResourceId,
+    children: &[DiscoveredChild],
+) -> Result<bool> {
+    let Some(vendor) = vendor_from_macs(children) else {
+        return Ok(false);
+    };
+    let affected = sqlx::query(
+        "UPDATE resource SET vendor = $3, updated_at = now()
+          WHERE tenant_id = $1 AND id = $2 AND vendor IS NULL",
+    )
+    .bind(tenant.into_uuid())
+    .bind(parent.into_uuid())
+    .bind(vendor)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| map("resource", parent.to_string(), e))?
+    .rows_affected();
+    Ok(affected > 0)
+}
 
 impl PgStore {
     /// Record what a discovery walk found under `parent`.
@@ -206,6 +267,8 @@ impl PgStore {
                 report.identifiers += usize::try_from(affected).unwrap_or(0);
             }
         }
+
+        report.vendor_inferred = infer_vendor(&mut tx, tenant, parent, children).await?;
 
         tx.commit()
             .await

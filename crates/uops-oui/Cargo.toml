@@ -1,0 +1,17 @@
+[package]
+name = "uops-oui"
+description = "IEEE MAC-assignment lookup: who made the network card. SPEC M5 enrichment."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+# No dependencies, deliberately. The table is embedded and the lookup is a hash map, so
+# a crate that any collector may want costs nothing to link.
+[dependencies]
+
+[lints]
+workspace = true

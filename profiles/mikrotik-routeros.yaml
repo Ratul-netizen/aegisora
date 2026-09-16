@@ -56,3 +56,20 @@ availability:
     interval: 30s
     timeout: 2s
     retries: 3
+
+# What the device *is*, as opposed to how it is doing. See uops_profile::Identity.
+#
+# ENTITY-MIB's entPhysicalTable, at index 1 — the chassis on nearly every implementation
+# that has one. Instance-qualified rather than walked: the poller reads these in the same
+# single GET as everything else it wants, and a walk of entPhysicalTable on a chassis
+# switch returns a row per module, fan and transceiver to find one model number.
+#
+# A device that does not implement ENTITY-MIB answers none of them and simply has no
+# model recorded. That is most non-enterprise equipment, which is why `os` falls back to
+# sysDescr — every agent answers that, because it is what "supports SNMP" means.
+identity:
+  vendor:     "1.3.6.1.2.1.47.1.1.1.1.12.1"   # entPhysicalMfgName
+  model:      "1.3.6.1.2.1.47.1.1.1.1.13.1"   # entPhysicalModelName
+  serial:     "1.3.6.1.2.1.47.1.1.1.1.11.1"   # entPhysicalSerialNum
+  os_version: "1.3.6.1.2.1.47.1.1.1.1.10.1"   # entPhysicalSoftwareRev
+  os:         "1.3.6.1.2.1.1.1.0"             # sysDescr

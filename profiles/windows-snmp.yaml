@@ -63,3 +63,12 @@ availability:
     interval: 30s
     timeout: 2s
     retries: 3
+
+# What the device *is*. See uops_profile::Identity.
+#
+# No ENTITY-MIB here: net-snmp and the Windows SNMP service do not implement
+# entPhysicalTable, so asking for it would be four OIDs per device per discovery that
+# never answer. sysDescr is what these agents do have, and on Linux it is the kernel
+# string — which is the operating system, exactly where it belongs.
+identity:
+  os: "1.3.6.1.2.1.1.1.0"                     # sysDescr

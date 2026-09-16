@@ -184,6 +184,60 @@ impl Fleet {
 
 #[async_trait::async_trait]
 impl Transport for Fleet {
+    /// A `GET`, modelled as one.
+    ///
+    /// The trait's default implementation is a `GETNEXT` per OID, which is what a
+    /// transport with no batching can do — and it is *not* what a real agent does with a
+    /// `GET`. The difference is not academic: `GETNEXT` cannot return the lowest OID of a
+    /// contiguous block, because nothing precedes it to ask after. A profile reading
+    /// `entPhysicalSoftwareRev` — the first column of the chassis row — got every other
+    /// fact and never that one, against a simulator, while the real transport returned
+    /// all five.
+    ///
+    /// A simulator that models a `GET` as a `GETNEXT` hides exactly the bugs it exists to
+    /// catch, so this answers the way an agent does: each requested object, at its
+    /// instance, and silence for one it does not have.
+    async fn get_scalars(
+        &self,
+        target: &Target,
+        oids: &[Oid],
+    ) -> Result<Vec<VarBind>, TransportError> {
+        let Some(agent) = self.agents.get(&target.address) else {
+            return Err(TransportError::Timeout);
+        };
+        if !agent.latency.is_zero() {
+            tokio::time::sleep(agent.latency).await;
+        }
+        // The misbehaviours that are about the agent rather than about the request.
+        match agent.behaviour {
+            Behaviour::AuthFails => return Err(TransportError::AuthFailed),
+            Behaviour::Silent => return Err(TransportError::Timeout),
+            // `tooBig` is about a response that will not fit. A GET of a handful of
+            // scalars is the one request that always fits, so an agent refusing sizes
+            // still answers this.
+            _ => {}
+        }
+
+        Ok(oids
+            .iter()
+            .filter_map(|oid| {
+                // The instance first, then the object as written — the same pair
+                // `uops_poll::sample::scalars` matches on, and for the same reason: a
+                // profile may spell a scalar either way.
+                let instance = crate::transport::instance(oid);
+                agent
+                    .mib
+                    .get(&instance)
+                    .map(|v| (instance.clone(), v))
+                    .or_else(|| agent.mib.get(oid).map(|v| (oid.clone(), v)))
+                    .map(|(oid, value)| VarBind {
+                        oid,
+                        value: value.clone(),
+                    })
+            })
+            .collect())
+    }
+
     async fn get_bulk(
         &self,
         target: &Target,

@@ -198,6 +198,10 @@ impl Runner {
             self.record_reachability(&task, outcome, reason).await;
         }
 
+        if !polled.identity.is_empty() {
+            self.record_facts(&task, &polled.identity).await;
+        }
+
         Ok(polled.rows)
     }
 
@@ -248,6 +252,51 @@ impl Runner {
                 self.report(
                     task.device.resource,
                     &format!("its interfaces could not be recorded: {e}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    /// Record what a device says it is.
+    ///
+    /// Best effort, and reported rather than fatal: the poll itself succeeded, and a
+    /// device whose model number could not be written is still a device worth polling.
+    async fn record_facts(&self, task: &Task, found: &[(uops_profile::Fact, String)]) {
+        let mut facts = uops_store_pg::DeviceFacts::default();
+        for (fact, value) in found {
+            let slot = match fact {
+                uops_profile::Fact::Vendor => &mut facts.vendor,
+                uops_profile::Fact::Model => &mut facts.model,
+                uops_profile::Fact::Serial => &mut facts.serial,
+                uops_profile::Fact::Os => &mut facts.os,
+                uops_profile::Fact::OsVersion => &mut facts.os_version,
+            };
+            *slot = Some(value.clone());
+        }
+
+        let scope = TenantScope::collector(task.device.tenant);
+        match self
+            .store
+            .record_device_facts(&scope, task.device.resource, &facts)
+            .await
+        {
+            Ok(report) if report.serial_recorded => {
+                // Worth a line the first time. A serial is a tier-1 identifier — proof of
+                // identity on its own — and a fleet where they start appearing is a fleet
+                // whose identity resolution has just become reliable.
+                println!(
+                    "uops-poller: {} identified: {} {} (serial recorded)",
+                    task.device.resource,
+                    facts.vendor.as_deref().unwrap_or("unknown vendor"),
+                    facts.model.as_deref().unwrap_or("unknown model"),
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                self.report(
+                    task.device.resource,
+                    &format!("what it says it is could not be recorded: {e}"),
                 )
                 .await;
             }

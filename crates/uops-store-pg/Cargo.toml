@@ -14,6 +14,9 @@ uops-core = { workspace = true, features = ["sqlx"] }
 uops-identity.workspace = true
 uops-secrets.workspace = true
 uops-profile.workspace = true
+# Filling a device's vendor from an interface MAC when the device does not say — see
+# src/discovery.rs. No dependencies of its own; the table is embedded.
+uops-oui.workspace = true
 uops-query.workspace = true
 async-trait.workspace = true
 chrono.workspace = true

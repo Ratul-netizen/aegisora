@@ -349,7 +349,7 @@ async fn a_thousand_agents_are_polled_within_the_budget() {
     assert_eq!(m.failed, 0, "a healthy fleet must not fail a poll");
     assert!(
         m.ok > 3_000,
-        "three jobs per device over two 60-second cycles is about 6 000 polls;          {} is too few for this to have measured a fleet",
+        "four jobs per device over two 60-second cycles is several thousand polls;          {} is too few for this to have measured a fleet",
         m.ok
     );
     assert!(
@@ -453,7 +453,7 @@ async fn the_fixture_polls_a_simulated_device() {
     assert_eq!(added, 1);
     assert_eq!(
         schedule.live_jobs(),
-        4,
-        "generic-snmp plans scalars, interface columns, discovery and availability"
+        5,
+        "generic-snmp plans scalars, interface columns, discovery, identity and availability"
     );
 }

@@ -54,9 +54,9 @@ fn loading_a_fleet_schedules_every_device() {
     assert_eq!((added, removed), (50, 0));
     assert_eq!(schedule.devices(), 50);
 
-    // generic-snmp plans four jobs per device: scalars, interface columns, discovery,
-    // availability.
-    assert_eq!(schedule.live_jobs(), 200);
+    // generic-snmp plans five jobs per device: scalars, interface columns, discovery,
+    // identity, availability.
+    assert_eq!(schedule.live_jobs(), 250);
 }
 
 #[test]
@@ -82,8 +82,8 @@ fn a_reload_leaves_unchanged_devices_where_they_are() {
             schedule.due(&mut due);
             // Only the jobs belonging to the original twenty, which keep their keys
             // because keys are handed out in reload order and the new device is
-            // appended.
-            fired.extend(due.iter().filter(|k| **k < 80).map(|k| (t, *k)));
+            // appended. Twenty devices at five jobs each.
+            fired.extend(due.iter().filter(|k| **k < 100).map(|k| (t, *k)));
         }
         fired
     };
@@ -108,14 +108,14 @@ fn a_removed_device_stops_being_polled() {
         .map(|n| (device(n), profile("generic-snmp")))
         .collect();
     schedule.reload(&fleet);
-    assert_eq!(schedule.live_jobs(), 20);
+    assert_eq!(schedule.live_jobs(), 25);
 
     let kept: Vec<_> = fleet[..4].to_vec();
     let (added, removed) = schedule.reload(&kept);
     assert_eq!((added, removed), (0, 1));
     assert_eq!(
         schedule.live_jobs(),
-        16,
+        20,
         "the gone device's jobs are retired"
     );
 

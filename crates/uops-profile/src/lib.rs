@@ -36,7 +36,7 @@ pub mod resolve;
 pub use interval::{Interval, Timeout};
 pub use oid::{Oid, OidError};
 pub use profile::{
-    Availability, CheckKind, Creates, Discovery, DiscoveryKind, IdentifierSource, Match, Metric,
-    MetricKind, Profile, ProfileError, Relationship, Scope,
+    Availability, CheckKind, Creates, Discovery, DiscoveryKind, Fact, IdentifierSource, Identity,
+    Match, Metric, MetricKind, Profile, ProfileError, Relationship, Scope,
 };
 pub use resolve::{Reason, Resolved};

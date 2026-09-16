@@ -47,6 +47,7 @@ pub mod catalog;
 pub mod discovery;
 mod enforced;
 pub mod error;
+pub mod facts;
 pub mod identity;
 pub mod page;
 pub mod pollable;
@@ -63,6 +64,7 @@ pub use auth::{
 pub use bootstrap::{FirstRun, FirstRunRequest};
 pub use catalog::PgCatalog;
 pub use discovery::{DiscoveredChild, DiscoveryReport};
+pub use facts::{DeviceFacts, IdentityReport};
 pub use page::{Cursor, DEFAULT_PAGE, MAX_PAGE, Page};
 pub use pollable::{PollableDevice, SYSOBJECTID_KEY};
 pub use resource::{NewResource, ResourceFilter};

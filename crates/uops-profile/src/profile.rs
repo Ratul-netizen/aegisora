@@ -38,6 +38,106 @@ pub struct Profile {
     pub metrics: Vec<Metric>,
     #[serde(default)]
     pub availability: Vec<Availability>,
+
+    /// Where to read the device's make, model and serial from. Absent for a profile that
+    /// does not know — which is not the same as a device that does not answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Identity>,
+}
+
+/// Which OIDs hold the facts that describe a device rather than measure it.
+///
+/// # Why this is a profile and not a match arm per vendor
+///
+/// Every vendor puts its model number somewhere different, and the somewhere is an OID.
+/// A profile is a document a customer can write and ship without waiting for a release,
+/// which is the whole reason profiles exist — and "this switch reports its model at
+/// 1.3.6.1.4.1.9.3.6.11" is exactly the kind of fact a customer discovers before we do.
+///
+/// Every field is optional, and a device that does not answer one simply does not get
+/// it. `ENTITY-MIB` is where these live on equipment that implements it, which is most
+/// enterprise hardware and very little else, so the built-in profiles name its OIDs and
+/// vendor profiles override them.
+///
+/// # The serial is not decoration
+///
+/// SPEC §M0.2 makes a serial number a **tier-1** identifier: globally unique by
+/// specification, confidence 1.00, and proof of identity on its own. Nothing in this
+/// product produced one until this block existed, so identity resolution has been
+/// running on management addresses and hostnames — tier 3 and below — for every SNMP
+/// device. This is what gives it something to be certain about.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Identity {
+    /// `entPhysicalMfgName`, usually. Falls back to the MAC's IEEE assignment when the
+    /// device does not answer — see `uops-oui`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<Oid>,
+    /// `entPhysicalModelName`, usually.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<Oid>,
+    /// `entPhysicalSerialNum`, usually. A tier-1 identifier — see above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<Oid>,
+    /// The operating system's name. `sysDescr` on most devices, which is a sentence
+    /// rather than a name — stored verbatim, because a parser per vendor is the thing
+    /// this design exists to avoid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<Oid>,
+    /// `entPhysicalSoftwareRev`, usually.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_version: Option<Oid>,
+}
+
+/// One fact to read off a device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fact {
+    Vendor,
+    Model,
+    Serial,
+    Os,
+    OsVersion,
+}
+
+impl Fact {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Vendor => "vendor",
+            Self::Model => "model",
+            Self::Serial => "serial",
+            Self::Os => "os",
+            Self::OsVersion => "os_version",
+        }
+    }
+}
+
+impl Identity {
+    /// The facts this profile knows how to read, in a stable order.
+    ///
+    /// A `Vec` rather than five `Option`s at every call site: the poller asks for them in
+    /// one request and matches the answers back by OID, and iterating is what both of
+    /// those want.
+    #[must_use]
+    pub fn facts(&self) -> Vec<(Fact, Oid)> {
+        [
+            (Fact::Vendor, self.vendor.as_ref()),
+            (Fact::Model, self.model.as_ref()),
+            (Fact::Serial, self.serial.as_ref()),
+            (Fact::Os, self.os.as_ref()),
+            (Fact::OsVersion, self.os_version.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(fact, oid)| oid.map(|o| (fact, o.clone())))
+        .collect()
+    }
+
+    /// Whether this block asks for anything at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.facts().is_empty()
+    }
 }
 
 /// How a device is recognised as this kind of device.

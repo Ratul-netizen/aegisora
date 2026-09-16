@@ -2230,6 +2230,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-oui"
+version = "0.0.1"
+
+[[package]]
 name = "uops-poll"
 version = "0.0.1"
 dependencies = [
@@ -2364,6 +2368,7 @@ dependencies = [
  "tokio",
  "uops-core",
  "uops-identity",
+ "uops-oui",
  "uops-profile",
  "uops-query",
  "uops-secrets",

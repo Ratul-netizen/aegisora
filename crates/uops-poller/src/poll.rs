@@ -30,7 +30,7 @@ use uops_core::{Identifier, ResourceId};
 use uops_poll::plan::{MetricRequest, Work};
 use uops_poll::poller::{InterfaceNames, Task};
 use uops_poll::sample::{self, Numeric, Reading};
-use uops_profile::{Oid, Profile};
+use uops_profile::{Fact, Oid, Profile};
 use uops_snmp::bulk::Tuning;
 use uops_snmp::{Target, Transport, TransportError, Value, VarBind, walk};
 use uops_store_ch::MetricRow;
@@ -210,6 +210,11 @@ impl<S: Sink + ?Sized> std::fmt::Debug for Context<'_, S> {
 pub struct Polled {
     /// Metric rows written.
     pub rows: usize,
+    /// What the device said it is. Empty for every other kind of task.
+    ///
+    /// Returned rather than written here for the same reason as the rest: recording a
+    /// serial means attaching a tier-1 identifier, and that is `PostgreSQL`'s business.
+    pub identity: Vec<(Fact, String)>,
     /// What an availability check found, and the sentence describing it. `None` for
     /// every other kind of task.
     ///
@@ -258,7 +263,56 @@ pub async fn run<S: Sink + ?Sized>(task: &Task, ctx: &Context<'_, S>) -> Result<
         }
         Work::Discovery { table } => discovery(task, ctx, &target, table).await,
         Work::Availability { index } => availability(ctx, &target, *index).await,
+        Work::Identity { facts } => identity(ctx, &target, facts).await,
     }
+}
+
+/// Read what the device *is*: make, model, serial, software.
+///
+/// One `GET` for the whole set — the same single round trip a scalar metric poll uses.
+/// A device that does not implement `ENTITY-MIB` answers none of them and the set comes
+/// back short, which is not an error: a profile is written for a family and any one
+/// member may not implement every OID in it.
+async fn identity<S: Sink + ?Sized>(
+    ctx: &Context<'_, S>,
+    target: &Target,
+    facts: &[(Fact, Oid)],
+) -> Result<Polled, PollError> {
+    let oids: Vec<Oid> = facts.iter().map(|(_, oid)| oid.clone()).collect();
+    let varbinds = ctx
+        .transport
+        .get_scalars(target, &oids)
+        .await
+        .map_err(PollError::Transport)?;
+
+    let mut found = Vec::new();
+    for (fact, oid) in facts {
+        // Matched by OID rather than by position: a missing answer shortens the response,
+        // and a positional match would then attribute every later value to the wrong
+        // fact — a model number recorded as a serial, which looks like data.
+        let instance = uops_snmp::transport::instance(oid);
+        let Some(vb) = varbinds
+            .iter()
+            .find(|vb| vb.oid == instance || vb.oid == *oid)
+        else {
+            continue;
+        };
+        let Value::Bytes(bytes) = &vb.value else {
+            // These are all DisplayStrings. Anything else is an agent answering
+            // something other than what was asked, and recording it would put a number
+            // in a column a person reads as a model name.
+            continue;
+        };
+        let text = String::from_utf8_lossy(bytes).trim().to_owned();
+        if !text.is_empty() {
+            found.push((*fact, text));
+        }
+    }
+
+    Ok(Polled {
+        identity: found,
+        ..Polled::default()
+    })
 }
 
 /// Is the device there at all.

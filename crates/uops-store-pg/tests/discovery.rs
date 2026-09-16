@@ -7,6 +7,7 @@
 use uops_core::{
     Identifier, IdentifierKind, OrgId, ResourceId, ResourceKind, SiteId, TenantId, TenantScope,
 };
+
 use uops_store_pg::{Config, DiscoveredChild, NewResource, PgStore};
 
 async fn store() -> PgStore {
@@ -303,4 +304,254 @@ fn rand_byte() -> u8 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());
     u8::try_from((u64::from(nanos) ^ u64::from(std::process::id())) % 256).unwrap_or(0)
+}
+
+#[tokio::test]
+async fn what_a_device_says_it_is_lands_on_the_resource() {
+    let store = store().await;
+    let (scope, _, device) = device(&store, "facts").await;
+
+    let report = store
+        .record_device_facts(
+            &scope,
+            device,
+            &uops_store_pg::DeviceFacts {
+                vendor: Some("Cisco Systems, Inc".to_owned()),
+                model: Some("WS-C2960X-48FPD-L".to_owned()),
+                serial: Some(format!("FOC{}", unique())),
+                os: Some("Cisco IOS Software, C2960X Software".to_owned()),
+                os_version: Some("15.2(7)E3".to_owned()),
+            },
+        )
+        .await
+        .expect("record");
+
+    assert!(report.updated);
+    assert!(report.serial_recorded);
+
+    let resource = store.resource(&scope, device).await.expect("device");
+    assert_eq!(resource.vendor.as_deref(), Some("Cisco Systems, Inc"));
+    assert_eq!(resource.model.as_deref(), Some("WS-C2960X-48FPD-L"));
+    assert_eq!(resource.os_version.as_deref(), Some("15.2(7)E3"));
+}
+
+#[tokio::test]
+async fn a_serial_is_recorded_as_a_tier_one_identifier() {
+    // The point of reading a serial at all. SPEC §M0.2 makes it confidence 1.00 —
+    // proof of identity on its own — and nothing in this product produced one for an
+    // SNMP device before, so resolution had been running on management addresses at 0.80
+    // and hostnames at 0.65.
+    let store = store().await;
+    let (scope, _, device) = device(&store, "serial").await;
+    let serial = format!("FTX{}", unique());
+
+    store
+        .record_device_facts(
+            &scope,
+            device,
+            &uops_store_pg::DeviceFacts {
+                serial: Some(serial.clone()),
+                ..uops_store_pg::DeviceFacts::default()
+            },
+        )
+        .await
+        .expect("record");
+
+    let identifiers = store
+        .identifiers_for(&scope, device)
+        .await
+        .expect("identifiers");
+    let found = identifiers
+        .iter()
+        .find(|i| i.kind == IdentifierKind::Serial)
+        .expect("the serial must be attached as an identifier");
+    assert_eq!(found.value, serial);
+
+    // Stored at the confidence SPEC gives it, not at a number this code chose.
+    let confidence: f32 = sqlx::query_scalar(
+        "SELECT confidence FROM resource_identifier
+          WHERE tenant_id = $1 AND resource_id = $2 AND kind = 'serial'",
+    )
+    .bind(scope.tenant_id().into_uuid())
+    .bind(device.into_uuid())
+    .fetch_one(store.pool())
+    .await
+    .expect("confidence");
+    assert!(
+        (confidence - IdentifierKind::Serial.base_confidence()).abs() < f32::EPSILON,
+        "serial stored at {confidence}, SPEC says {}",
+        IdentifierKind::Serial.base_confidence()
+    );
+    assert!(IdentifierKind::Serial.is_tier_one());
+}
+
+#[tokio::test]
+async fn an_unanswered_field_does_not_erase_what_was_known() {
+    // A device that stops answering one OID — a firmware upgrade, a module pulled — must
+    // not have its model number wiped every fifteen minutes. The `COALESCE` is on the
+    // parameter, not the column.
+    let store = store().await;
+    let (scope, _, device) = device(&store, "keep").await;
+
+    store
+        .record_device_facts(
+            &scope,
+            device,
+            &uops_store_pg::DeviceFacts {
+                vendor: Some("MikroTik".to_owned()),
+                model: Some("CCR2004-1G-12S+2XS".to_owned()),
+                ..uops_store_pg::DeviceFacts::default()
+            },
+        )
+        .await
+        .expect("first poll");
+
+    // The next poll answers only the OS.
+    store
+        .record_device_facts(
+            &scope,
+            device,
+            &uops_store_pg::DeviceFacts {
+                os: Some("RouterOS".to_owned()),
+                ..uops_store_pg::DeviceFacts::default()
+            },
+        )
+        .await
+        .expect("second poll");
+
+    let resource = store.resource(&scope, device).await.expect("device");
+    assert_eq!(resource.vendor.as_deref(), Some("MikroTik"));
+    assert_eq!(
+        resource.model.as_deref(),
+        Some("CCR2004-1G-12S+2XS"),
+        "an unanswered OID erased a model number that was already known"
+    );
+    assert_eq!(resource.os.as_deref(), Some("RouterOS"));
+}
+
+#[tokio::test]
+async fn nothing_to_say_is_not_a_round_trip() {
+    let store = store().await;
+    let (scope, _, device) = device(&store, "silent").await;
+    let report = store
+        .record_device_facts(&scope, device, &uops_store_pg::DeviceFacts::default())
+        .await
+        .expect("record");
+    assert_eq!(report, uops_store_pg::IdentityReport::default());
+}
+
+#[tokio::test]
+async fn a_discovered_mac_fills_in_a_vendor_the_device_did_not_give() {
+    // The OUI fallback. Most equipment that is not enterprise hardware implements no
+    // ENTITY-MIB, so this is the only thing that puts a manufacturer on it.
+    let store = store().await;
+    let (scope, _, parent) = device(&store, "oui").await;
+
+    // A real Cisco assignment, with a per-run suffix so concurrent runs do not collide
+    // on the tenant-unique identifier.
+    let mac = format!("00:00:0c:{}", unique_mac_tail());
+    let child = DiscoveredChild {
+        identifiers: vec![Identifier::new(IdentifierKind::Mac, mac)],
+        ..interface("Gi0/1", 1)
+    };
+
+    let report = store
+        .record_discovery(&scope, parent, &[child])
+        .await
+        .expect("discovery");
+    assert!(report.vendor_inferred, "{report:?}");
+
+    let resource = store.resource(&scope, parent).await.expect("device");
+    assert!(
+        resource
+            .vendor
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Cisco"),
+        "vendor is {:?}",
+        resource.vendor
+    );
+}
+
+#[tokio::test]
+async fn what_the_device_says_outranks_what_its_mac_implies() {
+    // An inference must never overwrite a statement. A device with a third-party line
+    // card reports that card's maker in its MAC, and the chassis knows better.
+    let store = store().await;
+    let (scope, _, parent) = device(&store, "outrank").await;
+
+    store
+        .record_device_facts(
+            &scope,
+            parent,
+            &uops_store_pg::DeviceFacts {
+                vendor: Some("Juniper Networks".to_owned()),
+                ..uops_store_pg::DeviceFacts::default()
+            },
+        )
+        .await
+        .expect("the device says who made it");
+
+    let mac = format!("00:00:0c:{}", unique_mac_tail());
+    let child = DiscoveredChild {
+        identifiers: vec![Identifier::new(IdentifierKind::Mac, mac)],
+        ..interface("Gi0/1", 1)
+    };
+    let report = store
+        .record_discovery(&scope, parent, &[child])
+        .await
+        .expect("discovery");
+
+    assert!(
+        !report.vendor_inferred,
+        "an inference from a MAC overwrote what the device said about itself"
+    );
+    assert_eq!(
+        store
+            .resource(&scope, parent)
+            .await
+            .expect("device")
+            .vendor
+            .as_deref(),
+        Some("Juniper Networks")
+    );
+}
+
+#[tokio::test]
+async fn a_locally_administered_mac_infers_nothing() {
+    // Every VM, bond and VLAN interface has one, and they belong to nobody. On a
+    // virtualised host they are most of the rows.
+    let store = store().await;
+    let (scope, _, parent) = device(&store, "local").await;
+
+    let child = DiscoveredChild {
+        identifiers: vec![Identifier::new(
+            IdentifierKind::Mac,
+            format!("02:00:0c:{}", unique_mac_tail()),
+        )],
+        ..interface("br0", 1)
+    };
+    let report = store
+        .record_discovery(&scope, parent, &[child])
+        .await
+        .expect("discovery");
+
+    assert!(!report.vendor_inferred);
+    assert_eq!(
+        store.resource(&scope, parent).await.expect("device").vendor,
+        None
+    );
+}
+
+/// A per-process suffix, so concurrent runs do not collide on identifiers that are
+/// unique per tenant.
+fn unique() -> String {
+    uuid::Uuid::now_v7().simple().to_string()[..10].to_owned()
+}
+
+/// Three octets of MAC tail, likewise.
+fn unique_mac_tail() -> String {
+    let id = uuid::Uuid::now_v7();
+    let b = id.as_bytes();
+    format!("{:02x}:{:02x}:{:02x}", b[13], b[14], b[15])
 }
