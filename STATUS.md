@@ -1131,6 +1131,7 @@ integration suites.
 | **The simulator modelled a GET as a GETNEXT** | a scalar that was invisible in tests but present on the real agent | `entPhysicalSoftwareRev` could never have been read. The simulator now has a real `get_scalars`. A simulator that is wrong in the same direction as the code under test proves nothing |
 | **`Runner::load` had a trap** | the scale test was measuring nothing | discovery rules lived in a side map populated only inside `run::reload`, so the 1 000-device scale test measured 1 000 devices whose every discovery job failed. `load()` now does both and is the only way in |
 | **Two routes leaked tenant existence** | the isolation harness, once it was given a real vault | `revoke` returned 204 for another tenant's credential and `identifiers_for` returned `200 []`. Both now `NotFound` — 404-never-403 |
+| **The disk filled and took Docker with it** | a Linux build failing to link | `target/debug/incremental` had reached 20.4 GB and its Linux twin 5.5 GB, leaving the host at zero bytes free. Docker Desktop's virtual disk could not grow, so the engine refused to start and every container stopped. Twenty-six GB reclaimed from the incremental caches alone, which cost one non-incremental rebuild and nothing else. See Housekeeping — the recovery is much longer than the prevention |
 | **Every device would have duplicated itself** | writing a test for the ordinary syslog case | a hostname plus an address is 0.93, under the 0.95 bar, so the steady state filed a review and a provisional twin for every device. The confidence model was being asked whether two independently discovered resources are the same box, when the real question was whether an observation is the resource its identifiers already belong to. `exclusive_match`, and the same rule in the cache — where the bar had made the hit rate 0%, so both of M3's numeric criteria were unreachable |
 | **Eight foreign keys had no index** | the API scale test timing out in its own clean-up | PostgreSQL never indexes the referencing side, so every parent `DELETE` scanned each child once per row. `ON DELETE CASCADE` from `tenant` made removing a tenant scan every role grant in the installation. Migration 0010, plus a schema guard that fails if a new foreign key arrives without one |
 | **My own documentation was false** | checking the claim against the data | I wrote that a 24-bit-only OUI lookup returns the *wrong* vendor. The data shows zero MA-M/MA-S nesting inside listed MA-L blocks, so it returns *nothing*. The wrong version was the intuitive one, which is why it survived review |
@@ -1145,6 +1146,24 @@ evidence.
 ---
 
 ## Housekeeping
+
+**`target/` fills the disk, twice now.** The incremental compile caches grow without
+bound: `target/debug/incremental` reached **20.4 GB** and `target-linux/debug/incremental`
+**5.5 GB**, which took the host to zero bytes free mid-build. That took Docker Desktop's
+engine with it — its virtual disk could not grow, so the daemon refused to start and
+every container went down.
+
+Neither cache is worth keeping. `rm -rf target*/debug/incremental` reclaims all of it and
+costs one non-incremental rebuild, not a cold one. Worth doing between milestones rather
+than after the disk is full, because the recovery is longer than the prevention: free the
+space, `docker desktop stop && docker desktop start`, bring the compose stack back, and
+**re-read the container IPs** — Docker reassigns them, so the Linux test invocation's
+hard-coded addresses are stale afterwards.
+
+Nothing in Docker was pruned. `docker system df` reported ~6.9 GB reclaimable, and all of
+it was images belonging to other stacks on this machine whose containers happened to be
+stopped. There were no dangling images: the repeated `uops:dev` builds replace a tag
+rather than accumulating.
 
 ClickHouse is pinned to **26.8** in `deploy/docker-compose.yml` and in CI, matching the
 version W1 was measured on. `bash scripts/ch.sh apply|verify|smoke|reset`.
