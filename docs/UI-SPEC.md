@@ -367,6 +367,45 @@ built from one set of decisions.
 
 ---
 
+## 9a. One product, two ways of running it
+
+The question this answers: ManageEngine ships a web console *and* a native desktop
+application, and whether this product should is a real decision rather than a preference.
+
+**The web UI is the product.** One React build, served by the same `uops-server` binary
+that serves the API, from the same origin — which is why there is no CORS configuration
+anywhere in this tree. It is responsive by §3's rules, so a phone, a tablet and a NOC wall
+are the same code at three widths.
+
+**It is installable, and that is the "any device" half.** A web app manifest and PNG icons
+at 192, 512 and 180 make it a home-screen app on Android and iOS and a standalone window
+on Windows and macOS — the same build, no second codebase, no store review. That is
+shipped.
+
+**There is deliberately no service worker.** An installable app is not an offline one, and
+a monitoring console that shows cached state from an hour ago is worse than one that says
+it cannot reach the server: the first is indistinguishable from an estate that is fine.
+
+**A native shell is a later, small thing — and it is Tauri, not Electron.** What a desktop
+shell adds that a browser tab cannot: a system-tray presence, native alert notifications
+when the window is closed, and a NOC window with no browser chrome. Tauri is the right
+tool for it — it uses the operating system's own webview rather than bundling Chromium, so
+the shell is single-digit megabytes against Electron's hundred and fifty, and its licences
+(MIT/Apache-2.0) pass `deny.toml` where Electron's tree is a much larger question. It
+would load the same build this repo already produces.
+
+**What a native shell must not become** is a second UI. A separate desktop codebase is the
+"six products" failure mode of §13 at the application level: two implementations of the
+alert list, drifting, with the bug fixed in one of them. The shell is a window and a tray
+icon; everything inside it is the web app.
+
+**A true single-host desktop install is not on the table**, and it is worth saying why: the
+server needs PostgreSQL and ClickHouse. "Install Veyronis on the ops laptop" means
+embedding both, and neither embeds. A single-node `docker compose up` is the small
+deployment story, and it already exists.
+
+---
+
 ## 10. What this document does not cover
 
 Named so that the next person knows the gap is deliberate: 2D and 3D topology · the

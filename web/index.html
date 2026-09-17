@@ -10,6 +10,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="color-scheme" content="dark light" />
     <meta name="description" content="Unified infrastructure observability: network, logs, metrics, traces, flows and topology over one resource identity." />
+    <!-- Installable on any device, which is the half of the "web UI plus a native app"
+         question that is cheap and right: the same build, on a phone home screen or in a
+         standalone window, with no second codebase. There is no service worker and so no
+         offline mode — a monitoring console showing cached state from an hour ago is
+         worse than one that says it cannot reach the server. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#0d1017" />
   </head>
   <body>
     <div id="root"></div>

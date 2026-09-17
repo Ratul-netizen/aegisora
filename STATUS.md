@@ -98,7 +98,10 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **UI · the Operations Overview** | ✅ four tiles, what is firing, log volume by severity, busiest resources — six panels, four queries |
 | **UI · tokens, series palette, focus ring** | ✅ UI-SPEC §1 applied; `--unknown` and `--maintenance` exist at last |
 | **UI · the mark** | ✅ letterform-free, so it survives the rename below |
+| **UI · installable on any device** | ✅ web app manifest, icons at 192/512/180 — one build, phone home screen to NOC wall. No service worker, deliberately: a console showing cached state is worse than one that says it cannot reach the server |
+| UI · a native desktop shell | ⬜ **decided: Tauri, not Electron, and a window rather than a second UI** — [`docs/UI-SPEC.md`](./docs/UI-SPEC.md) §9a |
 | **Brand clearance: `Veyronis` has a conflict** | ⬜ **`veyronis.com` is an active software consultancy**, and *Varonis Systems* holds a registered US mark (4592747) in an adjacent field. A rename is likely; the branding rule means it costs documentation, not code |
+| Naming: first-pass screen done | ⬜ Rejected on conflicts: *Veyronis*, *Sentryl*, *Lumenwatch*, *Corvane*, *Helvara*. Clear so far: **Northwarden**. A screen is not clearance — the checklist in SPEC's branding rule still applies |
 
 ## Resume in three commands
 

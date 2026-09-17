@@ -1,0 +1,22 @@
+{
+  "name": "Veyronis",
+  "short_name": "Veyronis",
+  "description": "Unified infrastructure observability: network, logs, metrics, traces, flows and topology over one resource identity.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d1017",
+  "theme_color": "#0d1017",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Alerts", "url": "/alerts", "description": "What is firing right now" },
+    { "name": "Explore", "url": "/explore", "description": "Search logs, metrics and events" },
+    { "name": "Dashboards", "url": "/dashboards", "description": "Saved dashboards" }
+  ]
+}
