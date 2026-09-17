@@ -89,8 +89,9 @@ pub struct Schedule {
     jobs: Vec<Job>,
     /// Which keys belong to a device, so a removed device can be forgotten.
     by_device: HashMap<ResourceId, Vec<JobKey>>,
-    /// Keys whose device has gone. The wheel has no removal — an entry reschedules
-    /// itself forever — so a retired job is dropped when it next comes due.
+    /// Keys whose device has gone. Each is dropped from the wheel the next time it comes
+    /// due — see [`Schedule::due`] — and forgotten here at the same moment, so neither
+    /// this set nor the wheel accumulates the churn of a long-running process.
     retired: std::collections::HashSet<JobKey>,
     devices: HashMap<ResourceId, Device>,
 }
@@ -198,14 +199,17 @@ impl Schedule {
 
     /// Advance one slot and return the jobs that are due.
     ///
-    /// Retired jobs are dropped here rather than removed from the wheel, which has no
-    /// removal: an entry reschedules itself forever, so the cheapest correct way to stop
-    /// one is to ignore it when it arrives and not put it back.
+    /// A retired job is dropped from the wheel at the moment it comes due — see
+    /// [`Wheel::advance_retaining`]. It used to be filtered out of the *result* instead,
+    /// which left the entry rescheduling itself forever: a poller running for months with
+    /// device churn held an entry per retired job and paid to move each one every
+    /// interval. The tombstone is forgotten at the same time, so that set stops growing
+    /// too.
     pub fn due(&mut self, out: &mut Vec<JobKey>) {
         out.clear();
-        let mut raw = Vec::new();
-        self.wheel.advance(&mut raw);
-        out.extend(raw.into_iter().filter(|k| !self.retired.contains(k)));
+        let retired = &mut self.retired;
+        self.wheel
+            .advance_retaining(out, |key| !retired.remove(key));
     }
 }
 

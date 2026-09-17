@@ -23,9 +23,10 @@
  * it is what makes drag-to-zoom on the histogram a zoom rather than a redraw.
  */
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ApiError } from "./api";
 import { Histogram, describeSeconds, toBuckets } from "./histogram";
 import {
   SEVERITIES,
@@ -238,8 +239,12 @@ function RowDetail({
   );
 }
 
+/** How many consecutive failed polls end a tail. */
+const MAX_FAILURES = 5;
+
 export function ExplorePage() {
   const { tenant, range, setRange } = useShell();
+  const client = useQueryClient();
 
   const [signal, setSignal] = useState<Signal>("log");
   const [search, setSearch] = useState("");
@@ -415,6 +420,8 @@ export function ExplorePage() {
     let timer: number | undefined;
     let stopped = false;
 
+    let failures = 0;
+
     const poll = async () => {
       try {
         const page = await pollTail(
@@ -427,16 +434,41 @@ export function ExplorePage() {
         // whatever this browser's clock is wrong by, and silently — an empty tail on a
         // busy estate, with nothing on screen to explain it.
         since.current = page.next_since;
+        failures = 0;
         setTail((was) => merge(was, page));
         setLag({ behind: !page.complete, skipped: page.skipped });
         setTailError(null);
       } catch (error) {
         if (isAbort(error)) return;
+
+        // The session ended. Polling on is 1 800 rejected requests an hour and an error
+        // message where the login page should be — `me` is cached for thirty seconds and
+        // does not refetch on focus, so nothing else here would notice a tab left open
+        // overnight. Asking for it again is what sends the app to /login.
+        if (error instanceof ApiError && error.isUnauthenticated) {
+          stopped = true;
+          setFollowed(null);
+          setTailError("the session ended");
+          void client.invalidateQueries({ queryKey: ["me"] });
+          return;
+        }
+
         // The watermark is deliberately not advanced. A ClickHouse restart or a proxy
         // hiccup is a gap of a few seconds, and the next successful poll asks for the
         // window that failed — so the rows that arrived during the outage arrive late
         // rather than never.
+        failures += 1;
         setTailError(message(error));
+
+        // A tail that cannot succeed must not keep asking. Five consecutive failures is
+        // ten seconds of trying, which outlasts a restart and does not outlast a broken
+        // query — and the rows are not lost, because the search that this was following
+        // still finds them.
+        if (failures >= MAX_FAILURES) {
+          stopped = true;
+          setFollowed(null);
+          return;
+        }
       }
       if (!stopped) timer = window.setTimeout(() => void poll(), POLL_MS);
     };
@@ -447,7 +479,7 @@ export function ExplorePage() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [followed, open, tenant.tenant_id]);
+  }, [followed, open, tenant.tenant_id, client]);
 
   /** Start following what the controls currently describe. */
   const follow = () => {
@@ -510,6 +542,7 @@ export function ExplorePage() {
         tenant={tenant.tenant_id}
         role={tenant.role}
         current={build}
+        describesWhatRan={!partial}
         onOpen={openSaved}
       />
 

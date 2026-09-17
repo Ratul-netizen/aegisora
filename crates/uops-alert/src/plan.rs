@@ -101,11 +101,19 @@ pub fn evaluation_query(query: &Query, condition: Condition, now: DateTime<Utc>)
             // The rule's own grouping comes after the resource, so the label columns keep
             // the order the rule wrote them in and a reader of the result set can match
             // them up by position.
+            //
+            // Grouping by *time* is dropped, and that is not tidying. A saved histogram
+            // carries `time_bucket` in its `group_by`; kept here it would produce one
+            // series per bucket per resource, each with the bucket's timestamp as a
+            // label — so every evaluation would invent a new dedup key, every alert would
+            // fire once and never resolve, and the list would fill with one alert per
+            // five minutes of a problem that is one problem. The evaluation window *is*
+            // the bucket.
             group_by.extend(
                 query
                     .group_by
                     .iter()
-                    .filter(|f| **f != Field::ResourceId)
+                    .filter(|f| !groups_by_time(f) && **f != Field::ResourceId)
                     .cloned(),
             );
 
@@ -140,6 +148,18 @@ pub fn evaluation_query(query: &Query, condition: Condition, now: DateTime<Utc>)
             }
         }
     }
+}
+
+/// Whether grouping on this field splits a series by *when* rather than by *what*.
+///
+/// Any of these gives every evaluation a different set of group values, which means a
+/// different dedup key, which means an alert that can never resolve because the thing
+/// that was firing no longer exists by name.
+fn groups_by_time(field: &Field) -> bool {
+    matches!(
+        field,
+        Field::TimeBucket { .. } | Field::ObservedAt | Field::IngestedAt
+    )
 }
 
 fn window(span: Duration, now: DateTime<Utc>) -> TimeRange {
@@ -516,5 +536,42 @@ mod tests {
     fn a_rule_that_brought_its_own_aggregate_keeps_it() {
         let q = evaluation_query(&rule_query(5), THRESHOLD, at("2026-09-17T09:30:00Z"));
         assert_eq!(q.aggregations, rule_query(5).aggregations);
+    }
+
+    #[test]
+    fn a_saved_histogram_does_not_become_one_alert_per_bucket() {
+        // The Explorer's chart is the same `Query` with `time_bucket` in its grouping.
+        // Kept, it would produce one series per bucket per resource — each with a
+        // timestamp for a label — so every evaluation would invent new dedup keys, every
+        // alert would fire once and never resolve, and the list would fill with one alert
+        // per five minutes of a problem that is one problem.
+        let mut histogram = rule_query(15);
+        histogram.group_by = vec![
+            Field::TimeBucket { seconds: 300 },
+            Field::Attr {
+                key: "interface".into(),
+            },
+        ];
+
+        let q = evaluation_query(&histogram, THRESHOLD, at("2026-09-17T09:30:00Z"));
+        assert_eq!(
+            q.group_by,
+            vec![
+                Field::ResourceId,
+                Field::Attr {
+                    key: "interface".into()
+                }
+            ],
+            "the window is the bucket; the interface is a label"
+        );
+    }
+
+    #[test]
+    fn grouping_on_a_raw_timestamp_is_dropped_for_the_same_reason() {
+        let mut by_time = rule_query(15);
+        by_time.group_by = vec![Field::ObservedAt];
+
+        let q = evaluation_query(&by_time, THRESHOLD, at("2026-09-17T09:30:00Z"));
+        assert_eq!(q.group_by, vec![Field::ResourceId]);
     }
 }

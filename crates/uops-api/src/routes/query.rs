@@ -188,7 +188,10 @@ pub async fn tail(
 
     let ceiling = followed.limit.min(uops_query::TAIL_LIMIT) as usize;
     Ok(Json(TailPage {
-        complete: result.len() < ceiling,
+        // A tail asked for no rows got all none of them. Without the first clause this
+        // reads `0 < 0` and the client is told it is permanently falling behind, which is
+        // the one thing this field exists to say truthfully.
+        complete: ceiling == 0 || result.len() < ceiling,
         next_since: now,
         skipped,
         result,

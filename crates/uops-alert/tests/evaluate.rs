@@ -361,3 +361,66 @@ async fn a_cycle_evaluates_every_tenant_and_one_failure_does_not_stop_it() {
         "the rule this test created fired"
     );
 }
+
+/// A series that recovered is not rewritten on every cycle for the rest of time.
+///
+/// The bug this pins: a resolved alert leaves an `ok` row behind, and "write whenever
+/// there is a row" turns every series that has ever alerted into a write every minute,
+/// for ever. On an estate where a few hundred resources alerted at some point in the past
+/// year that is a few hundred pointless writes a minute, and the only symptom is a
+/// `PostgreSQL` instance that is busier than anybody can explain.
+#[tokio::test]
+async fn a_recovered_series_stops_being_written() {
+    let (pg, ch) = stores().await;
+    let (scope, device) = tenant(&pg, "quiet-writes").await;
+    let engine = Engine::new(pg.clone(), ch.clone());
+    let rule = rule(&pg, &scope, &cpu_rule("CPU hot", 0)).await;
+
+    // Hot, then cool for the rest of the run.
+    let start = Utc::now() - Duration::minutes(10);
+    let rows: Vec<MetricRow> = (0..10)
+        .map(|minute| {
+            sample(
+                scope.tenant_id(),
+                device,
+                if minute == 0 { 99.0 } else { 1.0 },
+                start + Duration::minutes(minute),
+            )
+        })
+        .collect();
+    ch.insert_metrics(&rows).await.expect("insert");
+
+    // Fire, resolve, return to ok — three transitions, each of which is a real write.
+    for minute in 0..3 {
+        engine
+            .evaluate(
+                &scope,
+                &rule,
+                start + Duration::minutes(minute) + Duration::seconds(30),
+            )
+            .await
+            .expect("evaluate");
+    }
+
+    let settled = pg.rule_state(&scope, rule.id).await.expect("state");
+    assert_eq!(settled.len(), 1, "{settled:?}");
+    assert_eq!(settled[0].phase, Phase::Ok);
+
+    // Everything after that is a healthy series being looked at, which is not news.
+    for minute in 3..8 {
+        engine
+            .evaluate(
+                &scope,
+                &rule,
+                start + Duration::minutes(minute) + Duration::seconds(30),
+            )
+            .await
+            .expect("evaluate");
+    }
+
+    let after = pg.rule_state(&scope, rule.id).await.expect("state");
+    assert_eq!(
+        after[0].last_eval, settled[0].last_eval,
+        "five more evaluations of a series that is fine rewrote its row"
+    );
+}

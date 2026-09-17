@@ -173,8 +173,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // rather than dropping the handle means a rule that was mid-evaluation finishes
     // writing its state — a phase recorded without the notification that belongs to it is
     // the one inconsistency this process can produce on the way out.
-    if let Some(alerts) = alerts {
-        let _ = alerts.await;
+    if let Some(alerts) = alerts
+        && let Err(e) = alerts.await
+    {
+        // Reached when the engine's task panicked rather than returned. Said out loud
+        // because the symptom otherwise is an installation that stopped alerting at some
+        // point nobody can identify.
+        eprintln!("alerts: the engine stopped unexpectedly: {e}");
     }
 
     println!("stopped cleanly");

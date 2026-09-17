@@ -28,7 +28,7 @@ use uops_query::Query;
 use uops_store_pg::NewRule;
 
 use crate::csrf::CsrfChecked;
-use crate::error::{ApiError, ApiResult};
+use crate::error::ApiResult;
 use crate::extract::Caller;
 use crate::state::AppState;
 
@@ -134,11 +134,9 @@ fn no_channels() -> serde_json::Value {
     serde_json::json!([])
 }
 
-impl TryFrom<RuleRequest> for NewRule {
-    type Error = ApiError;
-
-    fn try_from(body: RuleRequest) -> Result<Self, ApiError> {
-        Ok(Self {
+impl From<RuleRequest> for NewRule {
+    fn from(body: RuleRequest) -> Self {
+        Self {
             name: body.name,
             description: body.description,
             query: body.query,
@@ -147,7 +145,7 @@ impl TryFrom<RuleRequest> for NewRule {
             enabled: body.enabled,
             eval_interval: chrono::Duration::seconds(i64::from(body.eval_interval_seconds)),
             notify: body.notify,
-        })
+        }
     }
 }
 
@@ -192,7 +190,7 @@ pub async fn create_rule(
 
     let rule = state
         .store
-        .create_rule(caller.scope(), Some(caller.user_id()), &body.try_into()?)
+        .create_rule(caller.scope(), Some(caller.user_id()), &body.into())
         .await?;
 
     // The rule's shape, never its query. A rule's filter carries the customer's hostnames
@@ -226,7 +224,7 @@ pub async fn update_rule(
     let before = state.store.alert_rule(caller.scope(), id).await?;
     let rule = state
         .store
-        .update_rule(caller.scope(), id, &body.try_into()?)
+        .update_rule(caller.scope(), id, &body.into())
         .await?;
 
     caller.audit().wrote(

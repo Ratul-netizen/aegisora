@@ -30,8 +30,10 @@
 //! silences every other rule in the installation.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
+use tokio::sync::Mutex;
 use uops_core::alert::{Phase, step};
 use uops_core::{ResourceId, Suppression, TenantId, TenantScope};
 use uops_query::{Query, ResolvedResources, resolve};
@@ -83,17 +85,45 @@ pub struct Cycle {
     pub failures: Vec<String>,
 }
 
+/// How long a tenant's suppression map is reused for.
+///
+/// Working out which resources are inside an open maintenance window costs one query for
+/// the windows and one per window for what it covers. Doing that per *rule* means an
+/// installation with SPEC's 1 000 rules pays a thousand times a cycle for an answer that
+/// changes at the boundaries of a window somebody scheduled last week — which is the
+/// difference between a suppression check and a second workload.
+///
+/// Ten seconds is the staleness this buys it with: a window that opens is honoured within
+/// ten seconds, and one that closes lets alerting resume within ten. Both are far inside
+/// the minute an evaluation interval is measured in, and the failure mode of being late
+/// is the safe one — alerts stay suppressed a moment longer than the window, never a
+/// moment less.
+const SUPPRESSION_TTL: Duration = Duration::seconds(10);
+
 /// The evaluator.
 #[derive(Clone, Debug)]
 pub struct Engine {
     pg: PgStore,
     ch: ChStore,
+    /// Per tenant: when it was read, and what it said. Shared across clones so the run
+    /// loop's spawned evaluations reuse one another's work rather than each doing it.
+    suppression: SuppressionCache,
 }
+
+/// Which resources are inside an open maintenance window, and what it suppresses.
+pub type Suppressions = HashMap<ResourceId, Suppression>;
+
+/// One tenant's [`Suppressions`] and when they were read, shared between evaluations.
+type SuppressionCache = Arc<Mutex<HashMap<TenantId, (DateTime<Utc>, Arc<Suppressions>)>>>;
 
 impl Engine {
     #[must_use]
-    pub const fn new(pg: PgStore, ch: ChStore) -> Self {
-        Self { pg, ch }
+    pub fn new(pg: PgStore, ch: ChStore) -> Self {
+        Self {
+            pg,
+            ch,
+            suppression: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Evaluate one rule and write down what it decided.
@@ -149,10 +179,17 @@ impl Engine {
             let breaching = rule.condition.breached_by(series.value);
             let transition = step(was, breaching, rule.condition.hold(), now);
 
-            // A phase that was ok and still is has nothing to write: a rule matching five
-            // thousand healthy resources would otherwise write five thousand rows every
-            // cycle to say that nothing happened.
-            if transition.phase.is_active() || was.is_some() {
+            // Write when something is wrong, or when something *was* wrong and has just
+            // stopped being — and never otherwise.
+            //
+            // The `was.is_some()` this used to say looks equivalent and is not: a series
+            // that recovered keeps an `ok` row, so every series that has ever alerted
+            // would be rewritten on every cycle, for ever. On an estate where a few
+            // hundred resources have alerted at some point in the past year, that is a
+            // few hundred pointless writes a minute whose only symptom is a `PostgreSQL`
+            // instance that is busier than anybody can explain.
+            let recovering = was.is_some_and(|(phase, _)| phase.is_active());
+            if transition.phase.is_active() || recovering {
                 self.pg
                     .record_evaluation(
                         scope,
@@ -228,15 +265,38 @@ impl Engine {
 
     /// Which of this tenant's resources are inside an open maintenance window.
     ///
-    /// Read once per rule evaluation rather than once per series: `maintenance_for` is
-    /// two queries, and asking it five thousand times a cycle would make the suppression
-    /// check cost more than the evaluation it guards.
+    /// Cached for [`SUPPRESSION_TTL`] and shared between evaluations: read once per rule,
+    /// this would be two-plus queries a rule a cycle for an answer that changes at the
+    /// edges of a window scheduled last week.
     async fn suppressions(
         &self,
         scope: &TenantScope,
         now: DateTime<Utc>,
-    ) -> uops_core::Result<HashMap<ResourceId, Suppression>> {
-        let mut covered: HashMap<ResourceId, Suppression> = HashMap::new();
+    ) -> uops_core::Result<Arc<Suppressions>> {
+        {
+            let cache = self.suppression.lock().await;
+            if let Some((read_at, map)) = cache.get(&scope.tenant_id())
+                && now - *read_at < SUPPRESSION_TTL
+                && now >= *read_at
+            {
+                return Ok(Arc::clone(map));
+            }
+        }
+
+        let fresh = Arc::new(self.read_suppressions(scope, now).await?);
+        self.suppression
+            .lock()
+            .await
+            .insert(scope.tenant_id(), (now, Arc::clone(&fresh)));
+        Ok(fresh)
+    }
+
+    async fn read_suppressions(
+        &self,
+        scope: &TenantScope,
+        now: DateTime<Utc>,
+    ) -> uops_core::Result<Suppressions> {
+        let mut covered: Suppressions = HashMap::new();
 
         for window in self.pg.live_windows(scope, now).await? {
             if !window.schedule.is_open_at(now) {

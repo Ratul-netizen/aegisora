@@ -79,6 +79,15 @@ impl Scheduler {
         self.scheduled.is_empty()
     }
 
+    /// How many entries the wheel is actually carrying.
+    ///
+    /// Equal to [`len`](Self::len) once every removed rule has come round. They differ
+    /// only in between, which is exactly the window a test for the leak has to look at.
+    #[must_use]
+    pub fn wheel_len(&self) -> usize {
+        self.wheel.len()
+    }
+
     /// Add a rule to the schedule, if it is not already there.
     ///
     /// # Errors
@@ -109,21 +118,24 @@ impl Scheduler {
 
     /// Forget a rule that has been deleted or disabled.
     ///
-    /// The wheel keeps the entry until it next comes round — removing from the middle of
-    /// a wheel is O(slot) and buys nothing, because [`due`](Self::due) filters against
-    /// this set on the way out.
+    /// The wheel entry survives until the rule next comes round, and is dropped then —
+    /// see [`due`](Self::due). Hunting it down now would mean scanning a day's worth of
+    /// slots to save a few bytes for at most one interval.
     pub fn remove(&mut self, tenant: TenantId, rule: uuid::Uuid) {
         self.scheduled.remove(&(tenant, rule));
     }
 
     /// Advance one tick and return the rules that are now due.
     ///
-    /// Entries for rules that have since been removed are dropped here rather than
-    /// hunted down in the wheel.
+    /// A rule that has been disabled or deleted leaves the wheel here rather than being
+    /// filtered out of the result and left to reschedule itself forever — see
+    /// [`uops_poll::Wheel::advance_retaining`], which exists because the filtering
+    /// version was a leak.
     pub fn due(&mut self) -> Vec<Due> {
         let mut out = Vec::new();
-        self.wheel.advance(&mut out);
-        out.retain(|key| self.scheduled.contains(key));
+        let scheduled = &self.scheduled;
+        self.wheel
+            .advance_retaining(&mut out, |key| scheduled.contains(key));
         out
     }
 
@@ -308,5 +320,59 @@ mod tests {
         let a = uuid::Uuid::now_v7();
         let b = uuid::Uuid::now_v7();
         assert_ne!(seed_of(a), seed_of(b));
+    }
+
+    #[test]
+    fn a_disabled_rule_leaves_the_wheel_rather_than_cycling_in_it_forever() {
+        // The engine runs for months and rules are enabled and disabled while it does.
+        // Filtering the result and leaving the entry in place means the wheel grows by
+        // one entry per disabled rule for the life of the process.
+        let tenant = TenantId::new();
+        let mut scheduler = Scheduler::new();
+        let ids = rules(20);
+        for rule in &ids {
+            scheduler
+                .insert(tenant, *rule, Duration::from_secs(10))
+                .expect("schedule");
+        }
+
+        for rule in &ids[..15] {
+            scheduler.remove(tenant, *rule);
+        }
+        // Two intervals, so every entry has come due at least once.
+        for _ in 0..25 {
+            scheduler.due();
+        }
+
+        assert_eq!(
+            scheduler.wheel_len(),
+            5,
+            "the wheel holds only the live rules"
+        );
+        assert_eq!(scheduler.len(), 5);
+    }
+
+    #[test]
+    fn a_rule_that_comes_back_is_scheduled_again() {
+        // Disable, re-enable: the entry left the wheel on the way out, so the reload has
+        // to put it back rather than assuming it is still in there.
+        let tenant = TenantId::new();
+        let rule = uuid::Uuid::now_v7();
+        let mut scheduler = Scheduler::new();
+        scheduler
+            .insert(tenant, rule, Duration::from_secs(5))
+            .expect("schedule");
+
+        scheduler.remove(tenant, rule);
+        for _ in 0..10 {
+            scheduler.due();
+        }
+        assert_eq!(scheduler.wheel_len(), 0);
+
+        scheduler
+            .insert(tenant, rule, Duration::from_secs(5))
+            .expect("reschedule");
+        let fired: usize = (0..10).map(|_| scheduler.due().len()).sum();
+        assert!(fired >= 1, "a re-enabled rule evaluates again");
     }
 }

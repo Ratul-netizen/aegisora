@@ -25,12 +25,22 @@ export function SavedSearches({
   tenant,
   role,
   current,
+  describesWhatRan,
   onOpen,
 }: {
   tenant: string;
   role: Role;
   /** What the form describes right now, or null when the range is unresolvable. */
   current: () => Query | null;
+  /**
+   * Whether the form describes the query that is actually on screen.
+   *
+   * False after opening a saved search whose filter the form cannot draw. Replace takes
+   * what the *form* says, so replacing in that state would quietly overwrite a filter
+   * with the weaker one the controls could show — the same trap the warning above the
+   * form describes for Run, except that Run is recoverable and this is not.
+   */
+  describesWhatRan: boolean;
   onOpen: (saved: SavedSearch) => void;
 }) {
   const client = useQueryClient();
@@ -111,12 +121,18 @@ export function SavedSearches({
         <>
           <button
             type="button"
-            disabled={!chosen || replace.isPending}
+            disabled={!chosen || replace.isPending || !describesWhatRan}
             onClick={() => {
               const query = current();
               if (chosen && query) replace.mutate({ id: chosen.id, body: { name: chosen.name, query } });
             }}
-            title={chosen ? `Overwrite ${chosen.name} with what the form describes` : undefined}
+            title={
+              describesWhatRan
+                ? chosen
+                  ? `Overwrite ${chosen.name} with what the form describes`
+                  : undefined
+                : "The form cannot show all of this search, so replacing it would lose the part it cannot draw"
+            }
           >
             Replace
           </button>

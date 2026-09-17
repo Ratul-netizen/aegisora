@@ -164,6 +164,27 @@ impl<K: Clone> Wheel<K> {
     /// them. That ordering is deliberate — a poll that takes ninety seconds must not
     /// delay the next tick, and the wheel is not the thing that stops it twice.
     pub fn advance(&mut self, out: &mut Vec<K>) {
+        self.advance_retaining(out, |_| true);
+    }
+
+    /// Advance one tick, keeping only the entries `keep` still wants scheduled.
+    ///
+    /// This is how an entry leaves the wheel. There is no `remove`: entries move between
+    /// slots on every revolution, so finding one means scanning, and tracking where each
+    /// key currently sits would cost a hash write per due entry per tick — on a poller
+    /// that is 200 000 of them a minute, forever, to make a rare removal cheap.
+    ///
+    /// Dropping at the moment an entry comes due costs nothing and is what both callers
+    /// actually want: a device that has been decommissioned and a rule that has been
+    /// disabled both stop when the wheel next reaches them.
+    ///
+    /// **The alternative was a leak, and was one.** Both callers used to filter the
+    /// returned keys and leave the entry in the wheel, where it rescheduled itself
+    /// forever — a poller with device churn accumulated an entry per retired job for the
+    /// life of the process, and paid to move each one every interval. `keep` is what
+    /// makes the comment those callers already had ("dropped when it next comes due")
+    /// true.
+    pub fn advance_retaining(&mut self, out: &mut Vec<K>, mut keep: impl FnMut(&K) -> bool) {
         self.tick += 1;
         let slot = self.slot_of(self.tick);
 
@@ -173,6 +194,9 @@ impl<K: Clone> Wheel<K> {
         let due: Vec<Entry<K>> = self.slots[slot].drain(..).collect();
 
         for entry in due {
+            if !keep(&entry.key) {
+                continue;
+            }
             out.push(entry.key.clone());
             let next = self.tick + self.next_offset(&entry);
             self.place(entry, next);
@@ -410,5 +434,61 @@ mod tests {
                 "key {key} fired {n} times in 3000s, expected about {expected}"
             );
         }
+    }
+
+    #[test]
+    fn an_entry_the_caller_no_longer_wants_leaves_the_wheel() {
+        // The leak this method exists for. Filtering the *returned* keys and leaving the
+        // entry in place means it reschedules itself forever: a poller with device churn
+        // accumulates an entry per retired job for the life of the process and pays to
+        // move each one every interval.
+        let mut w = wheel();
+        for key in 0..10 {
+            w.insert(key, Duration::from_secs(5), u64::from(key))
+                .unwrap();
+        }
+        assert_eq!(w.len(), 10);
+
+        let retired = [3, 4, 5];
+        let mut fired = Vec::new();
+        // Two intervals, so every entry comes due at least once.
+        for _ in 0..12 {
+            w.advance_retaining(&mut fired, |k| !retired.contains(k));
+        }
+
+        assert_eq!(
+            w.len(),
+            7,
+            "the retired entries are gone, not merely filtered"
+        );
+        assert!(
+            !fired.iter().any(|k| retired.contains(k)),
+            "a retired entry must not be handed out either: {fired:?}"
+        );
+        assert!(
+            fired.contains(&0),
+            "the entries that were kept still fire: {fired:?}"
+        );
+    }
+
+    #[test]
+    fn keeping_everything_is_what_advance_already_did() {
+        let mut a = wheel();
+        let mut b = wheel();
+        for key in 0..20 {
+            a.insert(key, Duration::from_secs(7), u64::from(key))
+                .unwrap();
+            b.insert(key, Duration::from_secs(7), u64::from(key))
+                .unwrap();
+        }
+
+        let (mut from_advance, mut from_retaining) = (Vec::new(), Vec::new());
+        for _ in 0..50 {
+            a.advance(&mut from_advance);
+            b.advance_retaining(&mut from_retaining, |_| true);
+        }
+
+        assert_eq!(from_advance, from_retaining);
+        assert_eq!(a.len(), b.len());
     }
 }
