@@ -284,3 +284,49 @@ export function message(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   return String(error);
 }
+
+/**
+ * The order a person reads a telemetry row in, as indices into `columns`.
+ *
+ * The compiler's `SELECT` order is the table's: `tenant_id, resource_id, site_id,
+ * observed_at, …, body, …`. That is the right order for a machine and the wrong one for a
+ * screen — three UUIDs occupy the whole width before the message anybody opened the
+ * Explorer to read. Seen the moment the page was pointed at real data.
+ *
+ * So: when, how bad, from where, and what it said — then everything else in the order it
+ * arrived. `tenant_id` is dropped outright, because every row in a tenant-scoped view has
+ * the same one and a column of identical UUIDs is not information.
+ *
+ * Indices rather than a rearranged array, so the caller still reads cells by their
+ * original position and nothing has to stay in step.
+ */
+export function displayOrder(columns: Column[]): number[] {
+  const preferred = [
+    "observed_at",
+    "severity",
+    "source_kind",
+    "source_vendor",
+    "metric",
+    "value",
+    "unit",
+    "event_category",
+    "event_type",
+    "previous_status",
+    "current_status",
+    "body",
+  ];
+
+  return columns
+    .map((column, index) => ({ column, index }))
+    .filter(({ column }) => column.name !== "tenant_id")
+    .sort((a, b) => {
+      const rank = (name: string) => {
+        const at = preferred.indexOf(name);
+        return at === -1 ? preferred.length : at;
+      };
+      // Ties keep the compiler's order, so the columns nobody named stay where they were
+      // relative to each other.
+      return rank(a.column.name) - rank(b.column.name) || a.index - b.index;
+    })
+    .map(({ index }) => index);
+}

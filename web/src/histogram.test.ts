@@ -13,6 +13,7 @@ import { describeSeconds, toBuckets } from "./histogram";
 import {
   MAX_BUCKET_SECONDS,
   bucketSeconds,
+  displayOrder,
   toFieldCounts,
   toHistogram,
   type Query,
@@ -175,5 +176,35 @@ describe("describeSeconds", () => {
     expect(describeSeconds(300)).toBe("5 minutes");
     expect(describeSeconds(3600)).toBe("1 hour");
     expect(describeSeconds(86_400)).toBe("1 day");
+  });
+});
+
+describe("displayOrder", () => {
+  it("puts what a person reads first, and drops the column that is the same on every row", () => {
+    // The compiler's SELECT order is the table's: three identifiers before the message.
+    // On a screen that is the whole width gone before anything anybody can read.
+    const columns = [
+      "tenant_id",
+      "resource_id",
+      "site_id",
+      "observed_at",
+      "ingested_at",
+      "source_kind",
+      "severity",
+      "body",
+    ].map((name) => ({ name, type: "String" }));
+
+    const shown = displayOrder(columns).map((at) => columns[at]?.name);
+
+    expect(shown.slice(0, 4)).toEqual(["observed_at", "severity", "source_kind", "body"]);
+    expect(shown).not.toContain("tenant_id");
+    // Everything else survives, in the order it arrived.
+    expect(shown).toContain("resource_id");
+    expect(shown.indexOf("resource_id")).toBeLessThan(shown.indexOf("ingested_at"));
+  });
+
+  it("leaves a result set it has no opinion about alone", () => {
+    const columns = [{ name: "bucket", type: "DateTime" }, { name: "n", type: "UInt64" }];
+    expect(displayOrder(columns)).toEqual([0, 1]);
   });
 });

@@ -857,6 +857,15 @@ a.tile:hover {
 
 .ranked li {
   position: relative;
+  /* The bar is painted by the row itself rather than by a child behind it: a child at
+     `z-index: -1` sits behind the *panel's* background, not behind the row, so it is
+     invisible. Found by looking at it. */
+  background: linear-gradient(
+    to right,
+    var(--accent-dim) 0 var(--fill, 0%),
+    transparent var(--fill, 0%) 100%
+  );
+  border-radius: 2px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -874,14 +883,6 @@ a.tile:hover {
 .ranked-count {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-}
-
-.ranked-bar {
-  position: absolute;
-  inset: 0 auto 0 0;
-  z-index: -1;
-  background: var(--accent-dim);
-  border-radius: 2px;
 }
 
 @media (max-width: 70rem) {

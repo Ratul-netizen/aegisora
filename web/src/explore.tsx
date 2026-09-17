@@ -40,6 +40,7 @@ import {
   type TextMode,
   bucketSeconds,
   buildFilter,
+  displayOrder,
   isAbort,
   message,
   runQuery,
@@ -533,6 +534,8 @@ export function ExplorePage() {
    * and one `open` index into it, which is why following pauses while a row is open.
    */
   const shown: ResultSet | null = followed ? tail : (run.data ?? null);
+  /** Which columns to draw, and in what order — see `displayOrder`. */
+  const order = shown ? displayOrder(shown.columns) : [];
 
   return (
     <>
@@ -776,9 +779,12 @@ export function ExplorePage() {
                 <table>
                   <thead>
                     <tr>
-                      {shown.columns.map((c) => (
-                        <th key={c.name} title={c.type}>
-                          {c.name}
+                      {/* When, how bad, from where, what it said — then the rest. See
+                          `displayOrder`: the compiler's column order is the table's, and
+                          it puts three UUIDs before the message. */}
+                      {order.map((at) => (
+                        <th key={shown.columns[at]?.name ?? at} title={shown.columns[at]?.type}>
+                          {shown.columns[at]?.name}
                         </th>
                       ))}
                     </tr>
@@ -796,9 +802,9 @@ export function ExplorePage() {
                         className={open === i ? "open" : undefined}
                         aria-expanded={open === i}
                       >
-                        {row.map((cell, j) => (
-                          <td key={shown.columns[j]?.name ?? j} className="mono">
-                            {render(cell, shown.columns[j]?.type ?? "")}
+                        {order.map((at) => (
+                          <td key={shown.columns[at]?.name ?? at} className="mono">
+                            {render(row[at], shown.columns[at]?.type ?? "")}
                           </td>
                         ))}
                       </tr>

@@ -27,6 +27,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { useMemo } from "react";
 
 import { ago, listAlerts, order, type Alert } from "./alerting";
 import { api } from "./api";
@@ -56,9 +57,22 @@ const STACK: { severity: string; colour: string }[] = [
 
 export function OverviewPage() {
   const { tenant, range } = useShell();
-  const resolved = resolveRange(range);
-  const from = resolved?.from;
-  const to = resolved?.to;
+
+  // Memoised on the *descriptor* rather than computed inline, and this is not a tidying:
+  // `resolveRange` turns "last 1 hour" into two instants ending at `now`, so calling it
+  // during render produces a different window every time the component renders. Every
+  // panel's query key is derived from that window, so a fresh window is a fresh key, a
+  // fresh fetch, a re-render — and the page fetches in a loop until somebody navigates
+  // away. It renders as three panels stuck on their loading state, forever, while the
+  // server takes three queries a frame.
+  //
+  // Found by pointing a browser at it. No test would have: each query is correct, each
+  // one returns 200, and the only symptom is the count of them.
+  const { from, to } = useMemo(() => {
+    const resolved = resolveRange(range);
+    return { from: resolved?.from, to: resolved?.to };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to]);
 
   // ---- what exists, and what is wrong with it -------------------------------
   const resources = useQuery({
@@ -379,12 +393,15 @@ function Busiest({ result }: { result: ResultSet }) {
   return (
     <ul className="ranked">
       {rows.map((row) => (
-        <li key={row.host}>
+        // A bar as well as a number: "4 200 and 3 900" is two numbers, and two bars of
+        // almost the same length is a fact. Drawn as the row's own background — see the
+        // note in styles.css on why a child element cannot do it.
+        <li
+          key={row.host}
+          style={{ ["--fill" as string]: `${(row.n / worst) * 100}%` }}
+        >
           <span className="ranked-name mono">{row.host}</span>
           <span className="ranked-count">{row.n.toLocaleString()}</span>
-          {/* A bar as well as a number: "4 200 and 3 900" is two numbers, and two bars of
-              almost the same length is a fact. */}
-          <span className="ranked-bar" style={{ width: `${(row.n / worst) * 100}%` }} />
         </li>
       ))}
     </ul>
