@@ -1,9 +1,17 @@
 # Status — pick up from here
 
-Last updated: 2026-09-17 · repo: `github.com/Ratul-netizen/veyronis`
+Last updated: 2026-09-18 · repo: `github.com/Ratul-netizen/veyronis`
 
 > Read this first on a new machine. [PLAN.md](./PLAN.md) is strategy,
 > [SPEC.md](./SPEC.md) is the M0–M4 implementation spec, this is *where we are*.
+
+> **M5 Discovery is in progress and is nearly done.** SPEC stops at M4 deliberately, so
+> M5 has its own pair of documents: [`docs/M5-discovery.md`](./docs/M5-discovery.md) is
+> the specification with its decisions closed, and
+> [`docs/M5-state.md`](./docs/M5-state.md) is where it stands — what is built, the one
+> piece left (the scheduler and runner), the two decisions that are open on it, and the
+> four things worth knowing before touching any of it. Read that second file before
+> resuming M5.
 
 ---
 
