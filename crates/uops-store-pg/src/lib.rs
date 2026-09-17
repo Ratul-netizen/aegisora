@@ -55,6 +55,7 @@ pub mod facts;
 pub mod groups;
 pub mod identity;
 pub mod maintenance;
+pub mod neighbour_ingest;
 pub mod notify;
 pub mod page;
 pub mod pollable;

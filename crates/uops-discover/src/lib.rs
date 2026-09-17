@@ -31,10 +31,12 @@
 //! **Reach outside the ranges it was given.** [`Sweep`] is the only way to obtain an
 //! address to probe, and constructing one is the bounds check.
 
+pub mod neighbour;
 pub mod probe;
 pub mod run;
 pub mod sweep;
 
+pub use neighbour::{Neighbour, Neighbours, Protocol, neighbours};
 pub use probe::{Answer, Sighting, probe};
 pub use run::{Findings, run};
 pub use sweep::{

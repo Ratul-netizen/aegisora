@@ -164,6 +164,20 @@ comment in `resource.rs` says why: L2 adjacency is not causation. Discovery prod
 `connected_to` and nothing else. `depends_on` is a judgement about services, and M9's
 correlation engine is what will infer it.
 
+**And the edge is undirected.** `resource_relationship` is unique on
+`(tenant_id, source_id, target_id, kind)`, which stops one walk writing an edge twice and
+does nothing about the duplicate that actually occurs: walk both ends of a cable and you
+get A→B and B→A, two rows for one link, drawn twice by every topology view. `ConnectedTo`
+is symmetric — unlike `DependsOn`, `Hosts` and `Runs` — so the pair is sorted before it is
+written. The ordering is by UUID and is arbitrary on purpose: a canonical form, not a
+claim about which device matters.
+
+One more rule the implementation needed. A neighbour is matched to an existing resource by
+*lookup*, never by resolution — resolution creates, and §2.5 forbids creating the far end.
+A tier-1 hit (a chassis ID) decides alone; otherwise every hit must agree. Two resources
+answering to one neighbour is an **ambiguous** candidate rather than a coin toss, because
+drawing a cable to the wrong building is worse than drawing none.
+
 ### 2.7 Every run is a row, and every scan is audited.
 
 Scanning a network is a sensitive operation — it is the thing a customer's security team
@@ -205,9 +219,10 @@ cannot trust.
       produces a provisional resource
 - [x] A CIDR larger than /16 is refused when the job is written, with a sentence saying
       what to do instead
-- [ ] An LLDP walk between two known devices produces exactly one `connected_to` edge, and
-      re-walking produces no duplicate
-- [ ] An LLDP neighbour with no matching resource produces a candidate, not a resource
+- [x] An LLDP walk between two known devices produces exactly one `connected_to` edge,
+      and re-walking produces no duplicate — including when *both ends* are walked, which
+      the schema's UNIQUE does not catch and a sorted pair does
+- [x] An LLDP neighbour with no matching resource produces a candidate, not a resource
 - [x] A sweep stays within its concurrency and rate caps, measured against a paused
       clock — and the three caps are asserted to be consistent with each other, which
       they were not at first

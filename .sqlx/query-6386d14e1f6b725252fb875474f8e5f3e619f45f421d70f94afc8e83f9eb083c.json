@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO resource_relationship\n                (id, tenant_id, source_id, target_id, kind, discovered_by)\n            VALUES ($1, $2, $3, $4, 'connected_to', $5)\n            ON CONFLICT (tenant_id, source_id, target_id, kind) DO UPDATE\n               SET last_seen = now(),\n                   -- The protocol that most recently confirmed the link. LLDP and CDP\n                   -- both reporting one cable is normal, and whichever spoke last is a\n                   -- fact about the walk rather than about the cable.\n                   discovered_by = EXCLUDED.discovered_by\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6386d14e1f6b725252fb875474f8e5f3e619f45f421d70f94afc8e83f9eb083c"
+}
