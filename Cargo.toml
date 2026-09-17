@@ -180,6 +180,18 @@ lto = "thin"
 codegen-units = 1
 
 [profile.dev]
+# Incremental compilation off, which is not the usual advice.
+#
+# It is a rebuild cache, so turning it off costs time after a small edit and nothing
+# else -- and on this workspace it costs about 12 GB of disk, which it reaches within a
+# few full builds and then keeps. On a machine that has been sitting at 96-99% full it
+# was being deleted by hand several times a day, and a cache that has to be swept up
+# that often is not paying for itself. `target/debug/deps` is 33 GB and is the real
+# build output; this was half as much again on top of it, to save seconds.
+#
+# Turn it back on (delete this line) if disk stops being the binding constraint.
+incremental = false
+
 # Dependencies at opt-level 1: the crypto and uuid crates are pathologically slow
 # when built unoptimised, which makes the test suite feel broken.
 [profile.dev.package."*"]
