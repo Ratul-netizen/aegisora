@@ -12,15 +12,19 @@
 //! a telemetry read. The caller resolves once and passes the result — which is also what
 //! keeps `uops-query`'s golden tests free of a database.
 //!
-//! **`tail` is not here yet.** It needs a streaming response rather than a collected
-//! body, and the compiler's separate `compile_tail` entry point already exists for it.
-//! Adding a signature that returns a `BoxStream` of one buffered chunk would be a
-//! promise this does not keep.
+//! **`tail` returns a page, not a stream.** SPEC sketches the live tail as a stream, and
+//! the signature here is deliberately the same shape as `query`: one window in, one
+//! collected `ResultSet` out. `MergeTree` has no change feed — anything calling itself a
+//! stream would be this poll with a connection held open in front of it, and a held-open
+//! connection is the part that on-premise proxies drop at sixty seconds. What makes the
+//! result a stream rather than a repeated search is the *window*, which is half-open on
+//! `ingested_at`, so consecutive polls partition the rows exactly once each. See
+//! [`uops_query::follow`].
 
 use async_trait::async_trait;
 use serde::Serialize;
 use uops_core::TenantScope;
-use uops_query::{Query, ResolvedResources, compile};
+use uops_query::{Compiled, Query, ResolvedResources, compile, compile_tail};
 
 use crate::client::ChClient;
 use crate::error::{Error, Result};
@@ -31,6 +35,21 @@ use crate::rows::{LogRow, MetricRow, ResultSet, StateRow};
 pub trait TelemetryStore: Send + Sync {
     /// Run a compiled query.
     async fn query(
+        &self,
+        query: &Query,
+        scope: &TenantScope,
+        resources: &ResolvedResources,
+    ) -> Result<ResultSet>;
+
+    /// Run one poll of a live tail.
+    ///
+    /// A separate method rather than a flag on `query`, because it is a different
+    /// physical query: ordered by time rather than by resource, which is what the
+    /// `p_by_time` projection exists to serve — W1 measured that ordering at 2 303 ms
+    /// and 33.8M rows without it, and 72 ms and 254K rows with it. The caller builds the
+    /// window with [`uops_query::follow`]; `compile_tail` refuses anything that would
+    /// stop the projection matching.
+    async fn tail(
         &self,
         query: &Query,
         scope: &TenantScope,
@@ -108,21 +127,13 @@ impl ChStore {
         self.client.run(&sql, &[]).await?;
         Ok(())
     }
-}
 
-#[async_trait]
-impl TelemetryStore for ChStore {
-    async fn query(
-        &self,
-        query: &Query,
-        scope: &TenantScope,
-        resources: &ResolvedResources,
-    ) -> Result<ResultSet> {
-        // The tenant predicate is written by the compiler, from the scope. Nothing in
-        // this file can produce SQL, which is what makes that guarantee hold all the
-        // way to the wire.
-        let compiled = compile(query, scope, resources)?;
-
+    /// Run whatever the compiler produced.
+    ///
+    /// Shared by `query` and `tail` so the two entry points cannot drift in how they
+    /// bind parameters or read a response — the difference between them is which
+    /// statement was compiled, and nothing else.
+    async fn execute(&self, compiled: Compiled) -> Result<ResultSet> {
         // JSONCompact: column names once in `meta`, values as arrays. The row-object
         // format repeats every column name on every row, which at ten thousand rows is
         // a large amount of bandwidth spent restating the schema.
@@ -136,6 +147,32 @@ impl TelemetryStore for ChStore {
 
         let raw = self.client.run(&sql, &params).await?;
         ResultSet::parse(&raw.body, compiled.table, compiled.warnings, raw.summary)
+    }
+}
+
+#[async_trait]
+impl TelemetryStore for ChStore {
+    async fn query(
+        &self,
+        query: &Query,
+        scope: &TenantScope,
+        resources: &ResolvedResources,
+    ) -> Result<ResultSet> {
+        // The tenant predicate is written by the compiler, from the scope. Nothing in
+        // this file can produce SQL, which is what makes that guarantee hold all the
+        // way to the wire.
+        self.execute(compile(query, scope, resources)?).await
+    }
+
+    async fn tail(
+        &self,
+        query: &Query,
+        scope: &TenantScope,
+        resources: &ResolvedResources,
+    ) -> Result<ResultSet> {
+        // The same guarantee by the same route: a different entry point into the same
+        // compiler, not a second place that writes SQL.
+        self.execute(compile_tail(query, scope, resources)?).await
     }
 
     async fn health(&self) -> Result<StoreHealth> {

@@ -56,7 +56,7 @@ pub mod warning;
 
 pub use ast::{
     AggFunc, Aggregation, CompareOp, Expr, Field, Query, ResourceSelector, SignalType, Sort,
-    SortKey, TextMode, TimeRange, Value,
+    SortKey, TAIL_LOOKBACK, TAIL_SKEW, TextMode, TimeRange, Value, follow,
 };
 pub use compile::{Compiled, MAX_LIMIT, TAIL_LIMIT, compile, compile_tail};
 pub use error::{Error, Result};

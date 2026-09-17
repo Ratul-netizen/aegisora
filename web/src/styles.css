@@ -705,6 +705,56 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+/* --- the live tail --- */
+
+.tailing {
+  margin: 0.6rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.tailing p {
+  margin: 0.2rem 0;
+  font-size: 0.9rem;
+}
+
+.tailing .warn {
+  color: var(--warn);
+}
+
+/* The one moving thing on the page, and it means something: rows are arriving. */
+.live {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+button.following {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The dot still marks a live view; it just stops moving. Nothing here conveys
+     information by animation alone. */
+  .live {
+    animation: none;
+  }
+}
+
 @media (max-width: 70rem) {
   /* One column. The sidebar and the detail are aids; the rows are the page. */
   .explorer,

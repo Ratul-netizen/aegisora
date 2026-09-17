@@ -272,6 +272,19 @@ impl Fixture {
         builder.body(Body::from(body.to_string())).unwrap()
     }
 
+    /// The same request, to the tail. `since` is absent on the first poll and is the
+    /// previous response's `next_since` on every one after it.
+    fn post_tail(&self, query: &serde_json::Value, since: Option<&str>) -> Request<Body> {
+        let mut body = serde_json::json!({ "query": query });
+        if let Some(since) = since {
+            body["since"] = serde_json::Value::String(since.to_owned());
+        }
+        let request = self.post_query(&body, true);
+        let (mut parts, body) = request.into_parts();
+        parts.uri = "/api/v1/query/tail".parse().unwrap();
+        Request::from_parts(parts, body)
+    }
+
     async fn call(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = app(self).oneshot(request).await.unwrap();
         let status = response.status();
@@ -692,4 +705,145 @@ async fn a_viewer_may_query_because_it_changes_nothing() {
         .call(f.post_query(&ast(&serde_json::json!({})), true))
         .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// A log line that reached storage just now, which is the only kind a tail can see.
+///
+/// The fixtures above sit two hours back so that the pre-aggregates have something to
+/// answer; the tail deliberately refuses to look that far behind — see `TAIL_LOOKBACK` —
+/// so its fixtures are written at the instant the test runs.
+fn just_arrived(tenant: TenantId, body: &str) -> LogRow {
+    let now = Utc::now();
+    LogRow {
+        observed_at: now,
+        ingested_at: now,
+        ..log_row(tenant, ResourceId::new(), body, 0)
+    }
+}
+
+/// The property the whole tail rests on, asserted through HTTP: two polls, every row
+/// once.
+///
+/// The second poll sends back the watermark the first one returned. Nothing in the client
+/// computes a window, which is what makes the sequence contiguous even when the browser's
+/// clock disagrees with the server's.
+#[tokio::test]
+async fn two_tail_polls_deliver_each_row_once() {
+    let f = fixture("tail", Role::Viewer).await;
+    f.telemetry
+        .insert_logs(&[just_arrived(f.tenant, "before the first poll")])
+        .await
+        .unwrap();
+
+    let query = ast(&serde_json::json!({}));
+    let (status, first) = f.call(f.post_tail(&query, None)).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(bodies(&first), ["before the first poll"], "{first}");
+    assert_eq!(first["complete"], true, "{first}");
+    assert_eq!(first["skipped"], false, "{first}");
+
+    // Arrives between the two polls, which is the case the watermark exists for.
+    f.telemetry
+        .insert_logs(&[just_arrived(f.tenant, "between the polls")])
+        .await
+        .unwrap();
+
+    let since = first["next_since"].as_str().expect("a watermark");
+    let (status, second) = f.call(f.post_tail(&query, Some(since))).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(
+        bodies(&second),
+        ["between the polls"],
+        "the first row was already delivered; a tail that re-delivered it would scroll \
+         the same line past the operator forever: {second}"
+    );
+}
+
+/// Switching a tail on is one audit row. Leaving it on is none.
+///
+/// A tail polls every couple of seconds. Recording each poll would put 1 800 rows an hour
+/// into the access log for one operator watching one screen, and an access log that is
+/// mostly polling is one nobody reads — the same reasoning that keeps `/health` out of it.
+#[tokio::test]
+async fn a_tail_is_audited_when_it_starts_and_not_on_every_poll() {
+    let f = fixture("tail-audit", Role::Viewer).await;
+    let query = ast(&serde_json::json!({}));
+
+    let (_, first) = f.call(f.post_tail(&query, None)).await;
+    let since = first["next_since"]
+        .as_str()
+        .expect("a watermark")
+        .to_owned();
+    for _ in 0..3 {
+        f.call(f.post_tail(&query, Some(&since))).await;
+    }
+
+    let tails: Vec<_> = f
+        .access_log()
+        .await
+        .into_iter()
+        .filter(|(_, fingerprint, _)| {
+            fingerprint
+                .as_deref()
+                .is_some_and(|f| f.starts_with("tail:"))
+        })
+        .collect();
+    assert_eq!(tails.len(), 1, "{tails:?}");
+    assert_eq!(tails[0].1.as_deref(), Some("tail:log:logs+filter"));
+}
+
+/// Following the histogram means following the rows its bars are counting.
+///
+/// The Explorer holds one query and derives the chart from it, so "tail this" arrives
+/// carrying an aggregation. `compile_tail` refuses aggregates outright — correctly, they
+/// cannot be streamed — so the aggregation is dropped before compilation rather than
+/// turned into a 400 the operator can do nothing about.
+#[tokio::test]
+async fn following_an_aggregated_search_returns_its_rows() {
+    let f = fixture("tail-agg", Role::Viewer).await;
+    f.telemetry
+        .insert_logs(&[just_arrived(f.tenant, "counted by a bar")])
+        .await
+        .unwrap();
+
+    let histogram = ast(&serde_json::json!({
+        "aggregations": [{ "func": "count", "field": null, "alias": "n" }],
+        "group_by": [{ "field": "time_bucket", "seconds": 300 }],
+        "limit": 1000
+    }));
+
+    let (status, page) = f.call(f.post_tail(&histogram, None)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(bodies(&page), ["counted by a bar"], "{page}");
+}
+
+#[tokio::test]
+async fn a_tail_poll_without_the_csrf_header_is_refused() {
+    let f = fixture("tail-csrf", Role::Viewer).await;
+    let request = f.post_query(
+        &serde_json::json!({ "query": ast(&serde_json::json!({})) }),
+        false,
+    );
+    let (mut parts, body) = request.into_parts();
+    parts.uri = "/api/v1/query/tail".parse().unwrap();
+
+    let (status, _) = f.call(Request::from_parts(parts, body)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// The `body` column of every row a page delivered, in the order it delivered them.
+fn bodies(page: &serde_json::Value) -> Vec<String> {
+    let at = page["columns"]
+        .as_array()
+        .expect("columns")
+        .iter()
+        .position(|c| c["name"] == "body")
+        .expect("a tail selects whole rows, which include the body");
+
+    page["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| row[at].as_str().unwrap_or_default().to_owned())
+        .collect()
 }

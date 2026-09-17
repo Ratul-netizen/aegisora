@@ -1,6 +1,6 @@
 # Status — pick up from here
 
-Last updated: 2026-09-16 · repo: `github.com/Ratul-netizen/veyronis`
+Last updated: 2026-09-17 · repo: `github.com/Ratul-netizen/veyronis`
 
 > Read this first on a new machine. [PLAN.md](./PLAN.md) is strategy,
 > [SPEC.md](./SPEC.md) is the M0–M4 implementation spec, this is *where we are*.
@@ -77,15 +77,23 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M3 · OTLP decoding** | ✅ logs and metrics → the same rows syslog produces — 21 tests |
 | **M3 · the OTLP receiver** | ✅ `uops-collector-otlp` — OTLP/HTTP, logs + metrics + traces, end to end |
 | **M3 · Log Explorer** | ✅ histogram with drag-to-zoom, field sidebar, row detail, **all signals for a resource** |
-| M3 · live tail, saved searches | ⬜ |
+| **M3 · live tail** | ✅ `POST /api/v1/query/tail` — half-open on `ingested_at`, so polls partition the rows |
+| M3 · saved searches | ⬜ |
 | M4 | ⬜ |
 
 ## Resume in three commands
 
 ```bash
 git clone https://github.com/Ratul-netizen/veyronis && cd veyronis
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 527 tests, green
-cd web && npm ci && npm test                                            # 13 more
+docker compose -f deploy/docker-compose.yml up -d postgres clickhouse
+bash scripts/db.sh migrate && bash scripts/ch.sh apply
+
+# uops-store-pg reads DATABASE_URL and refuses to guess one, so the suite is short by
+# about eighty tests without it — and they fail with instructions rather than passing.
+export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
+export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 843 tests, green
+cd web && npm ci && npm test                                            # 31 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 

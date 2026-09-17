@@ -325,6 +325,19 @@ const CASES: &[RouteCase] = &[
             r#"{"signal":"log","time":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"},"resources":{"type":"all"},"limit":1}"#,
         ),
     },
+    RouteCase {
+        // The live tail reads telemetry on its own path, with its own compiler entry
+        // point. A second path to the rows is a second place the tenant predicate could
+        // be missing, which is exactly why it is named here rather than assumed to
+        // inherit the case above.
+        path: "/api/v1/query/tail",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"query":{"signal":"log","time":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"},"resources":{"type":"all"},"limit":1}}"#,
+        ),
+    },
 ];
 
 /// Every path the router registers, read from its source.

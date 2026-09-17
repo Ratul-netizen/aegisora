@@ -39,6 +39,7 @@ import {
   type TextMode,
   bucketSeconds,
   buildFilter,
+  isAbort,
   message,
   runQuery,
   toFieldCounts,
@@ -46,6 +47,7 @@ import {
 } from "./query";
 import { resolveRange, useShell } from "./shell";
 import { AllSignals } from "./signals";
+import { POLL_MS, merge, pollTail } from "./tail";
 
 const TEXT_MODES: { value: TextMode; label: string; hint: string }[] = [
   { value: "any_token", label: "any word", hint: "Uses the text index." },
@@ -246,6 +248,19 @@ export function ExplorePage() {
   const [picked, setPicked] = useState<{ field: Field; value: string }[]>([]);
   const [open, setOpen] = useState<number | null>(null);
 
+  /**
+   * The search being followed, or null.
+   *
+   * A separate query object rather than a flag over `ran`, because a tail is not the
+   * search re-run: the operator starts following *this* filter, and then changes the
+   * controls to build the next search while the tail keeps delivering the old one. That
+   * is what somebody watching an incident actually does.
+   */
+  const [followed, setFollowed] = useState<Query | null>(null);
+  const [tail, setTail] = useState<ResultSet | null>(null);
+  const [lag, setLag] = useState({ behind: false, skipped: false });
+  const [tailError, setTailError] = useState<string | null>(null);
+
   const run = useMutation({
     mutationFn: (q: Query) => runQuery(tenant.tenant_id, q),
   });
@@ -280,6 +295,10 @@ export function ExplorePage() {
     const q = build();
     if (!q) return;
     hasRun.current = true;
+    // A search and a tail are two different answers to two different questions, and
+    // showing both at once would mean two tables disagreeing about which rows exist.
+    // Running one ends the other; the tail is one click away again.
+    setFollowed(null);
     setOpen(null);
     setRan(q);
     run.mutate(q);
@@ -314,6 +333,84 @@ export function ExplorePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked]);
 
+  /**
+   * The watermark, outside React's state.
+   *
+   * It survives the effect below being torn down and set up again — which happens every
+   * time a row is opened and closed — so resuming continues from where the tail stopped
+   * rather than from a fresh minute. A `useState` here would re-run the effect on every
+   * poll, and a fresh `null` on resume would re-deliver the last minute of rows as
+   * though they had just arrived.
+   */
+  const since = useRef<string | null>(null);
+
+  /**
+   * The poll loop.
+   *
+   * Paused while a row is open, because prepending rows renumbers the list and the
+   * detail panel is addressed by index: without this, a row opened during a busy minute
+   * silently becomes a different row under the operator's eyes. Closing it resumes from
+   * the same watermark, so the rows that arrived while it was open are delivered rather
+   * than skipped.
+   */
+  useEffect(() => {
+    if (!followed || open !== null) return;
+
+    const controller = new AbortController();
+    let timer: number | undefined;
+    let stopped = false;
+
+    const poll = async () => {
+      try {
+        const page = await pollTail(
+          tenant.tenant_id,
+          followed,
+          since.current,
+          controller.signal,
+        );
+        // Only ever the server's own value. A window computed here would be wrong by
+        // whatever this browser's clock is wrong by, and silently — an empty tail on a
+        // busy estate, with nothing on screen to explain it.
+        since.current = page.next_since;
+        setTail((was) => merge(was, page));
+        setLag({ behind: !page.complete, skipped: page.skipped });
+        setTailError(null);
+      } catch (error) {
+        if (isAbort(error)) return;
+        // The watermark is deliberately not advanced. A ClickHouse restart or a proxy
+        // hiccup is a gap of a few seconds, and the next successful poll asks for the
+        // window that failed — so the rows that arrived during the outage arrive late
+        // rather than never.
+        setTailError(message(error));
+      }
+      if (!stopped) timer = window.setTimeout(() => void poll(), POLL_MS);
+    };
+
+    void poll();
+    return () => {
+      stopped = true;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [followed, open, tenant.tenant_id]);
+
+  /** Start following what the controls currently describe. */
+  const follow = () => {
+    const q = build();
+    if (!q) return;
+    since.current = null;
+    setTail(null);
+    setLag({ behind: false, skipped: false });
+    setTailError(null);
+    setOpen(null);
+    setFollowed(q);
+  };
+
+  const unfollow = () => {
+    setFollowed(null);
+    setLag({ behind: false, skipped: false });
+  };
+
   const resolved = resolveRange(range);
   // Extracted so the dependency arrays below are two numbers rather than two expressions
   // the linter cannot check — and so that a re-render with an identical window does not
@@ -341,6 +438,14 @@ export function ExplorePage() {
 
   const textSearchable = signal === "log" || signal === "event";
   const fields = SIDEBAR[signal] ?? [];
+
+  /**
+   * The rows on screen: the tail's while following, the search's otherwise.
+   *
+   * One table either way, rather than two that would disagree about which rows exist —
+   * and one `open` index into it, which is why following pauses while a row is open.
+   */
+  const shown: ResultSet | null = followed ? tail : (run.data ?? null);
 
   return (
     <>
@@ -426,6 +531,17 @@ export function ExplorePage() {
         <button type="submit" className="primary" disabled={run.isPending}>
           {run.isPending ? "Running…" : "Run"}
         </button>
+
+        {/* Not a submit: following is a different verb from searching, and a form whose
+            Enter key sometimes starts a tail is one nobody can predict. */}
+        <button
+          type="button"
+          className={followed ? "following" : undefined}
+          onClick={() => (followed ? unfollow() : follow())}
+          aria-pressed={followed !== null}
+        >
+          {followed ? "Stop" : "Follow"}
+        </button>
       </form>
 
       {picked.length > 0 && (
@@ -455,7 +571,46 @@ export function ExplorePage() {
         </div>
       )}
 
-      {ran && buckets.length > 0 && (
+      {followed && (
+        <div className="tailing" role="status">
+          <p>
+            <span className="live" aria-hidden="true" />
+            {open !== null
+              ? "Paused while a row is open — nothing is being missed; the watermark is held."
+              : "Following. New rows arrive at the top."}
+            {" "}
+            {tail ? `${tail.rows.length.toLocaleString()} rows in view.` : "Waiting…"}
+          </p>
+
+          {/* Both of these are the server's own answers about its own window, not this
+              app's guesses. A tail that quietly drops rows is worse than one that says
+              it is behind. */}
+          {lag.behind && (
+            <p className="warn">
+              Ingest is arriving faster than the tail can show it, so some rows in the
+              last window were left behind. The search still finds all of them.
+            </p>
+          )}
+          {lag.skipped && (
+            <p className="warn">
+              This tail was away longer than the server looks back, so the rows in
+              between were skipped. They are still in storage — run the search to see
+              them.
+            </p>
+          )}
+          {tailError && (
+            <p className="warn">
+              The last poll failed: {tailError}. Still trying, and the watermark is held,
+              so whatever arrives meanwhile is delivered on the next one.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* The chart and the sidebar describe the window that was searched, and a tail has
+          no window. Hiding them while following is what keeps them from being read as a
+          live chart of something they are not counting. */}
+      {!followed && ran && buckets.length > 0 && (
         <Histogram
           buckets={buckets}
           seconds={seconds}
@@ -467,9 +622,11 @@ export function ExplorePage() {
         />
       )}
 
-      {run.data && (
+      {shown && (
         <div className="explorer">
-          {fields.length > 0 && ran && (
+          {/* Counted over the searched window, so they belong to the search and not to
+              the tail — see the note above the histogram. */}
+          {!followed && fields.length > 0 && ran && (
             <nav className="fields" aria-label="Fields">
               {fields.map((f) => (
                 <FieldCounts
@@ -493,23 +650,30 @@ export function ExplorePage() {
           )}
 
           <div className="rows">
-            <Warnings result={run.data} />
+            <Warnings result={shown} />
             <p className="dim">
-              {run.data.rows.length.toLocaleString()} rows, read{" "}
-              {run.data.rows_read.toLocaleString()} from{" "}
-              <span className="mono">{run.data.table}</span> (
-              {(run.data.bytes_read / 1_048_576).toFixed(1)} MiB)
-              {buckets.length > 0 && <> · bars are {describeSeconds(seconds)}</>}.
+              {shown.rows.length.toLocaleString()} rows, read{" "}
+              {shown.rows_read.toLocaleString()} from{" "}
+              <span className="mono">{shown.table}</span> (
+              {(shown.bytes_read / 1_048_576).toFixed(1)} MiB)
+              {!followed && buckets.length > 0 && (
+                <> · bars are {describeSeconds(seconds)}</>
+              )}
+              {/* The tail's totals are what it has cost since it was switched on, which
+                  is the number that explains an afternoon's load. */}
+              {followed && <> · since this tail started</>}.
             </p>
 
-            {run.data.rows.length === 0 ? (
-              <p className="dim">No rows in this window.</p>
+            {shown.rows.length === 0 ? (
+              <p className="dim">
+                {followed ? "Nothing has arrived yet." : "No rows in this window."}
+              </p>
             ) : (
               <div className="scroll-x">
                 <table>
                   <thead>
                     <tr>
-                      {run.data.columns.map((c) => (
+                      {shown.columns.map((c) => (
                         <th key={c.name} title={c.type}>
                           {c.name}
                         </th>
@@ -519,8 +683,10 @@ export function ExplorePage() {
                   <tbody>
                     {/* The index is the key: a telemetry row has no identity of its own,
                         and two identical rows in a result set are two real occurrences
-                        rather than a duplicate to be collapsed. */}
-                    {run.data.rows.map((row, i) => (
+                        rather than a duplicate to be collapsed. While following, the
+                        list is renumbered by every poll — which is exactly why opening a
+                        row pauses it. */}
+                    {shown.rows.map((row, i) => (
                       <tr
                         key={i}
                         onClick={() => setOpen(open === i ? null : i)}
@@ -528,8 +694,8 @@ export function ExplorePage() {
                         aria-expanded={open === i}
                       >
                         {row.map((cell, j) => (
-                          <td key={run.data.columns[j]?.name ?? j} className="mono">
-                            {render(cell, run.data.columns[j]?.type ?? "")}
+                          <td key={shown.columns[j]?.name ?? j} className="mono">
+                            {render(cell, shown.columns[j]?.type ?? "")}
                           </td>
                         ))}
                       </tr>
@@ -540,18 +706,18 @@ export function ExplorePage() {
             )}
           </div>
 
-          {open !== null && run.data.rows[open] && (
+          {open !== null && shown.rows[open] && (
             <RowDetail
               tenant={tenant.tenant_id}
-              result={run.data}
-              row={run.data.rows[open]}
+              result={shown}
+              row={shown.rows[open]}
               onClose={() => setOpen(null)}
             />
           )}
         </div>
       )}
 
-      {!run.data && !run.isPending && !run.isError && (
+      {!shown && !followed && !run.isPending && !run.isError && (
         <p className="dim">Choose a signal and run. The window is the one in the header.</p>
       )}
     </>

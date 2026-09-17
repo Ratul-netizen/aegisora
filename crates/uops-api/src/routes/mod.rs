@@ -80,6 +80,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sites", get(sites::list))
         .route("/api/v1/sites/{id}/location", put(sites::place))
         .route("/api/v1/query", post(query::run))
+        // The tail is its own route rather than a flag on the one above, because it is
+        // its own physical query — time-ordered, so the `p_by_time` projection serves it
+        // — and because its response carries a watermark that a search has no use for.
+        .route("/api/v1/query/tail", post(query::tail))
         // Deliberately above the audit layer as well as outside authentication: an
         // orchestrator polling every five seconds would otherwise write an audit row
         // every five seconds, and an audit log that is mostly health checks is one

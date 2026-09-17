@@ -424,6 +424,80 @@ impl Query {
     }
 }
 
+/// How far back a tail's `observed_at` bracket reaches behind the ingest window.
+///
+/// The tail's exact predicate is on `ingested_at` — see [`follow`] — but partitions are
+/// `toYYYYMMDD(observed_at)`, so without a bracket on that column every poll would scan
+/// every partition in the retention period. An hour is the compromise: a WAL segment
+/// replayed after a `ClickHouse` restart, or a device whose clock is a few minutes slow,
+/// still appears in the tail; a log line stamped last Tuesday appears in a search
+/// instead. That is a real limit, and it is written down rather than discovered.
+pub const TAIL_LOOKBACK: chrono::Duration = chrono::Duration::hours(1);
+
+/// How far ahead of the poll instant the same bracket reaches.
+///
+/// Device clocks run fast. A switch five minutes ahead of the collector writes rows with
+/// an `observed_at` in the future, and a bracket ending at *now* would hold them out of
+/// the tail until their own timestamp came round — which is to say, it would show them
+/// five minutes late, in a view whose entire purpose is to be live.
+pub const TAIL_SKEW: chrono::Duration = chrono::Duration::minutes(5);
+
+/// The same query, restricted to what arrived since the last poll.
+///
+/// This is what makes the live tail a *stream* rather than a repeated search. The
+/// window is half-open on **`ingested_at`**, `[since, now)`, so consecutive polls
+/// partition the rows exactly: every row that reaches storage is delivered once, and
+/// none is delivered twice. Windowing on `observed_at` instead — the obvious spelling —
+/// loses every row whose ingest lagged its timestamp past the watermark, which during
+/// the incident that makes somebody open a tail is precisely when lag is worst.
+///
+/// `observed_at` still gets a bracket, because that is what the table is partitioned on;
+/// see [`TAIL_LOOKBACK`] and [`TAIL_SKEW`] for how wide it is and what falls outside it.
+///
+/// Aggregation, grouping, ordering and paging are dropped rather than rejected: a caller
+/// asks to follow *a search*, and the search it is following may perfectly well be the
+/// histogram's. [`crate::compile_tail`] refuses the ones that would change what a tail
+/// means; this removes them first so that following any saved search is possible at all.
+#[must_use]
+pub fn follow(q: &Query, since: DateTime<Utc>, now: DateTime<Utc>) -> Query {
+    let arrived = Expr::And {
+        of: vec![
+            Expr::Compare {
+                field: Field::IngestedAt,
+                cmp: CompareOp::Gte,
+                value: Value::Timestamp(since),
+            },
+            Expr::Compare {
+                field: Field::IngestedAt,
+                cmp: CompareOp::Lt,
+                value: Value::Timestamp(now),
+            },
+        ],
+    };
+
+    Query {
+        time: TimeRange::new(since - TAIL_LOOKBACK, now + TAIL_SKEW),
+        filter: Some(match q.filter.clone() {
+            // Flattened into the caller's `and` rather than nested inside another one.
+            // A tail's compiled SQL is read by whoever is explaining a slow poll, and
+            // three levels of parentheses around two timestamps helps nobody.
+            Some(Expr::And { mut of }) => {
+                of.push(arrived);
+                Expr::And { of }
+            }
+            Some(other) => Expr::And {
+                of: vec![other, arrived],
+            },
+            None => arrived,
+        }),
+        aggregations: Vec::new(),
+        group_by: Vec::new(),
+        order_by: Vec::new(),
+        offset: 0,
+        ..q.clone()
+    }
+}
+
 /// Every field an expression touches, for planning and validation.
 pub(crate) fn fields_of(e: &Expr, out: &mut Vec<Field>) {
     match e {
@@ -531,5 +605,108 @@ mod tests {
     fn set_operators_are_distinguishable_from_scalar_ones() {
         assert!(CompareOp::In.is_set_op() && CompareOp::NotIn.is_set_op());
         assert!(!CompareOp::Eq.is_set_op());
+    }
+    /// The three properties a stream has to have, checked on the shape rather than on
+    /// the SQL: consecutive polls partition the rows, the ingest predicate is present,
+    /// and the caller's own filter survives.
+    #[test]
+    fn consecutive_tail_windows_are_contiguous_and_half_open() {
+        let t0 = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let t1 = t0 + chrono::Duration::seconds(2);
+        let t2 = t1 + chrono::Duration::seconds(2);
+
+        let base = Query::new(SignalType::Log, TimeRange::new(t0, t1));
+        let first = follow(&base, t0, t1);
+        let second = follow(&base, t1, t2);
+
+        // `[t0, t1)` then `[t1, t2)`: a row ingested exactly at t1 is in the second poll
+        // and only the second. Every other spelling either duplicates it or loses it.
+        assert_eq!(ingest_bounds(&first), (t0, t1));
+        assert_eq!(ingest_bounds(&second), (t1, t2));
+    }
+
+    #[test]
+    fn a_tail_brackets_observed_at_around_the_ingest_window() {
+        let since = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let now = since + chrono::Duration::seconds(2);
+        let q = follow(
+            &Query::new(SignalType::Log, TimeRange::new(since, now)),
+            since,
+            now,
+        );
+
+        // Wide enough for a replayed WAL segment and a fast device clock; bounded, so a
+        // poll never asks ClickHouse for every partition in the retention period.
+        assert_eq!(q.time.start, since - TAIL_LOOKBACK);
+        assert_eq!(q.time.end, now + TAIL_SKEW);
+    }
+
+    #[test]
+    fn a_tail_keeps_the_search_it_is_following() {
+        let since = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let now = since + chrono::Duration::seconds(2);
+
+        let searching =
+            Query::new(SignalType::Log, TimeRange::new(since, now)).with_filter(Expr::Text {
+                field: Field::Body,
+                mode: TextMode::AnyToken,
+                terms: vec!["timeout".into()],
+            });
+
+        let Some(Expr::And { of }) = follow(&searching, since, now).filter else {
+            panic!("a followed search is its own filter AND the ingest window");
+        };
+        assert!(matches!(of.first(), Some(Expr::Text { .. })), "{of:?}");
+        assert_eq!(of.len(), 2);
+    }
+
+    #[test]
+    fn following_an_aggregate_follows_its_rows() {
+        // The histogram is a Query too, and "tail this" has an obvious meaning: the rows
+        // the bars are counting. compile_tail refuses an aggregate, so dropping the
+        // aggregation here is what makes that request answerable at all.
+        let since = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let now = since + chrono::Duration::seconds(2);
+
+        let mut histogram = Query::new(SignalType::Log, TimeRange::new(since, now));
+        histogram.aggregations = vec![Aggregation {
+            func: AggFunc::Count,
+            field: None,
+            alias: "n".into(),
+        }];
+        histogram.group_by = vec![Field::TimeBucket { seconds: 60 }];
+        histogram.offset = 500;
+
+        let tail = follow(&histogram, since, now);
+        assert!(!tail.is_aggregate() && tail.group_by.is_empty());
+        assert_eq!(tail.offset, 0, "a stream has no stable offset to page from");
+    }
+
+    /// The `[start, end)` the ingest predicate actually asks for.
+    fn ingest_bounds(q: &Query) -> (DateTime<Utc>, DateTime<Utc>) {
+        let mut bounds = Vec::new();
+        let mut fields = Vec::new();
+        let filter = q.filter.clone().expect("a tail always filters on ingest");
+        fields_of(&filter, &mut fields);
+        assert!(fields.iter().all(|f| *f == Field::IngestedAt), "{fields:?}");
+
+        collect_timestamps(&filter, &mut bounds);
+        assert_eq!(bounds.len(), 2, "{bounds:?}");
+        (bounds[0], bounds[1])
+    }
+
+    fn collect_timestamps(e: &Expr, out: &mut Vec<DateTime<Utc>>) {
+        match e {
+            Expr::And { of } | Expr::Or { of } => {
+                for sub in of {
+                    collect_timestamps(sub, out);
+                }
+            }
+            Expr::Compare {
+                value: Value::Timestamp(t),
+                ..
+            } => out.push(*t),
+            _ => {}
+        }
     }
 }

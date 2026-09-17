@@ -785,3 +785,123 @@ async fn the_first_sample_of_a_series_has_no_rate() {
         .collect();
     assert!(real.is_empty(), "one sample is not a rate: {real:?}");
 }
+
+/// The property that makes the tail a stream rather than a repeated search.
+///
+/// Two consecutive polls over `[t0, t1)` and `[t1, t2)` must between them deliver every
+/// row once and no row twice. The window is half-open on `ingested_at`, so a row that
+/// lands exactly on a boundary belongs to the later poll and only to it — which is the
+/// one case that is impossible to get right by eye and trivial to get wrong.
+#[tokio::test]
+async fn consecutive_tail_polls_deliver_every_row_exactly_once() {
+    let store = store();
+    let tenant = TenantId::new();
+    let resource = ResourceId::new();
+    let scope = scope_for(tenant);
+
+    let t0 = window().start;
+    let t1 = t0 + Duration::seconds(10);
+    let t2 = t1 + Duration::seconds(10);
+
+    // Two in the first poll's window, one exactly on the boundary, one in the second's.
+    let rows = [
+        ingested_at_row(tenant, resource, "first", t0),
+        ingested_at_row(tenant, resource, "second", t0 + Duration::seconds(5)),
+        ingested_at_row(tenant, resource, "on the boundary", t1),
+        ingested_at_row(tenant, resource, "third", t1 + Duration::seconds(5)),
+    ];
+    store.insert_logs(&rows).await.unwrap();
+
+    let base = Query::new(SignalType::Log, window());
+    let first = bodies(&store, &scope, &uops_query::follow(&base, t0, t1)).await;
+    let second = bodies(&store, &scope, &uops_query::follow(&base, t1, t2)).await;
+
+    assert_eq!(first, ["second", "first"], "half-open at the end");
+    assert_eq!(
+        second,
+        ["third", "on the boundary"],
+        "a row ingested exactly at the watermark belongs to the next poll"
+    );
+}
+
+/// The reason the window is on `ingested_at` and not on `observed_at`.
+///
+/// A row is written with a timestamp two minutes older than the moment it reached
+/// storage — a WAL segment replayed after a `ClickHouse` restart, or a device whose
+/// clock is slow. Windowing on `observed_at` would have the tail skip past it while it
+/// was still in flight and never show it. This is the regression test for that, and it
+/// fails against the obvious implementation.
+#[tokio::test]
+async fn a_row_that_arrives_late_still_reaches_the_tail() {
+    let store = store();
+    let tenant = TenantId::new();
+    let resource = ResourceId::new();
+    let scope = scope_for(tenant);
+
+    let t0 = window().start + Duration::seconds(600);
+    let t1 = t0 + Duration::seconds(10);
+
+    let mut late = ingested_at_row(tenant, resource, "replayed from the WAL", t0);
+    late.observed_at = t0 - Duration::minutes(2);
+    store.insert_logs(&[late]).await.unwrap();
+
+    let base = Query::new(SignalType::Log, window());
+    assert_eq!(
+        bodies(&store, &scope, &uops_query::follow(&base, t0, t1)).await,
+        ["replayed from the WAL"]
+    );
+}
+
+/// A tenant cannot tail another tenant's ingest, for the same reason it cannot query it:
+/// the predicate is the compiler's, from the scope, on this path too.
+#[tokio::test]
+async fn a_tail_cannot_see_another_tenants_telemetry() {
+    let store = store();
+    let mine = TenantId::new();
+    let theirs = TenantId::new();
+    let resource = ResourceId::new();
+
+    let t0 = window().start + Duration::seconds(1200);
+    let t1 = t0 + Duration::seconds(10);
+
+    store
+        .insert_logs(&[ingested_at_row(theirs, resource, "not yours", t0)])
+        .await
+        .unwrap();
+
+    let base = Query::new(SignalType::Log, window());
+    let seen = bodies(&store, &scope_for(mine), &uops_query::follow(&base, t0, t1)).await;
+    assert!(seen.is_empty(), "{seen:?}");
+}
+
+/// A log row that reached storage at `ingested_at`, stamped at the same instant unless a
+/// test says otherwise.
+fn ingested_at_row(
+    tenant: TenantId,
+    resource: ResourceId,
+    body: &str,
+    ingested_at: chrono::DateTime<Utc>,
+) -> LogRow {
+    LogRow {
+        observed_at: ingested_at,
+        ingested_at,
+        ..log_row(tenant, resource, body, 0)
+    }
+}
+
+/// One poll of the tail, as bodies in the order it delivered them.
+async fn bodies(store: &ChStore, scope: &TenantScope, q: &Query) -> Vec<String> {
+    let result = store
+        .tail(q, scope, &ResolvedResources::whole_tenant(scope))
+        .await
+        .unwrap();
+    (0..result.len())
+        .map(|i| {
+            result
+                .value(i, "body")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
