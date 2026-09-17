@@ -851,6 +851,40 @@ SELECT pg_temp.check(
                  WHERE channel_id = '00000000-0000-0000-0000-0000000000c9'),
     'a delivery record must not outlive its channel');
 
+-- ---------------------------------------------------------------- dashboards
+--
+-- The properties migration 0016 claims: a dashboard is an ordered list of panels, it is a
+-- screenful rather than an archive, and its name belongs to its tenant.
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO dashboard (tenant_id, name, panels)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'not a list', '{}'::jsonb)
+$$, '23514');
+
+-- Every panel is a telemetry query, so this is also the limit on what one page load asks
+-- of ClickHouse.
+SELECT pg_temp.must_fail($$
+    INSERT INTO dashboard (tenant_id, name, panels)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'too many',
+            (SELECT jsonb_agg(jsonb_build_object('id', n::text))
+               FROM generate_series(1, 41) AS n))
+$$, '23514');
+
+INSERT INTO dashboard (tenant_id, name, panels) VALUES
+    ('00000000-0000-0000-0000-00000000000a', 'Core routers', '[]'::jsonb);
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO dashboard (tenant_id, name)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'Core routers')
+$$, '23505');
+
+-- The same name in the other customer's tenant is simply their own dashboard.
+INSERT INTO dashboard (tenant_id, name) VALUES
+    ('00000000-0000-0000-0000-00000000000b', 'Core routers');
+SELECT pg_temp.check(
+    (SELECT count(*) FROM dashboard WHERE name = 'Core routers') = 2,
+    'a dashboard name belongs to a tenant, not to the installation');
+
 -- Every foreign key has an index on its referencing side.
 --
 -- PostgreSQL indexes the referenced side automatically and the referencing side never,

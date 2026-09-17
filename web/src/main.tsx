@@ -34,6 +34,7 @@ import { Layout } from "./layout";
 import { ExplorePage } from "./explore";
 import { LoginPage, OverviewPage } from "./pages";
 import { AlertsPage, ChannelsPage, RulesPage } from "./alerts";
+import { DashboardPage, DashboardsPage } from "./dashboard";
 import { MapPage } from "./map";
 import { ResourcePage, ResourcesPage } from "./resources";
 import { ShellProvider, validateShellSearch } from "./shell";
@@ -147,6 +148,23 @@ const channelsRoute = createRoute({
   component: ChannelsPage,
 });
 
+const dashboardsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards",
+  component: DashboardsPage,
+});
+
+const dashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards/$id",
+  component: function Dashboard() {
+    // The id comes from the path; the component takes it as a prop so it can be rendered
+    // in a test or a story without a router.
+    const { id } = dashboardRoute.useParams();
+    return <DashboardPage id={id} />;
+  },
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   shellRoute.addChildren([
@@ -158,6 +176,8 @@ const routeTree = rootRoute.addChildren([
     alertsRoute,
     rulesRoute,
     channelsRoute,
+    dashboardsRoute,
+    dashboardRoute,
   ]),
 ]);
 

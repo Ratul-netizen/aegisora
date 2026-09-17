@@ -45,6 +45,7 @@ pub mod audit;
 pub mod auth;
 pub mod bootstrap;
 pub mod catalog;
+pub mod dashboards;
 pub mod discovery;
 mod enforced;
 pub mod enrich;
@@ -71,6 +72,7 @@ pub use auth::{
 };
 pub use bootstrap::{FirstRun, FirstRunRequest};
 pub use catalog::PgCatalog;
+pub use dashboards::{Dashboard, NewDashboard, Panel, Viz};
 pub use discovery::{DiscoveredChild, DiscoveryReport};
 pub use enrich::PgEnricher;
 pub use facts::{DeviceFacts, IdentityReport};

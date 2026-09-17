@@ -11,6 +11,7 @@ pub mod alerts;
 pub mod auth;
 pub mod channels;
 pub mod credentials;
+pub mod dashboards;
 pub mod groups;
 pub mod health;
 pub mod maintenance;
@@ -27,6 +28,13 @@ use crate::error::ApiError;
 use crate::state::AppState;
 
 /// Everything under `/api/v1`.
+///
+/// Long, and deliberately one function: this module exists so the API surface reads as a
+/// list rather than being discovered by grepping for attributes, and splitting it into
+/// `inventory_routes()`, `telemetry_routes()` and `alerting_routes()` would trade that
+/// for a lint. The day it stops being readable is the day to split it, and forty routes
+/// is not that day.
+#[allow(clippy::too_many_lines)]
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/auth/login", post(auth::login))
@@ -110,6 +118,19 @@ pub fn router(state: AppState) -> Router {
             get(searches::get)
                 .put(searches::update)
                 .delete(searches::delete),
+        )
+        // A dashboard is a document: a name and an ordered list of panels, each a Query
+        // AST and a picture to draw it as. Adding or moving a panel is a PUT of the whole
+        // thing — see the module docs for why there is no panel-level route.
+        .route(
+            "/api/v1/dashboards",
+            get(dashboards::list).post(dashboards::create),
+        )
+        .route(
+            "/api/v1/dashboards/{id}",
+            get(dashboards::get)
+                .put(dashboards::update)
+                .delete(dashboards::delete),
         )
         // Where a page goes. Reading is Viewer; writing is Operator, the same as an
         // alert rule, because changing a channel changes who gets woken up.

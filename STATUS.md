@@ -37,7 +37,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | `uops-secrets` | ✅ 51 |
 | `uops-query` | ✅ 49, 12 golden fixtures |
 | `uops-bus` | ✅ 29, incl. an 11-case conformance suite |
-| PostgreSQL migrations | ✅ 15 migrations, asserted invariants per table |
+| PostgreSQL migrations | ✅ 16 migrations, asserted invariants per table |
 | `uops-ch-migrate` | ✅ 34, applied against ClickHouse 26.8 |
 | **M1 — all acceptance criteria met** | ✅ |
 | `uops-store-pg` | ✅ 74 |
@@ -91,7 +91,9 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · a per-tenant daily budget** | ✅ the backstop behind the rate — a slow leak, not a storm |
 | M4 · notifications — SMTP | ⬜ needs a plain-TCP relay design; this workspace carries no TLS |
 | **M4 · alerts in the web app** | ✅ the alert list with acknowledgement, rules from a saved search, channels and the delivery log |
-| M4 · dashboards | ⬜ |
+| **M4 · dashboards** | ✅ five panel types, panels from saved searches, twelve-column grid |
+| **M4 · 20 panels over 30 days, p95 < 3 s** | ✅ **measured — 0.42 s**, answered by `metrics_5m`, [`docs/benchmarks/dashboard-load.md`](./docs/benchmarks/dashboard-load.md) |
+| **M4 — all 6 acceptance criteria met** | ✅ |
 
 ## Resume in three commands
 
@@ -104,8 +106,8 @@ bash scripts/db.sh migrate && bash scripts/ch.sh apply
 # about eighty tests without it — and they fail with instructions rather than passing.
 export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
 export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 941 tests, green
-cd web && npm ci && npm test                                            # 47 more
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 948 tests, green
+cd web && npm ci && npm test                                            # 59 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
