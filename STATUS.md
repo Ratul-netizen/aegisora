@@ -95,7 +95,10 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · 20 panels over 30 days, p95 < 3 s** | ✅ **measured — 0.42 s**, answered by `metrics_5m`, [`docs/benchmarks/dashboard-load.md`](./docs/benchmarks/dashboard-load.md) |
 | **M4 — all 6 acceptance criteria met** | ✅ |
 | **UI/UX specification, part 1** | ✅ [`docs/UI-SPEC.md`](./docs/UI-SPEC.md) — the gate `UI.md` §13 sets, for the foundation and the first screen |
-| UI · the Operations Overview | ⬜ specified, not built |
+| **UI · the Operations Overview** | ✅ four tiles, what is firing, log volume by severity, busiest resources — six panels, four queries |
+| **UI · tokens, series palette, focus ring** | ✅ UI-SPEC §1 applied; `--unknown` and `--maintenance` exist at last |
+| **UI · the mark** | ✅ letterform-free, so it survives the rename below |
+| **Brand clearance: `Veyronis` has a conflict** | ⬜ **`veyronis.com` is an active software consultancy**, and *Varonis Systems* holds a registered US mark (4592747) in an adjacent field. A rename is likely; the branding rule means it costs documentation, not code |
 
 ## Resume in three commands
 

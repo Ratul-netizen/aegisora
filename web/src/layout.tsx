@@ -11,6 +11,7 @@ import { Link, Outlet, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { api } from "./api";
+import { Wordmark } from "./brand";
 import { PRESETS, describeRange, useShell, type ShellSearch, type TimeRange } from "./shell";
 
 /** Carries the shell's search params through every navigation. */
@@ -103,7 +104,7 @@ export function Layout() {
 
   return (
     <div className="shell">
-      <div className="brand">uops</div>
+      <Wordmark />
 
       <header className="header">
         <TenantSwitcher />

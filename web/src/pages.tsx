@@ -1,8 +1,9 @@
 /**
- * Sign in, and the overview.
+ * Signing in.
  *
- * The resource inventory lives in resources.tsx and the query explorer in explore.tsx;
- * both are large enough to read on their own.
+ * Everything else that was here has grown its own file — the inventory in resources.tsx,
+ * the explorer in explore.tsx, the overview in overview.tsx. This is the one page that
+ * exists outside the shell, because it is the one a person reaches without a session.
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -10,7 +11,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { ApiError, api } from "./api";
-import { describeRange, resolveRange, useShell } from "./shell";
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -78,30 +78,5 @@ export function LoginPage() {
         </button>
       </form>
     </div>
-  );
-}
-
-export function OverviewPage() {
-  const { tenant, range } = useShell();
-  const resolved = resolveRange(range);
-
-  return (
-    <>
-      <h1>{tenant.name}</h1>
-      <p className="dim">
-        Showing {describeRange(range)}
-        {resolved && (
-          <>
-            {" — "}
-            <span className="mono">{resolved.from.toISOString()}</span> to{" "}
-            <span className="mono">{resolved.to.toISOString()}</span>
-          </>
-        )}
-        .
-      </p>
-      <p className="dim">
-        Your role on this tenant is <strong>{tenant.role}</strong>.
-      </p>
-    </>
   );
 }

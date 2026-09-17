@@ -20,19 +20,21 @@ import { toSeries, type Series, type Viz } from "./dashboards";
 import type { ResultSet } from "./query";
 
 /**
- * The colours a chart assigns to lines, in order.
+ * The colours a chart assigns to lines, in order — UI-SPEC §1.4.
  *
- * Six, because a panel with more than six lines is one whose grouping is too fine to read
- * — and after six they repeat, which is a visible signal that this has happened rather
- * than a silent slide into twelve indistinguishable blues.
+ * The *series* palette, deliberately not the semantic one: a second line drawn in the
+ * warning amber reads as a warning about something. Six, because a panel with more than
+ * six lines is one whose grouping is too fine to read — and after six they repeat, which
+ * is a visible signal that this has happened rather than a silent slide into twelve
+ * indistinguishable blues.
  */
 const LINE_COLOURS = [
-  "var(--accent)",
-  "var(--ok)",
-  "var(--warn)",
-  "var(--danger)",
-  "#8a63d2",
-  "#0f8b8d",
+  "var(--series-1)",
+  "var(--series-2)",
+  "var(--series-3)",
+  "var(--series-4)",
+  "var(--series-5)",
+  "var(--series-6)",
 ];
 
 /** A number, in the way a person reads one at a glance. */
