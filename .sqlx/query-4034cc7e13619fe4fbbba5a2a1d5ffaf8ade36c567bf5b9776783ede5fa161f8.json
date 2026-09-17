@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                tenant_id     AS \"tenant_id: TenantId\",\n                last_run_id,\n                source,\n                -- host() rather than a cast: `inet::text` renders 192.168.1.9/32, mask\n                -- and all, which is not an address any client library will parse.\n                host(address) AS \"address: String\",\n                chassis_id,\n                port_id,\n                platform,\n                sys_name,\n                sys_descr,\n                sys_object_id,\n                mac::text     AS \"mac: String\",\n                seen_from     AS \"seen_from: uops_core::ResourceId\",\n                state,\n                resource_id   AS \"resource_id: uops_core::ResourceId\",\n                reason,\n                first_seen,\n                last_seen\n              FROM discovery_candidate\n             WHERE tenant_id = $1\n               AND state IN ('unidentified', 'ambiguous', 'unreachable')\n             ORDER BY last_seen DESC\n             LIMIT $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "address: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "chassis_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "port_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "platform",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "sys_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "sys_descr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "sys_object_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "mac: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "seen_from: uops_core::ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 13,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "resource_id: uops_core::ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 15,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "first_seen",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "last_seen",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4034cc7e13619fe4fbbba5a2a1d5ffaf8ade36c567bf5b9776783ede5fa161f8"
+}

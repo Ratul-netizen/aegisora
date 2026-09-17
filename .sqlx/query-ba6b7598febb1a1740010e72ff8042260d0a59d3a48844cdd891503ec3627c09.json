@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE discovery_candidate\n               SET state = 'ignored', ignored_at = now(), ignored_by = $3, reason = $4\n             WHERE id = $1 AND tenant_id = $2 AND state <> 'promoted'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba6b7598febb1a1740010e72ff8042260d0a59d3a48844cdd891503ec3627c09"
+}

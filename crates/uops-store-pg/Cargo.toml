@@ -14,6 +14,10 @@ uops-core = { workspace = true, features = ["sqlx"] }
 uops-identity.workspace = true
 uops-secrets.workspace = true
 uops-profile.workspace = true
+# For Range and Sweep. A discovery job is validated with the same gate the sweeper uses,
+# so the operator gets the sentence that says what to do instead rather than the name of
+# a CHECK constraint -- see the module docs in src/discovery_jobs.rs.
+uops-discover.workspace = true
 # Filling a device's vendor from an interface MAC when the device does not say — see
 # src/discovery.rs. No dependencies of its own; the table is embedded.
 uops-oui.workspace = true

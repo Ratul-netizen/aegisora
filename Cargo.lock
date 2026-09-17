@@ -2618,6 +2618,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "uops-core",
+ "uops-discover",
  "uops-identity",
  "uops-oui",
  "uops-pipeline",

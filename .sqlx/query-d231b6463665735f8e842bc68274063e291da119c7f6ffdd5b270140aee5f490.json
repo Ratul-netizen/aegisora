@@ -1,0 +1,115 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO discovery_job\n                (tenant_id, name, description, ranges, site_id, credential_refs,\n                 snmp_port, skip_silent_hosts, schedule, created_by)\n            VALUES\n                ($1, $2, $3, $4::text[]::cidr[], $5, $6, $7, $8,\n                 CASE WHEN $9::bigint IS NULL THEN NULL\n                      ELSE make_interval(secs => $9::bigint) END,\n                 $10)\n            RETURNING\n                id,\n                tenant_id         AS \"tenant_id: TenantId\",\n                name,\n                description,\n                ranges::text[]    AS \"ranges!: Vec<String>\",\n                site_id           AS \"site_id: SiteId\",\n                credential_refs,\n                snmp_port,\n                skip_silent_hosts,\n                EXTRACT(EPOCH FROM schedule)::bigint AS \"schedule_seconds: i64\",\n                enabled,\n                last_run_at,\n                created_by        AS \"created_by: ActorId\",\n                created_at,\n                updated_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "ranges!: Vec<String>",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 5,
+        "name": "site_id: SiteId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "credential_refs",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 7,
+        "name": "snmp_port",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "skip_silent_hosts",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "schedule_seconds: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "last_run_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "created_by: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "TextArray",
+        "Uuid",
+        "UuidArray",
+        "Int4",
+        "Bool",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      true,
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "d231b6463665735f8e842bc68274063e291da119c7f6ffdd5b270140aee5f490"
+}

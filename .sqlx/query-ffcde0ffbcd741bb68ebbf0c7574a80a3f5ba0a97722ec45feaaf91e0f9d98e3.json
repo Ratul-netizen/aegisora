@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO discovery_run (tenant_id, job_id, ranges, trigger, started_by)\n            VALUES ($1, $2, $3::text[]::cidr[], $4, $5)\n            RETURNING\n                id,\n                tenant_id      AS \"tenant_id: TenantId\",\n                job_id,\n                ranges::text[] AS \"ranges!: Vec<String>\",\n                trigger,\n                started_by     AS \"started_by: ActorId\",\n                started_at,\n                finished_at,\n                status,\n                error,\n                probed, answered, created, merged, for_review, candidates, edges\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "ranges!: Vec<String>",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 4,
+        "name": "trigger",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "started_by: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "finished_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "probed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "answered",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "created",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "merged",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "for_review",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "candidates",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "edges",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "TextArray",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ffcde0ffbcd741bb68ebbf0c7574a80a3f5ba0a97722ec45feaaf91e0f9d98e3"
+}

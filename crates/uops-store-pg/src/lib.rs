@@ -47,6 +47,7 @@ pub mod bootstrap;
 pub mod catalog;
 pub mod dashboards;
 pub mod discovery;
+pub mod discovery_jobs;
 mod enforced;
 pub mod enrich;
 pub mod error;

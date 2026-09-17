@@ -1,0 +1,137 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO discovery_candidate\n                (tenant_id, last_run_id, source, address, chassis_id, port_id, platform,\n                 sys_name, sys_descr, sys_object_id, mac, seen_from, state, reason)\n            VALUES\n                ($1, $2, $3, $4::text::inet, $5, $6, $7, $8, $9, $10, $11::text::macaddr,\n                 $12, $13, $14)\n            ON CONFLICT (tenant_id, fingerprint) DO UPDATE\n               SET last_run_id   = EXCLUDED.last_run_id,\n                   last_seen     = now(),\n                   port_id       = COALESCE(EXCLUDED.port_id, discovery_candidate.port_id),\n                   platform      = COALESCE(EXCLUDED.platform, discovery_candidate.platform),\n                   sys_name      = COALESCE(EXCLUDED.sys_name, discovery_candidate.sys_name),\n                   sys_descr     = COALESCE(EXCLUDED.sys_descr, discovery_candidate.sys_descr),\n                   sys_object_id = COALESCE(EXCLUDED.sys_object_id,\n                                            discovery_candidate.sys_object_id),\n                   mac           = COALESCE(EXCLUDED.mac, discovery_candidate.mac),\n                   seen_from     = COALESCE(EXCLUDED.seen_from, discovery_candidate.seen_from),\n                   -- An operator's decision outlives the next run. Promoted stays\n                   -- promoted and ignored stays ignored; only a candidate still on the\n                   -- list can have its state rewritten by what a sweep just saw.\n                   state         = CASE\n                                     WHEN discovery_candidate.state IN ('promoted', 'ignored')\n                                     THEN discovery_candidate.state\n                                     ELSE EXCLUDED.state\n                                   END,\n                   reason        = CASE\n                                     WHEN discovery_candidate.state IN ('promoted', 'ignored')\n                                     THEN discovery_candidate.reason\n                                     ELSE EXCLUDED.reason\n                                   END\n            RETURNING\n                id,\n                tenant_id     AS \"tenant_id: TenantId\",\n                last_run_id,\n                source,\n                -- host() rather than a cast: `inet::text` renders 192.168.1.9/32, mask\n                -- and all, which is not an address any client library will parse.\n                host(address) AS \"address: String\",\n                chassis_id,\n                port_id,\n                platform,\n                sys_name,\n                sys_descr,\n                sys_object_id,\n                mac::text     AS \"mac: String\",\n                seen_from     AS \"seen_from: uops_core::ResourceId\",\n                state,\n                resource_id   AS \"resource_id: uops_core::ResourceId\",\n                reason,\n                first_seen,\n                last_seen\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "address: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "chassis_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "port_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "platform",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "sys_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "sys_descr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "sys_object_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "mac: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "seen_from: uops_core::ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 13,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "resource_id: uops_core::ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 15,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "first_seen",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "last_seen",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "717af7a1bd9d8247ef93d4e2577994e55b59330533ffd621dcdc4a1f4b2ed1be"
+}

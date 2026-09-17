@@ -196,6 +196,38 @@ pub struct Sweep {
 }
 
 impl Sweep {
+    /// Whether these ranges could be swept, without expanding them.
+    ///
+    /// Separate from [`Sweep::new`] for one caller: the store validates a job at the
+    /// moment somebody saves it, and it does that to give the operator [`SweepError`]'s
+    /// sentence rather than the name of a CHECK constraint. Expanding a /16 to answer a
+    /// yes-or-no question would allocate 65 534 addresses and sort them, on a code path
+    /// that is about to throw all of them away.
+    ///
+    /// # Errors
+    ///
+    /// The same three refusals [`Sweep::new`] gives, for the same reasons.
+    pub fn check(ranges: &[Range]) -> Result<(), SweepError> {
+        if ranges.is_empty() {
+            return Err(SweepError::NoRanges);
+        }
+
+        // Before the sum, because a /8 is refused for being wide rather than for the
+        // total it contributes -- and an operator who typed one should be told that.
+        if let Some(&widest) = ranges.iter().min_by_key(|r| r.prefix)
+            && widest.prefix < WIDEST_PREFIX
+        {
+            return Err(SweepError::RangeTooWide { range: widest });
+        }
+
+        let total: u64 = ranges.iter().map(|r| r.addresses()).sum();
+        if total > u64::from(MAX_ADDRESSES) {
+            return Err(SweepError::TooManyAddresses { addresses: total });
+        }
+
+        Ok(())
+    }
+
     /// Plan a sweep over `ranges`.
     ///
     /// Overlapping ranges are collapsed rather than refused. An operator who writes
@@ -210,23 +242,7 @@ impl Sweep {
     /// [`SweepError::TooManyAddresses`] — the three ways a sweep is refused before it
     /// sends anything.
     pub fn new(ranges: &[Range]) -> Result<Self, SweepError> {
-        if ranges.is_empty() {
-            return Err(SweepError::NoRanges);
-        }
-
-        // Checked before expanding, because expanding a /8 to find out it is too big
-        // would allocate sixteen million addresses to discover something arithmetic
-        // already knows.
-        if let Some(&widest) = ranges.iter().min_by_key(|r| r.prefix)
-            && widest.prefix < WIDEST_PREFIX
-        {
-            return Err(SweepError::RangeTooWide { range: widest });
-        }
-
-        let total: u64 = ranges.iter().map(|r| r.addresses()).sum();
-        if total > u64::from(MAX_ADDRESSES) {
-            return Err(SweepError::TooManyAddresses { addresses: total });
-        }
+        Self::check(ranges)?;
 
         let mut addresses: Vec<Ipv4Addr> = ranges.iter().flat_map(|r| r.hosts()).collect();
         addresses.sort_unstable();
