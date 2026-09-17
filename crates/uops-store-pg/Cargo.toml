@@ -39,6 +39,12 @@ uuid.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# The end-to-end sweep test needs simulated agents. §4's acceptance criteria are about a
+# /24 of mostly-empty addresses with eight devices in it, which is not a thing a unit test
+# can fake and not a thing to keep real hardware around for.
+uops-snmp.workspace = true
+uops-profile.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

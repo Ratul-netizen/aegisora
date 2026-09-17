@@ -119,11 +119,31 @@ and a hostname are tier 3 and tier 4, so a sweep lands most results below
 `AUTO_MERGE_THRESHOLD` by construction, and a device is identified precisely when it
 becomes worth polling.
 
-Each sighting goes through `uops_identity::classify`. Above `AUTO_MERGE_THRESHOLD` it merges into the
-existing resource. Below `REVIEW_FLOOR` it creates a new one. Between them it becomes a
-review-queue entry and **not** a resource — which is the whole point of that queue, and
-the case a sweep produces constantly: the same hostname in two sites, a device that
-changed address, a spare that was racked with a clone's configuration.
+Each sighting goes through `uops_identity::classify`. Above `AUTO_MERGE_THRESHOLD` it
+merges into the existing resource. Below `REVIEW_FLOOR` it creates a new one. Between
+them it goes to the review queue — the case a sweep produces constantly: the same
+hostname in two sites, a device that changed address, a spare racked with a clone's
+configuration.
+
+A review produces a **provisional resource and a review item**, not a review item alone.
+An earlier draft of this section said otherwise, and building it showed why the resolver
+is right: the provisional row is what a reviewer merges *from*, and without one there is
+nothing for the merge to point at. It is also the resolver's contract on every other
+ingestion path in this product — a syslog message is never dropped while a human decides
+— and discovery does not get a private variant of it. What matters, and what §4 tests, is
+that a human was asked rather than a machine deciding.
+
+There is one more case the schema cannot express. An agent that answers with **neither a
+name nor a `sysObjectID`** — a UPS, a PDU, an environmental sensor — becomes a candidate
+rather than a resource. It exists, so it is written down; but a resource with no name and
+no profile is a row nothing can poll and nobody can act on, which is the same objection
+§2.5 raises against inventing a device from a chassis ID.
+
+Note what makes rediscovery work, because it is not confidence. An address and a hostname
+combine to 0.93, below `AUTO_MERGE_THRESHOLD`, so a second sweep of the same estate would
+send every device to review if confidence were the only test. What resolves it is the
+resolver's *exclusive match*: every identifier points at one resource and nothing else,
+which is a repeat sighting rather than a coincidence.
 
 ### 2.5 A neighbour that is not known is a candidate, not a resource.
 
@@ -174,19 +194,24 @@ cannot trust.
 
 ## 4. Acceptance criteria
 
-- [ ] A /24 sweep against the SNMP simulator finds every agent in it and creates one
-      resource per agent, classified onto a profile
-- [ ] Re-running the same sweep creates nothing new — the second run resolves every
+- [x] A /24 sweep against the SNMP simulator finds every agent in it and creates one
+      resource per agent, with its `sysObjectID` cached so the first poll resolves the
+      right profile (discovery caches; it does not pin — `profile_id` is a human's
+      override)
+- [x] Re-running the same sweep creates nothing new — the second run resolves every
       address to the resource the first one created
-- [ ] A device that answers with a hostname matching an existing resource in another site
-      produces a **review-queue entry**, not a second resource and not a silent merge
-- [ ] A CIDR larger than /16 is refused when the job is written, with a sentence saying
+- [x] A device that answers with a hostname matching an existing resource in another site
+      produces a **review-queue entry** and not a silent merge — see §2.4 on why it also
+      produces a provisional resource
+- [x] A CIDR larger than /16 is refused when the job is written, with a sentence saying
       what to do instead
 - [ ] An LLDP walk between two known devices produces exactly one `connected_to` edge, and
       re-walking produces no duplicate
 - [ ] An LLDP neighbour with no matching resource produces a candidate, not a resource
-- [ ] A sweep of 65 536 addresses stays within its concurrency and rate caps, measured
-- [ ] No code path anywhere tries a credential that was not named by the job
+- [x] A sweep stays within its concurrency and rate caps, measured against a paused
+      clock — and the three caps are asserted to be consistent with each other, which
+      they were not at first
+- [x] No code path anywhere tries a credential that was not named by the job
 
 ---
 

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE resource\n               SET name           = COALESCE($3, name),\n                   -- Merged rather than replaced: this device may carry attributes from\n                   -- OTLP or from a poll, and a sweep knows about two of them.\n                   attributes     = attributes || $4::jsonb,\n                   site_id        = COALESCE(site_id, $5),\n                   credential_ref = COALESCE(credential_ref, $6),\n                   last_seen      = now(),\n                   updated_at     = now()\n             WHERE id = $1 AND tenant_id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "df3bba51fbb8c57ed15e58f9d77ee00dc42ab189c5d76401b360fbffa197fd2c"
+}

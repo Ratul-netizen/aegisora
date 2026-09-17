@@ -2625,6 +2625,7 @@ dependencies = [
  "uops-profile",
  "uops-query",
  "uops-secrets",
+ "uops-snmp",
  "uuid",
 ]
 
