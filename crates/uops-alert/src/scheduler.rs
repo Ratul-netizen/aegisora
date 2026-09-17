@@ -292,8 +292,22 @@ mod tests {
         }
 
         assert_eq!(scheduler.len(), 1);
-        let fired: usize = (0..10).map(|_| scheduler.due().len()).sum();
-        assert_eq!(fired, 1);
+        assert_eq!(
+            scheduler.wheel_len(),
+            1,
+            "ten inserts left ten entries in the wheel, so the rule evaluates ten times              as often as it asked to"
+        );
+
+        // Three intervals' worth of ticks: a rule on a ten-second interval comes round
+        // about three times, not thirty. The range is the ±10% jitter and where in its
+        // first interval the rule happened to be placed — asserting an exact count here
+        // is what made this test fail once in five for reasons that had nothing to do
+        // with what it is about.
+        let fired: usize = (0..30).map(|_| scheduler.due().len()).sum();
+        assert!(
+            (2..=4).contains(&fired),
+            "one rule on a 10-second interval fired {fired} times in 30 seconds"
+        );
     }
 
     #[test]

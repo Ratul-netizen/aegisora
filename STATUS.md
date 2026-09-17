@@ -37,7 +37,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | `uops-secrets` | ✅ 51 |
 | `uops-query` | ✅ 49, 12 golden fixtures |
 | `uops-bus` | ✅ 29, incl. an 11-case conformance suite |
-| PostgreSQL migrations | ✅ 14 migrations, asserted invariants per table |
+| PostgreSQL migrations | ✅ 15 migrations, asserted invariants per table |
 | `uops-ch-migrate` | ✅ 34, applied against ClickHouse 26.8 |
 | **M1 — all acceptance criteria met** | ✅ |
 | `uops-store-pg` | ✅ 74 |
@@ -86,7 +86,10 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · a flapping signal notifies nobody** | ✅ asserted twice: pure, and end to end against real `ClickHouse` |
 | **M4 · absence detects a device going quiet** | ✅ fires once, six minutes after the last sample |
 | M4 · 1 000 rules inside one 60 s cycle | ⬜ the **schedule** is measured (no second holds more than 60 of 1 000); the end-to-end timing is not |
-| M4 · notifications (SMTP, webhook) | ⬜ |
+| **M4 · notifications — webhooks** | ✅ `uops-notify`, delivered from the engine, verified against a real socket |
+| **M4 · the rate limit stops a storm** | ✅ SPEC's 5 000-resource rule sends 12 and records 4 988 refusals |
+| **M4 · a per-tenant daily budget** | ✅ the backstop behind the rate — a slow leak, not a storm |
+| M4 · notifications — SMTP | ⬜ needs a plain-TCP relay design; this workspace carries no TLS |
 | M4 · dashboards | ⬜ |
 
 ## Resume in three commands
@@ -100,7 +103,7 @@ bash scripts/db.sh migrate && bash scripts/ch.sh apply
 # about eighty tests without it — and they fail with instructions rather than passing.
 export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
 export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 910 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 941 tests, green
 cd web && npm ci && npm test                                            # 37 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```

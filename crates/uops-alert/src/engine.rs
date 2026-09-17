@@ -49,6 +49,10 @@ pub struct Decision {
     pub resource: ResourceId,
     pub dedup_key: String,
     pub phase: Phase,
+    /// When the alert entered this phase. Carried so a notification can say the problem
+    /// started eleven minutes ago rather than claiming it started when the message got
+    /// through a rate limit.
+    pub since: DateTime<Utc>,
     /// Whether somebody is to be told. Exactly the two entries `firing` and `resolved`,
     /// and never while notifications are suppressed.
     pub notify: bool,
@@ -211,6 +215,7 @@ impl Engine {
                 resource: series.resource,
                 dedup_key: key,
                 phase: transition.phase,
+                since: transition.since,
                 // The softer half of a maintenance window: the phase moves, the history
                 // is kept, nobody is woken up.
                 notify: transition.notify && !quiet.is_some_and(|s| s.notifications),

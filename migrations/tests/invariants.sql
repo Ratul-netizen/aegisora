@@ -771,6 +771,86 @@ SELECT pg_temp.check(
     NOT EXISTS (SELECT 1 FROM alert_state WHERE dedup_key = 'f1/d1'),
     'alert state must not outlive its rule');
 
+-- ---------------------------------------------------------------- notifications
+--
+-- The properties migration 0015 claims: a channel is one of the kinds that exist, its
+-- rate is bounded, every attempt records an outcome that means something, and the record
+-- of having woken somebody up cannot reach across tenants.
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO notification_channel (tenant_id, name, kind, config)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'carrier pigeon', 'pigeon', '{}'::jsonb)
+$$, '23514');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO notification_channel (tenant_id, name, kind, config)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'not an object', 'webhook', '[]'::jsonb)
+$$, '23514');
+
+-- A channel with no rate at all is one that exists and can never deliver, which is what
+-- `enabled` says more clearly.
+SELECT pg_temp.must_fail($$
+    INSERT INTO notification_channel (tenant_id, name, kind, config, max_per_minute)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'silent', 'webhook', '{}'::jsonb, 0)
+$$, '23514');
+
+INSERT INTO notification_channel (id, tenant_id, name, kind, config) VALUES
+    ('00000000-0000-0000-0000-0000000000c9', '00000000-0000-0000-0000-00000000000a',
+     'ops webhook', 'webhook', '{"url":"http://example.invalid/hook"}'::jsonb);
+
+-- The budget is a number on the tenant, and it is bounded.
+SELECT pg_temp.check(
+    (SELECT notification_budget_per_day FROM tenant
+      WHERE id = '00000000-0000-0000-0000-00000000000a') = 1000,
+    'a tenant has a notification budget by default');
+SELECT pg_temp.must_fail($$
+    UPDATE tenant SET notification_budget_per_day = -1
+     WHERE id = '00000000-0000-0000-0000-00000000000a'
+$$, '23514');
+
+-- Every attempt is recorded, including the refusals — a refusal that leaves no trace is
+-- indistinguishable from a rule that never fired.
+INSERT INTO notification_sent
+    (tenant_id, channel_id, rule_id, dedup_key, phase, outcome)
+VALUES ('00000000-0000-0000-0000-00000000000a',
+        '00000000-0000-0000-0000-0000000000c9',
+        '00000000-0000-0000-0000-0000000000f2', 'r/d', 'firing', 'rate_limited');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO notification_sent
+        (tenant_id, channel_id, rule_id, dedup_key, phase, outcome)
+    VALUES ('00000000-0000-0000-0000-00000000000a',
+            '00000000-0000-0000-0000-0000000000c9',
+            '00000000-0000-0000-0000-0000000000f2', 'r/d', 'firing', 'lost')
+$$, '23514');
+
+-- `pending` is not a phase anybody is told about, so it cannot be recorded as one.
+SELECT pg_temp.must_fail($$
+    INSERT INTO notification_sent
+        (tenant_id, channel_id, rule_id, dedup_key, phase, outcome)
+    VALUES ('00000000-0000-0000-0000-00000000000a',
+            '00000000-0000-0000-0000-0000000000c9',
+            '00000000-0000-0000-0000-0000000000f2', 'r/d', 'pending', 'sent')
+$$, '23514');
+
+-- The other customer's channel cannot be sent to on this tenant's behalf. The composite
+-- foreign key is what refuses it.
+SELECT pg_temp.must_fail($$
+    INSERT INTO notification_sent
+        (tenant_id, channel_id, rule_id, dedup_key, phase, outcome)
+    VALUES ('00000000-0000-0000-0000-00000000000b',
+            '00000000-0000-0000-0000-0000000000c9',
+            '00000000-0000-0000-0000-0000000000f2', 'r/d', 'firing', 'sent')
+$$, '23503');
+
+-- Deleting a channel takes its history with it. The alternative is rows naming a channel
+-- nobody can look up, in the table somebody reads to find out why they were paged.
+DELETE FROM notification_channel WHERE id = '00000000-0000-0000-0000-0000000000c9';
+SELECT pg_temp.check(
+    NOT EXISTS (SELECT 1 FROM notification_sent
+                 WHERE channel_id = '00000000-0000-0000-0000-0000000000c9'),
+    'a delivery record must not outlive its channel');
+
 -- Every foreign key has an index on its referencing side.
 --
 -- PostgreSQL indexes the referenced side automatically and the referencing side never,

@@ -33,7 +33,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::sync::{Mutex, Semaphore};
-use uops_store_pg::PgStore;
+use uops_notify::{Notification, Notifier};
+use uops_store_pg::{Outcome, PgStore};
 
 use crate::engine::Engine;
 use crate::scheduler::{RELOAD, Scheduler, TICK};
@@ -48,8 +49,12 @@ use crate::scheduler::{RELOAD, Scheduler, TICK};
 pub const IN_FLIGHT: usize = 16;
 
 /// What the loop has seen since the last reload.
+///
+/// Public because [`evaluate_and_deliver`] takes one, which is what lets a test drive one
+/// rule's turn without a scheduler. Nothing outside reads the counters; they are printed
+/// once a reload and reset.
 #[derive(Debug, Default)]
-struct Window {
+pub struct Window {
     rules: usize,
     notifications: usize,
     suppressed: usize,
@@ -68,6 +73,7 @@ pub async fn run<F>(engine: Engine, store: PgStore, shutdown: F)
 where
     F: Future<Output = ()> + Send,
 {
+    let notifier = Notifier::new(store.clone());
     let mut scheduler = Scheduler::new();
     let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -120,6 +126,7 @@ where
         for (tenant, rule_id) in scheduler.due() {
             let engine = engine.clone();
             let store = store.clone();
+            let notifier = notifier.clone();
             let permits = Arc::clone(&permits);
             let window = Arc::clone(&window);
 
@@ -129,53 +136,139 @@ where
                 let Ok(_permit) = permits.acquire().await else {
                     return;
                 };
-
-                let scope = uops_core::TenantScope::collector(tenant);
-                let now = Utc::now();
-
-                // A rule deleted between the reload and now is not a failure: the next
-                // reload drops it from the schedule.
-                let Ok(rule) = store.alert_rule(&scope, rule_id).await else {
-                    return;
-                };
-                if !rule.enabled {
-                    return;
-                }
-
-                let outcome = engine.evaluate(&scope, &rule, now).await;
-                let mut w = window.lock().await;
-                w.rules += 1;
-
-                match outcome {
-                    Ok(outcome) => {
-                        w.notifications += outcome.notifications();
-                        w.suppressed += outcome.suppressed;
-
-                        // Until channels exist, a notification is a line. It is the one
-                        // thing here that must not be summarised away: an alert nobody
-                        // can see is the failure this whole crate is about.
-                        for decision in outcome.decisions.iter().filter(|d| d.notify) {
-                            println!(
-                                "alerts: {} {} — {} (value {})",
-                                decision.phase.as_str(),
-                                rule.name,
-                                decision.dedup_key,
-                                decision
-                                    .value
-                                    .map_or_else(|| "none".to_owned(), |v| format!("{v:.3}"))
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        w.failures += 1;
-                        let line =
-                            format!("alerts: rule {} could not be evaluated: {e}", rule.name);
-                        if w.said.insert(line.clone()) {
-                            eprintln!("{line}");
-                        }
-                    }
-                }
+                evaluate_and_deliver(&engine, &notifier, &store, tenant, rule_id, &window).await;
             });
+        }
+    }
+}
+
+/// One rule's whole turn: read it, evaluate it, say what happened, deliver it.
+///
+/// Extracted from the spawn above so that the *wiring* — evaluate, then notify, with the
+/// rule's channels and the alert's own `since` — is testable without a scheduler and a
+/// clock. The loop above is then only the part that decides when this is called, which is
+/// what [`Scheduler`] already has its own tests for.
+///
+/// [`Scheduler`]: crate::Scheduler
+pub async fn evaluate_and_deliver(
+    engine: &Engine,
+    notifier: &Notifier,
+    store: &PgStore,
+    tenant: uops_core::TenantId,
+    rule_id: uuid::Uuid,
+    window: &Arc<Mutex<Window>>,
+) {
+    let scope = uops_core::TenantScope::collector(tenant);
+    let now = Utc::now();
+
+    // A rule deleted between the reload and now is not a failure: the next reload drops
+    // it from the schedule.
+    let Ok(rule) = store.alert_rule(&scope, rule_id).await else {
+        return;
+    };
+    if !rule.enabled {
+        return;
+    }
+
+    let outcome = engine.evaluate(&scope, &rule, now).await;
+    let mut w = window.lock().await;
+    w.rules += 1;
+
+    match outcome {
+        Ok(outcome) => {
+            w.notifications += outcome.notifications();
+            w.suppressed += outcome.suppressed;
+
+            // A line for every notification, whatever the channels do with it. This is
+            // the one thing here that must not be summarised away: an alert nobody can
+            // see is the failure this whole crate is about, and an installation with no
+            // channels configured yet still has a log.
+            for decision in outcome.decisions.iter().filter(|d| d.notify) {
+                println!(
+                    "alerts: {} {} — {} (value {})",
+                    decision.phase.as_str(),
+                    rule.name,
+                    decision.dedup_key,
+                    decision
+                        .value
+                        .map_or_else(|| "none".to_owned(), |v| format!("{v:.3}"))
+                );
+            }
+
+            // Delivery is outside the lock: it opens sockets, and holding the window's
+            // mutex across a five-second webhook timeout would stall every other
+            // evaluation's reporting behind one slow endpoint.
+            drop(w);
+            deliver(notifier, &scope, &rule, &outcome, window).await;
+        }
+        Err(e) => {
+            w.failures += 1;
+            let line = format!("alerts: rule {} could not be evaluated: {e}", rule.name);
+            if w.said.insert(line.clone()) {
+                eprintln!("{line}");
+            }
+        }
+    }
+}
+
+/// Send one rule's notifications, and record what the channels did with them.
+///
+/// A rule with no channels reaches here and sends nothing, which is a rule being tuned
+/// rather than a mistake — the line above has already been printed.
+async fn deliver(
+    notifier: &Notifier,
+    scope: &uops_core::TenantScope,
+    rule: &uops_store_pg::AlertRule,
+    outcome: &crate::engine::RuleOutcome,
+    window: &Arc<Mutex<Window>>,
+) {
+    for decision in outcome.decisions.iter().filter(|d| d.notify) {
+        let notification = Notification {
+            phase: decision.phase,
+            severity: rule.severity,
+            rule: rule.name.clone(),
+            rule_id: rule.id,
+            resource_id: decision.resource,
+            resource: notifier.resource_name(scope, decision.resource).await,
+            dedup_key: decision.dedup_key.clone(),
+            value: decision.value,
+            since: decision.since,
+            at: Utc::now(),
+        };
+
+        match notifier.deliver(scope, &rule.notify, &notification).await {
+            Ok(delivered) => {
+                for one in delivered.iter().filter(|d| d.outcome != Outcome::Sent) {
+                    // Refusals are said once each, through the same summarising path as
+                    // an evaluation failure: a channel being rate-limited produces one of
+                    // these per alert, and a storm is exactly when it does.
+                    let line = match one.outcome {
+                        Outcome::RateLimited => format!(
+                            "alerts: channel {} is at its rate limit; notifications for {}                              are being refused",
+                            one.channel, rule.name
+                        ),
+                        Outcome::OverBudget => format!(
+                            "alerts: this tenant has spent its notification budget for                              today; {} was not delivered",
+                            rule.name
+                        ),
+                        _ => format!(
+                            "alerts: channel {} did not take {}: {}",
+                            one.channel, rule.name, one.detail
+                        ),
+                    };
+                    let mut w = window.lock().await;
+                    if w.said.insert(line.clone()) {
+                        eprintln!("{line}");
+                    }
+                }
+            }
+            Err(e) => {
+                let line = format!("alerts: {} could not be delivered: {e}", rule.name);
+                let mut w = window.lock().await;
+                if w.said.insert(line.clone()) {
+                    eprintln!("{line}");
+                }
+            }
         }
     }
 }

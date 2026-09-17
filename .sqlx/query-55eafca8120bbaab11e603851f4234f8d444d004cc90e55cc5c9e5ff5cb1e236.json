@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE notification_sent\n               SET outcome = 'failed', detail = $3\n             WHERE tenant_id = $1 AND id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "55eafca8120bbaab11e603851f4234f8d444d004cc90e55cc5c9e5ff5cb1e236"
+}

@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO notification_sent\n                (tenant_id, channel_id, rule_id, dedup_key, phase, outcome)\n            SELECT $1, $2, $3, $4, $5,\n                   CASE\n                     WHEN (SELECT count(*)\n                             FROM notification_sent\n                            WHERE tenant_id = $1\n                              AND outcome = 'sent'\n                              AND sent_at >= date_trunc('day', now()))\n                          >= (SELECT notification_budget_per_day FROM tenant WHERE id = $1)\n                       THEN 'over_budget'\n                     WHEN (SELECT count(*)\n                             FROM notification_sent\n                            WHERE channel_id = $2\n                              AND outcome = 'sent'\n                              AND sent_at > now() - interval '1 minute')\n                          >= (SELECT max_per_minute\n                                FROM notification_channel\n                               WHERE id = $2 AND tenant_id = $1)\n                       THEN 'rate_limited'\n                     ELSE 'sent'\n                   END\n             WHERE EXISTS (\n                 SELECT 1 FROM notification_channel\n                  WHERE id = $2 AND tenant_id = $1 AND enabled\n             )\n            RETURNING id, outcome\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "outcome",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "994f1393f5e3054efbc5ddef8349f3f252ec7c7b8ffd1ee7a4b88d309d43c0f3"
+}

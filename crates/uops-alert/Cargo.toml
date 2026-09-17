@@ -13,6 +13,7 @@ authors.workspace = true
 uops-core.workspace = true
 uops-query.workspace = true
 uops-store-ch.workspace = true
+uops-notify.workspace = true
 uops-store-pg.workspace = true
 # The scheduler. Generic over its key and already carrying the jitter argument SPEC §M2
 # made -- see uops_poll::wheel. A rule is a different thing to schedule, not a different
@@ -25,7 +26,7 @@ tokio = { workspace = true, features = ["time", "rt", "macros", "sync"] }
 uuid.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
 sqlx.workspace = true
 
 [lints]

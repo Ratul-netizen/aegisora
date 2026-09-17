@@ -15,6 +15,7 @@ authors.workspace = true
 # passing a TenantId where a ResourceId belongs -- has no instance here.
 uuid.workspace = true
 uops-core.workspace = true
+uops-notify.workspace = true
 uops-identity.workspace = true
 uops-query.workspace = true
 uops-secrets.workspace = true

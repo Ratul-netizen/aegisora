@@ -317,6 +317,54 @@ const CASES: &[RouteCase] = &[
         body: None,
     },
     RouteCase {
+        path: "/api/v1/channels",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/channels",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"name":"intruder","kind":"webhook","config":{"url":"http://example.invalid/hook"}}"#,
+        ),
+    },
+    RouteCase {
+        path: "/api/v1/channels/{id}",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        // Repointing somebody else's channel is how an attacker would have alerts about
+        // another customer's estate delivered to themselves.
+        path: "/api/v1/channels/{id}",
+        probe: None,
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"name":"intruder","kind":"webhook","config":{"url":"http://example.invalid/hook"}}"#,
+        ),
+    },
+    RouteCase {
+        path: "/api/v1/channels/{id}",
+        probe: None,
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/notifications",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
         path: "/api/v1/alerts/rules",
         probe: None,
         method: "GET",

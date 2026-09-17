@@ -9,6 +9,7 @@
 
 pub mod alerts;
 pub mod auth;
+pub mod channels;
 pub mod credentials;
 pub mod groups;
 pub mod health;
@@ -110,6 +111,21 @@ pub fn router(state: AppState) -> Router {
                 .put(searches::update)
                 .delete(searches::delete),
         )
+        // Where a page goes. Reading is Viewer; writing is Operator, the same as an
+        // alert rule, because changing a channel changes who gets woken up.
+        .route(
+            "/api/v1/channels",
+            get(channels::list).post(channels::create),
+        )
+        .route(
+            "/api/v1/channels/{id}",
+            get(channels::get)
+                .put(channels::update)
+                .delete(channels::delete),
+        )
+        // "Why did nobody get paged" — the refusals are in here too, which is the whole
+        // reason it exists.
+        .route("/api/v1/notifications", get(channels::sent))
         .route("/api/v1/sites", get(sites::list))
         .route("/api/v1/sites/{id}/location", put(sites::place))
         .route("/api/v1/query", post(query::run))

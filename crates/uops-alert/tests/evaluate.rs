@@ -424,3 +424,109 @@ async fn a_recovered_series_stops_being_written() {
         "five more evaluations of a series that is fine rewrote its row"
     );
 }
+
+/// The wiring: a rule that fires reaches the channel it names, with what it fired about.
+///
+/// Everything under this has its own tests — the state machine without a database, the
+/// transport against a socket, the limits against `PostgreSQL`. What only this can settle
+/// is that the loop hands the right rule's channels the right alert's `since`, which is a
+/// thing that can be wrong while every one of those passes.
+#[tokio::test]
+async fn a_rules_turn_evaluates_it_and_delivers_what_it_decided() {
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::sync::Mutex;
+
+    let (pg, ch) = stores().await;
+    let (scope, device) = tenant(&pg, "wiring").await;
+
+    // An endpoint that answers 200 and keeps what it was sent.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&seen);
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let recorder = Arc::clone(&recorder);
+            tokio::spawn(async move {
+                let mut buffer = vec![0_u8; 8192];
+                let read = socket.read(&mut buffer).await.unwrap_or(0);
+                recorder
+                    .lock()
+                    .await
+                    .push(String::from_utf8_lossy(&buffer[..read]).into_owned());
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK
+Content-Length: 2
+Connection: close
+
+ok",
+                    )
+                    .await;
+            });
+        }
+    });
+
+    let channel = pg
+        .create_channel(
+            &scope,
+            None,
+            &uops_store_pg::NewChannel {
+                name: "ops".to_owned(),
+                kind: "webhook".to_owned(),
+                config: serde_json::json!({ "url": format!("http://127.0.0.1:{port}/hook") }),
+                enabled: true,
+                max_per_minute: 12,
+            },
+        )
+        .await
+        .expect("channel");
+
+    // A rule that will fire on its first evaluation, pointed at that channel.
+    let mut new = cpu_rule("CPU hot", 0);
+    new.notify = serde_json::json!([channel.id.to_string()]);
+    let rule = rule(&pg, &scope, &new).await;
+
+    ch.insert_metrics(&[sample(
+        scope.tenant_id(),
+        device,
+        99.0,
+        Utc::now() - Duration::seconds(5),
+    )])
+    .await
+    .expect("insert");
+
+    let window = Arc::new(Mutex::new(uops_alert::Window::default()));
+    uops_alert::evaluate_and_deliver(
+        &Engine::new(pg.clone(), ch.clone()),
+        &uops_notify::Notifier::new(pg.clone()),
+        &pg,
+        scope.tenant_id(),
+        rule.id,
+        &window,
+    )
+    .await;
+
+    // The endpoint saw it, and it says what fired rather than which uuid did.
+    let received = seen.lock().await;
+    assert_eq!(
+        received.len(),
+        1,
+        "the channel was called once: {received:?}"
+    );
+    assert!(
+        received[0].contains("\"rule\":\"CPU hot\""),
+        "{}",
+        received[0]
+    );
+    assert!(received[0].contains("rtr-01"), "{}", received[0]);
+
+    // And the ledger agrees.
+    let ledger = pg.notifications(&scope, 10).await.expect("list");
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].outcome, uops_store_pg::Outcome::Sent);
+    assert_eq!(ledger[0].rule_id, rule.id);
+}

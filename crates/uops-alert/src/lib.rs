@@ -39,5 +39,5 @@ pub mod scheduler;
 
 pub use engine::{Cycle, Decision, Engine, RuleOutcome};
 pub use plan::{MAX_SERIES, Reading, Series, evaluation_query};
-pub use run::{IN_FLIGHT, run};
+pub use run::{IN_FLIGHT, Window, evaluate_and_deliver, run};
 pub use scheduler::{Due, Scheduler, TICK};

@@ -2296,6 +2296,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "uops-core",
+ "uops-notify",
  "uops-poll",
  "uops-query",
  "uops-store-ch",
@@ -2318,6 +2319,7 @@ dependencies = [
  "tower-http",
  "uops-core",
  "uops-identity",
+ "uops-notify",
  "uops-query",
  "uops-secrets",
  "uops-store-ch",
@@ -2416,6 +2418,24 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "uops-core",
+]
+
+[[package]]
+name = "uops-notify"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "chrono",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uops-core",
+ "uops-store-pg",
+ "uuid",
 ]
 
 [[package]]
