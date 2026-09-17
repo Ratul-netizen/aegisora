@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id, rule_id,\n                resource_id AS \"resource_id: ResourceId\",\n                dedup_key, state, since, last_eval, last_value,\n                acked_by    AS \"acked_by: ActorId\",\n                acked_at\n              FROM alert_state\n             WHERE tenant_id = $1 AND state IN ('pending', 'firing')\n             ORDER BY since DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "rule_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "resource_id: ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "dedup_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "since",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_eval",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_value",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "acked_by: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "acked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "bf1ec4391b312d555770d13b8351f9be4a05652fb37bd638940fd9ab644cdda3"
+}

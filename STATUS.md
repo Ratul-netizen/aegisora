@@ -37,7 +37,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | `uops-secrets` | ✅ 51 |
 | `uops-query` | ✅ 49, 12 golden fixtures |
 | `uops-bus` | ✅ 29, incl. an 11-case conformance suite |
-| PostgreSQL migrations | ✅ 13 migrations, asserted invariants per table |
+| PostgreSQL migrations | ✅ 14 migrations, asserted invariants per table |
 | `uops-ch-migrate` | ✅ 34, applied against ClickHouse 26.8 |
 | **M1 — all acceptance criteria met** | ✅ |
 | `uops-store-pg` | ✅ 74 |
@@ -79,7 +79,12 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M3 · Log Explorer** | ✅ histogram with drag-to-zoom, field sidebar, row detail, **all signals for a resource** |
 | **M3 · live tail** | ✅ `POST /api/v1/query/tail` — half-open on `ingested_at`, so polls partition the rows |
 | **M3 · saved searches** | ✅ stored `Query` ASTs — five routes, compiled before they are stored, 11 tests against real `PostgreSQL` |
-| M4 | ⬜ |
+| **M4 · the alert state machine** | ✅ `ok → pending → firing → resolved`, pure — a flapping signal that would send 600 notifications sends 0 |
+| **M4 · rules and state** | ✅ migration 0014, eight routes, dedup by `(tenant, dedup_key)` — 16 tests against real `PostgreSQL` |
+| **M4 · a saved search becomes a rule with no edits** | ✅ asserted through HTTP: the rule holds the search's query byte for byte |
+| M4 · the evaluator | ⬜ one task per rule, jittered |
+| M4 · notifications (SMTP, webhook) | ⬜ |
+| M4 · dashboards | ⬜ |
 
 ## Resume in three commands
 
@@ -92,7 +97,7 @@ bash scripts/db.sh migrate && bash scripts/ch.sh apply
 # about eighty tests without it — and they fail with instructions rather than passing.
 export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
 export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 854 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 885 tests, green
 cd web && npm ci && npm test                                            # 37 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```

@@ -7,6 +7,7 @@
 //! builds, saved alerts are instances of, and the M6 text language will parse onto.
 //! There is one path to telemetry, and this is it.
 
+pub mod alerts;
 pub mod auth;
 pub mod credentials;
 pub mod groups;
@@ -78,6 +79,26 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/maintenance/{id}",
             get(maintenance::get).delete(maintenance::cancel),
         )
+        // An alert rule is a saved Query AST plus a condition — which is why "alert
+        // from a saved search" needs no conversion: the client posts back the `query`
+        // the search route returned. Reading is Viewer; everything else, acknowledgement
+        // included, is Operator.
+        .route(
+            "/api/v1/alerts/rules",
+            get(alerts::list_rules).post(alerts::create_rule),
+        )
+        .route(
+            "/api/v1/alerts/rules/{id}",
+            get(alerts::get_rule)
+                .put(alerts::update_rule)
+                .delete(alerts::delete_rule),
+        )
+        .route(
+            "/api/v1/alerts/rules/{id}/enabled",
+            patch(alerts::set_enabled),
+        )
+        .route("/api/v1/alerts", get(alerts::list_alerts))
+        .route("/api/v1/alerts/{id}/ack", post(alerts::acknowledge))
         // A saved search is a stored Query AST — the same object the route below takes,
         // and the same one an M4 alert rule will be an instance of. Reading is Viewer;
         // saving is Operator, because a saved search is the team's question rather than

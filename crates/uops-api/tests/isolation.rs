@@ -317,6 +317,72 @@ const CASES: &[RouteCase] = &[
         body: None,
     },
     RouteCase {
+        path: "/api/v1/alerts/rules",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/alerts/rules",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"name":"intruder","query":{"signal":"metric","time":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"},"resources":{"type":"all"},"limit":1},"condition":{"kind":"threshold","op":"gt","value":90,"hold_seconds":300},"severity":"critical"}"#,
+        ),
+    },
+    RouteCase {
+        // `{id}` is the other tenant's *resource* id rather than a rule id, which is the
+        // point: an id that is not a rule of this tenant must answer exactly as an id
+        // that is not a rule at all.
+        path: "/api/v1/alerts/rules/{id}",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/alerts/rules/{id}",
+        probe: None,
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"name":"intruder","query":{"signal":"metric","time":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"},"resources":{"type":"all"},"limit":1},"condition":{"kind":"threshold","op":"gt","value":90,"hold_seconds":300},"severity":"critical"}"#,
+        ),
+    },
+    RouteCase {
+        path: "/api/v1/alerts/rules/{id}",
+        probe: None,
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        // Silencing somebody else's rule is the most consequential thing on this list:
+        // it is the one that stops an alert from ever firing, and it leaves the rule
+        // looking perfectly healthy.
+        path: "/api/v1/alerts/rules/{id}/enabled",
+        probe: None,
+        method: "PATCH",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"enabled":false}"#),
+    },
+    RouteCase {
+        path: "/api/v1/alerts",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/alerts/{id}/ack",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
         path: "/api/v1/searches",
         probe: None,
         method: "GET",

@@ -1,0 +1,104 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO alert_rule\n                (tenant_id, name, description, kind, query, condition, severity,\n                 enabled, eval_interval, notify, created_by)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n            RETURNING\n                id,\n                tenant_id     AS \"tenant_id: uops_core::TenantId\",\n                name, description, query, condition, severity, enabled,\n                eval_interval AS \"eval_interval: sqlx::postgres::types::PgInterval\",\n                notify,\n                created_by    AS \"created_by: ActorId\",\n                created_at, updated_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id: uops_core::TenantId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "query",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "condition",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "severity",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "eval_interval: sqlx::postgres::types::PgInterval",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 9,
+        "name": "notify",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "created_by: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Bool",
+        "Interval",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "71597ba1d7113cb563096c86eab42fcc5f25b4c876847eb0b78debca4a19c68d"
+}

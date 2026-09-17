@@ -18,6 +18,7 @@
 //! and repository functions take a [`TenantScope`], and a `TenantScope` can only be
 //! produced from an authenticated request context. See [`scope`].
 
+pub mod alert;
 pub mod attr;
 pub mod envelope;
 pub mod error;
@@ -29,6 +30,7 @@ pub mod scope;
 pub mod secret;
 pub mod tags;
 
+pub use alert::{AlertSeverity, Comparison, Condition, Phase, Transition, dedup_key, step};
 pub use attr::{AttrMap, AttrValue, semconv};
 pub use envelope::{
     EventRecord, LogRecord, MetricKind, MetricPoint, Severity, Signal, Source, SourceKind,

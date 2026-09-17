@@ -40,6 +40,7 @@
 //! # }
 //! ```
 
+pub mod alerts;
 pub mod audit;
 pub mod auth;
 pub mod bootstrap;
@@ -61,6 +62,7 @@ pub mod searches;
 pub mod sites;
 pub mod store;
 
+pub use alerts::{AlertRule, AlertStateRow, Evaluated, NewRule};
 pub use audit::{AccessEntry, AuditEntry};
 pub use auth::{
     ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, TenantMembership, UserCredentials,

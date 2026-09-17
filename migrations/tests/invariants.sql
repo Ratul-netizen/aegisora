@@ -686,6 +686,91 @@ SELECT pg_temp.check(
         AND contype = 'f') = 'c',
     'a saved search must not outlive its tenant');
 
+-- ---------------------------------------------------------------- alerting
+--
+-- The properties migration 0014 claims: a rule's kind cannot lie about its condition, an
+-- evaluation interval is bounded, one series has one alert, and a rule's state cannot
+-- reach across tenants.
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO alert_rule (tenant_id, name, kind, query, condition, severity)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'disagrees', 'absence',
+            '{"signal":"metric"}'::jsonb,
+            '{"kind":"threshold","op":"gt","value":90,"hold_seconds":300}'::jsonb,
+            'critical')
+$$, '23514');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO alert_rule (tenant_id, name, kind, query, condition, severity)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'shouting', 'absence',
+            '{"signal":"metric"}'::jsonb, '{"kind":"absence","after_seconds":300}'::jsonb,
+            'emergency')
+$$, '23514');
+
+-- A rule evaluating every second spends the whole cycle budget on itself; SPEC's target
+-- is 1 000 rules inside 60 seconds.
+SELECT pg_temp.must_fail($$
+    INSERT INTO alert_rule (tenant_id, name, kind, query, condition, severity, eval_interval)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'too eager', 'absence',
+            '{"signal":"metric"}'::jsonb, '{"kind":"absence","after_seconds":300}'::jsonb,
+            'warning', interval '1 second')
+$$, '23514');
+
+-- Its own resources, one per tenant. The sections above delete and re-point the shared
+-- fixtures, and a test that depends on what an earlier section left behind fails for a
+-- reason that has nothing to do with what it is testing.
+INSERT INTO resource (id, tenant_id, kind, name) VALUES
+    ('00000000-0000-0000-0000-0000000000d1',
+     '00000000-0000-0000-0000-00000000000a', 'device', 'alerted-01'),
+    ('00000000-0000-0000-0000-0000000000d2',
+     '00000000-0000-0000-0000-00000000000b', 'device', 'theirs-01');
+
+INSERT INTO alert_rule (id, tenant_id, name, kind, query, condition, severity) VALUES
+    ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-00000000000a',
+     'CPU hot', 'threshold', '{"signal":"metric"}'::jsonb,
+     '{"kind":"threshold","op":"gt","value":90,"hold_seconds":300}'::jsonb, 'critical');
+
+INSERT INTO alert_state
+    (tenant_id, rule_id, resource_id, dedup_key, state, since, last_eval)
+VALUES ('00000000-0000-0000-0000-00000000000a',
+        '00000000-0000-0000-0000-0000000000f1',
+        '00000000-0000-0000-0000-0000000000d1',
+        'f1/d1', 'firing', now(), now());
+
+-- One series, one alert. Two evaluators racing — a restart overlapping its predecessor —
+-- must update one row rather than create a second alert about one problem.
+SELECT pg_temp.must_fail($$
+    INSERT INTO alert_state
+        (tenant_id, rule_id, resource_id, dedup_key, state, since, last_eval)
+    VALUES ('00000000-0000-0000-0000-00000000000a',
+            '00000000-0000-0000-0000-0000000000f1',
+            '00000000-0000-0000-0000-0000000000d1',
+            'f1/d1', 'pending', now(), now())
+$$, '23505');
+
+-- An acknowledgement is a person and a time, or it is neither.
+SELECT pg_temp.must_fail($$
+    UPDATE alert_state SET acked_at = now() WHERE dedup_key = 'f1/d1'
+$$, '23514');
+
+-- The other customer's resource cannot be given this tenant's alert. The composite
+-- foreign key is what refuses it, not a predicate anybody has to remember.
+SELECT pg_temp.must_fail($$
+    INSERT INTO alert_state
+        (tenant_id, rule_id, resource_id, dedup_key, state, since, last_eval)
+    VALUES ('00000000-0000-0000-0000-00000000000a',
+            '00000000-0000-0000-0000-0000000000f1',
+            '00000000-0000-0000-0000-0000000000d2',
+            'f1/d2', 'firing', now(), now())
+$$, '23503');
+
+-- Deleting a rule deletes what it believed. State rows naming a rule nobody can look up
+-- are alerts in the UI that cannot be explained, acknowledged or silenced.
+DELETE FROM alert_rule WHERE id = '00000000-0000-0000-0000-0000000000f1';
+SELECT pg_temp.check(
+    NOT EXISTS (SELECT 1 FROM alert_state WHERE dedup_key = 'f1/d1'),
+    'alert state must not outlive its rule');
+
 -- Every foreign key has an index on its referencing side.
 --
 -- PostgreSQL indexes the referenced side automatically and the referencing side never,

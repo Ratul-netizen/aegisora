@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO alert_state\n                (tenant_id, rule_id, resource_id, dedup_key, state, since, last_eval,\n                 last_value)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n            ON CONFLICT (tenant_id, dedup_key) DO UPDATE\n               SET state      = EXCLUDED.state,\n                   since      = EXCLUDED.since,\n                   last_eval  = EXCLUDED.last_eval,\n                   last_value = EXCLUDED.last_value,\n                   -- An acknowledgement belongs to the episode it was made during. A\n                   -- series that has gone back to ok and breached again is a new problem,\n                   -- and carrying the old ack forward would silence a page nobody has\n                   -- seen.\n                   acked_by   = CASE WHEN alert_state.state = EXCLUDED.state\n                                     THEN alert_state.acked_by ELSE NULL END,\n                   acked_at   = CASE WHEN alert_state.state = EXCLUDED.state\n                                     THEN alert_state.acked_at ELSE NULL END\n            RETURNING\n                id, rule_id,\n                resource_id AS \"resource_id: ResourceId\",\n                dedup_key, state, since, last_eval, last_value,\n                acked_by    AS \"acked_by: ActorId\",\n                acked_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "rule_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "resource_id: ResourceId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "dedup_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "since",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_eval",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_value",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "acked_by: ActorId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "acked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "66a6f6655cbdfb09fbca6e6c7adbce2b93573c195391370709678efe1c378495"
+}
