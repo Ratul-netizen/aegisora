@@ -85,7 +85,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · the evaluator** | ✅ `uops-alert` — a wheel, not a task per rule; runs inside `uops-server`, verified live |
 | **M4 · a flapping signal notifies nobody** | ✅ asserted twice: pure, and end to end against real `ClickHouse` |
 | **M4 · absence detects a device going quiet** | ✅ fires once, six minutes after the last sample |
-| M4 · 1 000 rules inside one 60 s cycle | ⬜ the **schedule** is measured (no second holds more than 60 of 1 000); the end-to-end timing is not |
+| **M4 · 1 000 rules inside one 60 s cycle** | ✅ **measured — 12.09 s**, p95 331 ms per rule, [`docs/benchmarks/alert-cycle.md`](./docs/benchmarks/alert-cycle.md) |
 | **M4 · notifications — webhooks** | ✅ `uops-notify`, delivered from the engine, verified against a real socket |
 | **M4 · the rate limit stops a storm** | ✅ SPEC's 5 000-resource rule sends 12 and records 4 988 refusals |
 | **M4 · a per-tenant daily budget** | ✅ the backstop behind the rate — a slow leak, not a storm |
@@ -676,6 +676,7 @@ M1 is where they start.
 | **CLA reviewed by a lawyer** | publicising the repository | The licence is decided — AGPL-3.0-only plus a CLA, see *Decided* below — and this is what is left of it. `CLA.md` is a working draft modelled on the Apache ICLA and nobody qualified has read it. **The only irreversible item in this table**: the licence choice can be changed, but one unsigned outside contribution permanently forecloses dual-licensing, because relicensing would need that person's individual consent forever |
 | Buyer focus: MSP-first? | credential scoping depth in M1 | My recommendation was MSP-first; your read on Bangladesh/SEA overrides mine |
 | Metrics + rollup ingest cost | M4, not M0 | The one W1 measurement not run |
+| **Many tenants rather than many rules** | a hosted deployment | The alert cycle is measured at 1 000 rules in **one** tenant. The suppression cache is per tenant, so a thousand tenants read a thousand maintenance maps a cycle rather than one — a different constant, and an unmeasured one. `docs/benchmarks/alert-cycle.md` says what it does not cover |
 | **Tiered storage policy** | deployment profiles | SPEC §M0.6 shows `TTL … TO VOLUME 'warm'/'cold'` against a `tiered` policy that does not exist on a default install — those migrations would fail outright. Retention is a plain `DELETE` TTL for now; tiering is a later migration, written alongside the profile that configures the policy |
 
 ## Decided since the last update

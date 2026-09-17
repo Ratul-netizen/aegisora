@@ -63,6 +63,19 @@ pub struct Window {
     said: HashSet<String>,
 }
 
+impl Window {
+    /// How many rules have been evaluated since the last reload.
+    ///
+    /// The only counter anything outside reads, and it is read by the scale measurement
+    /// to check that a cycle evaluated every rule rather than dropping some of them
+    /// quietly — a cycle that finishes inside its budget by doing less is the failure the
+    /// measurement exists to rule out.
+    #[must_use]
+    pub const fn evaluated(&self) -> usize {
+        self.rules
+    }
+}
+
 /// Evaluate rules until `shutdown` completes.
 ///
 /// Returns when the shutdown future does, after the evaluations already dispatched have
