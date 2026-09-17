@@ -621,6 +621,71 @@ SELECT pg_temp.check(
                  WHERE id = '00000000-0000-0000-0000-0000000000e1'),
     'a window must not outlive its target');
 
+-- ---------------------------------------------------------------- saved searches
+--
+-- The properties migration 0013 claims: a stored search is an answerable question, its
+-- denormalised signal cannot lie about the AST it came from, and a name belongs to one
+-- tenant rather than to the installation.
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO saved_search (tenant_id, name, signal, query)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'not an object', 'log',
+            '"just a string"'::jsonb)
+$$, '23514');
+
+-- The denormalisation that pays for the list view has to be kept honest by the database,
+-- or it is just a second copy of a field that will eventually disagree with the first.
+SELECT pg_temp.must_fail($$
+    INSERT INTO saved_search (tenant_id, name, signal, query)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'disagrees with itself', 'metric',
+            '{"signal":"log"}'::jsonb)
+$$, '23514');
+
+-- A search over a signal with no table behind it could be saved, listed, opened, and
+-- never run. `trace` is in the AST and the compiler refuses it until M8.
+SELECT pg_temp.must_fail($$
+    INSERT INTO saved_search (tenant_id, name, signal, query)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'traces', 'trace',
+            '{"signal":"trace"}'::jsonb)
+$$, '23514');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO saved_search (tenant_id, name, signal, query)
+    VALUES ('00000000-0000-0000-0000-00000000000a', '   ', 'log', '{"signal":"log"}'::jsonb)
+$$, '23514');
+
+INSERT INTO saved_search (tenant_id, name, signal, query) VALUES
+    ('00000000-0000-0000-0000-00000000000a', 'BGP flaps', 'log', '{"signal":"log"}'::jsonb);
+
+-- The same name again in the same tenant is a conflict...
+SELECT pg_temp.must_fail($$
+    INSERT INTO saved_search (tenant_id, name, signal, query)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'BGP flaps', 'log',
+            '{"signal":"log"}'::jsonb)
+$$, '23505');
+
+-- ...and in the other customer's tenant it is simply their own search. Names are scoped
+-- to a tenant, not to the installation: an MSP running this for forty customers would
+-- otherwise have the first of them claim "BGP flaps" for everyone.
+INSERT INTO saved_search (tenant_id, name, signal, query) VALUES
+    ('00000000-0000-0000-0000-00000000000b', 'BGP flaps', 'log', '{"signal":"log"}'::jsonb);
+
+SELECT pg_temp.check(
+    (SELECT count(*) FROM saved_search WHERE name = 'BGP flaps') = 2,
+    'a search name belongs to a tenant, not to the installation');
+
+-- Removing a customer removes their searches with them. Asserted on the constraint
+-- rather than by deleting the tenant: `site` deliberately has no cascade — a tenant with
+-- sites cannot be deleted at all — so the only way to exercise this one by hand would be
+-- to dismantle every fixture above it first, which tests the fixtures rather than this.
+SELECT pg_temp.check(
+    (SELECT confdeltype
+       FROM pg_constraint
+      WHERE conrelid = 'saved_search'::regclass
+        AND confrelid = 'tenant'::regclass
+        AND contype = 'f') = 'c',
+    'a saved search must not outlive its tenant');
+
 -- Every foreign key has an index on its referencing side.
 --
 -- PostgreSQL indexes the referenced side automatically and the referencing side never,

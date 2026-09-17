@@ -37,7 +37,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | `uops-secrets` | ✅ 51 |
 | `uops-query` | ✅ 49, 12 golden fixtures |
 | `uops-bus` | ✅ 29, incl. an 11-case conformance suite |
-| PostgreSQL migrations | ✅ 8 migrations, 22 asserted invariants |
+| PostgreSQL migrations | ✅ 13 migrations, asserted invariants per table |
 | `uops-ch-migrate` | ✅ 34, applied against ClickHouse 26.8 |
 | **M1 — all acceptance criteria met** | ✅ |
 | `uops-store-pg` | ✅ 74 |
@@ -78,7 +78,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M3 · the OTLP receiver** | ✅ `uops-collector-otlp` — OTLP/HTTP, logs + metrics + traces, end to end |
 | **M3 · Log Explorer** | ✅ histogram with drag-to-zoom, field sidebar, row detail, **all signals for a resource** |
 | **M3 · live tail** | ✅ `POST /api/v1/query/tail` — half-open on `ingested_at`, so polls partition the rows |
-| M3 · saved searches | ⬜ |
+| **M3 · saved searches** | ✅ stored `Query` ASTs — five routes, compiled before they are stored, 11 tests against real `PostgreSQL` |
 | M4 | ⬜ |
 
 ## Resume in three commands
@@ -92,8 +92,8 @@ bash scripts/db.sh migrate && bash scripts/ch.sh apply
 # about eighty tests without it — and they fail with instructions rather than passing.
 export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
 export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 843 tests, green
-cd web && npm ci && npm test                                            # 31 more
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 854 tests, green
+cd web && npm ci && npm test                                            # 37 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 

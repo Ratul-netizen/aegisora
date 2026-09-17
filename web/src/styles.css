@@ -705,6 +705,48 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+/* --- saved searches --- */
+
+.saved {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.saved label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.saved input {
+  /* Wide enough for a name somebody will recognise in a list six weeks later, and no
+     wider: this bar sits above the form and must not push it down a line. */
+  min-width: 14rem;
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.problem-inline {
+  align-self: center;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+/* A statement about what is on screen, not an error. It sits between the bar and the
+   form because it is about the relationship between the two. */
+p.warn {
+  margin: 0.4rem 0;
+  color: var(--warn);
+  font-size: 0.9rem;
+}
+
 /* --- the live tail --- */
 
 .tailing {

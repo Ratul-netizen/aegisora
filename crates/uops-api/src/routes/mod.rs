@@ -14,6 +14,7 @@ pub mod health;
 pub mod maintenance;
 pub mod query;
 pub mod resources;
+pub mod searches;
 pub mod sites;
 
 use axum::routing::{any, delete, get, patch, post, put};
@@ -76,6 +77,17 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/maintenance/{id}",
             get(maintenance::get).delete(maintenance::cancel),
+        )
+        // A saved search is a stored Query AST — the same object the route below takes,
+        // and the same one an M4 alert rule will be an instance of. Reading is Viewer;
+        // saving is Operator, because a saved search is the team's question rather than
+        // a personal bookmark.
+        .route("/api/v1/searches", get(searches::list).post(searches::save))
+        .route(
+            "/api/v1/searches/{id}",
+            get(searches::get)
+                .put(searches::update)
+                .delete(searches::delete),
         )
         .route("/api/v1/sites", get(sites::list))
         .route("/api/v1/sites/{id}/location", put(sites::place))

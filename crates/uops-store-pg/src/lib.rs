@@ -57,6 +57,7 @@ pub mod pollable;
 pub mod profile;
 pub mod resource;
 pub mod sealed;
+pub mod searches;
 pub mod sites;
 pub mod store;
 
@@ -76,5 +77,6 @@ pub use page::{Cursor, DEFAULT_PAGE, MAX_PAGE, Page};
 pub use pollable::{PollableDevice, SYSOBJECTID_KEY};
 pub use resource::{NewResource, ResourceFilter};
 pub use sealed::PgSealedStore;
+pub use searches::{NewSearch, SavedSearch};
 pub use sites::{Location, SiteOverview, StatusCounts};
 pub use store::{Config, PgStore};

@@ -127,6 +127,14 @@ id_type!(
     ResourceGroupId
 );
 id_type!(
+    /// A question somebody wants to ask again — SPEC §M3.
+    ///
+    /// The row behind it holds a `Query` AST, which is also what an M4 alert rule holds.
+    /// The id is separate from a rule's because a search may be saved and never alerted
+    /// on, and an alert rule may be written without anybody having searched first.
+    SavedSearchId
+);
+id_type!(
     /// A reference to sealed credential material. Never the material itself.
     CredentialRef
 );

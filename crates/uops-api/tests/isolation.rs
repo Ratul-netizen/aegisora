@@ -317,6 +317,48 @@ const CASES: &[RouteCase] = &[
         body: None,
     },
     RouteCase {
+        path: "/api/v1/searches",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/searches",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"name":"intruder","query":{"signal":"log","time":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"},"resources":{"type":"all"},"limit":1}}"#,
+        ),
+    },
+    RouteCase {
+        // `{id}` is the other tenant's *resource* id rather than a search id, which is
+        // the point: an id that is not a search of this tenant must answer exactly as an
+        // id that is not a search at all.
+        path: "/api/v1/searches/{id}",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/searches/{id}",
+        probe: None,
+        method: "PUT",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"name":"stolen","query":{"signal":"log","time":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"},"resources":{"type":"all"},"limit":1}}"#,
+        ),
+    },
+    RouteCase {
+        path: "/api/v1/searches/{id}",
+        probe: None,
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
         path: "/api/v1/query",
         probe: None,
         method: "POST",

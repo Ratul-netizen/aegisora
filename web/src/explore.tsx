@@ -47,6 +47,8 @@ import {
 } from "./query";
 import { resolveRange, useShell } from "./shell";
 import { AllSignals } from "./signals";
+import { SavedSearches } from "./saved";
+import { overWindow, toControls, type SavedSearch } from "./searches";
 import { POLL_MS, merge, pollTail } from "./tail";
 
 const TEXT_MODES: { value: TextMode; label: string; hint: string }[] = [
@@ -260,6 +262,8 @@ export function ExplorePage() {
   const [tail, setTail] = useState<ResultSet | null>(null);
   const [lag, setLag] = useState({ behind: false, skipped: false });
   const [tailError, setTailError] = useState<string | null>(null);
+  /** Whether the form is showing less than the query that ran — see `toControls`. */
+  const [partial, setPartial] = useState(false);
 
   const run = useMutation({
     mutationFn: (q: Query) => runQuery(tenant.tenant_id, q),
@@ -291,7 +295,41 @@ export function ExplorePage() {
     };
   };
 
+  /**
+   * Open a saved search.
+   *
+   * Runs the AST that was saved, with only the window replaced. The controls are set
+   * from it as well so it can be read and edited — but that direction is lossy, and the
+   * rows deliberately do not depend on it: what is on screen is the saved question, even
+   * when the form below cannot draw all of it.
+   */
+  const openSaved = (saved: SavedSearch) => {
+    const resolved = resolveRange(range);
+    if (!resolved) return;
+
+    const controls = toControls(saved.query);
+    setSignal(controls.signal);
+    setSearch(controls.search);
+    setMode(controls.mode);
+    setSeverity(controls.severity);
+    setLimit(controls.limit);
+    // Setting `picked` fires the effect below, which would rebuild the query from the
+    // controls and run *that* — the approximation this function exists to avoid.
+    applying.current = true;
+    setPicked(controls.picked);
+    setPartial(!controls.exact);
+
+    const q = overWindow(saved.query, resolved.from, resolved.to);
+    hasRun.current = true;
+    setFollowed(null);
+    setOpen(null);
+    setRan(q);
+    run.mutate(q);
+  };
+
   const go = () => {
+    // Typing in the form and pressing Run means the form is the question again.
+    setPartial(false);
     const q = build();
     if (!q) return;
     hasRun.current = true;
@@ -306,27 +344,44 @@ export function ExplorePage() {
 
   // Re-run on a tenant or time-range change, but only if something has been run. The
   // first visit shows an empty state and an untouched form, not a query nobody asked for.
+  //
+  // What re-runs is *what was last run*, with the window replaced — not the controls
+  // rebuilt. For a search typed into this form the two are the same thing. For a saved
+  // search they are not: its filter may be one the form cannot express, and rebuilding
+  // would answer a different question every time somebody dragged the histogram.
   const hasRun = useRef(false);
   const { mutate } = run;
   useEffect(() => {
     if (!hasRun.current) return;
-    const q = build();
-    if (q) {
-      setOpen(null);
-      setRan(q);
-      mutate(q);
-    }
-    // build() closes over every control, and re-running on a control change is exactly
-    // what this page must not do. Only these two are shared state.
+    const resolved = resolveRange(range);
+    const last = ranRef.current;
+    if (!resolved || !last) return;
+
+    const q = overWindow(last, resolved.from, resolved.to);
+    setOpen(null);
+    setRan(q);
+    mutate(q);
+    // `ran` is read through a ref so that re-running does not itself re-trigger this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenant.tenant_id, range.from, range.to, mutate]);
+
+  /** The last query run, for the effect above. */
+  const ranRef = useRef<Query | null>(null);
+  ranRef.current = ran;
 
   // A picked filter is a click, and a click should act. It is the one control that runs
   // on change, because nobody clicks a value in a sidebar and then looks for a button.
   const firstRender = useRef(true);
+  const applying = useRef(false);
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
+      return;
+    }
+    if (applying.current) {
+      // The chips were set by opening a saved search, which has already run the query
+      // that was saved. Running again here would replace it with the form's rebuild.
+      applying.current = false;
       return;
     }
     if (hasRun.current) go();
@@ -450,6 +505,21 @@ export function ExplorePage() {
   return (
     <>
       <h1>Explore</h1>
+
+      <SavedSearches
+        tenant={tenant.tenant_id}
+        role={tenant.role}
+        current={build}
+        onOpen={openSaved}
+      />
+
+      {partial && (
+        <p className="warn" role="status">
+          This saved search has a filter the form below cannot show, so the form is
+          describing less than what ran. The rows are the saved search; pressing Run
+          would replace it with what the form says.
+        </p>
+      )}
 
       <form
         className="explore-form"
