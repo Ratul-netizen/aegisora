@@ -18,10 +18,17 @@ uops-snmp.workspace = true
 # crate's.
 uops-profile.workspace = true
 
+futures-util.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+# test-util: the paused clock. Measuring a rate cap against the wall would mean a test
+# that waits five minutes, so it would be #[ignore]d, so it would never run.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
+# The concurrency cap needs a transport that counts overlapping probes; the simulator has
+# no notion of an outstanding request. Implementing Transport by hand needs the attribute.
+async-trait.workspace = true
 
 [lints]
 workspace = true

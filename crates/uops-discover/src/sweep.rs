@@ -16,7 +16,8 @@ use std::str::FromStr;
 /// The most addresses one run may probe.
 ///
 /// 65 536 is a /16, and the number is a judgement rather than a technical ceiling: a
-/// sweep of it at [`PROBES_PER_SECOND`] takes about five and a half minutes, which is
+/// sweep of it at [`PROBES_PER_SECOND`] takes about five and a half minutes — see
+/// [`IN_FLIGHT`] for why that is only true if the three constants agree — which is
 /// long enough to be a scheduled job and short enough that an operator who started it by
 /// hand will wait. Ten times that is a different kind of operation and should be ten
 /// jobs, because ten jobs can fail, be re-run and be audited separately.
@@ -30,20 +31,46 @@ pub const MAX_ADDRESSES: u32 = 65_536;
 /// who genuinely has forty sites and needs to be told to split the job.
 pub const WIDEST_PREFIX: u8 = 16;
 
-/// Probes in flight at once.
-///
-/// Every one is a UDP round trip that spends most of its life waiting, so this is a
-/// concurrency number rather than a CPU number. The ceiling on it is not this process —
-/// it is the firewall between here and the estate, which will hold state for every
-/// outstanding probe and has a table size.
-pub const IN_FLIGHT: usize = 64;
-
 /// Probes per second, across the whole run.
 ///
 /// A discovery run must not be the reason a customer's network monitoring alerts. 200/s
 /// is about 15 KB/s of SNMP — beneath notice on any link, and beneath the threshold of
 /// every scan detector this has been pointed at.
+///
+/// This is the limit that is meant to bind. [`IN_FLIGHT`] is sized so that it does.
 pub const PROBES_PER_SECOND: u32 = 200;
+
+/// How long one probe waits before the address is called silent.
+///
+/// Two seconds, and deliberately not `uops_snmp::udp::DEFAULT_TIMEOUT`, which is five.
+/// Five is right for a *poll*: a conversation with a device known to exist, where giving
+/// up early loses real telemetry. It is wrong for a probe, where the overwhelming
+/// majority of addresses have nothing on them and the timeout is therefore the entire
+/// cost of the sweep.
+///
+/// The arithmetic is the whole reason this constant exists, and getting it wrong is easy:
+/// a sweep of empty addresses runs at `IN_FLIGHT / PROBE_TIMEOUT` probes per second,
+/// *regardless* of [`PROBES_PER_SECOND`]. At the five-second poll timeout and 64 in
+/// flight that is 13/s — so a /16 would take 85 minutes while appearing to be rate-capped
+/// at 200/s. The two limits have to be chosen against each other or the smaller one binds
+/// silently and the larger one is decoration.
+///
+/// Enforced in [`probe`](crate::probe::probe) rather than left to the transport, so that
+/// it holds whatever the caller configured.
+pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Probes in flight at once.
+///
+/// A backstop, not the primary limit. It is sized from the other two:
+/// `PROBES_PER_SECOND × PROBE_TIMEOUT` is 400 outstanding probes in the worst case — an
+/// entirely empty range — so 512 leaves headroom and lets [`PROBES_PER_SECOND`] be the
+/// constraint that actually binds. A /16 then takes about five and a half minutes, which
+/// is the number [`MAX_ADDRESSES`] was chosen against.
+///
+/// Sized *down* by one thing only: the firewall between here and the estate holds state
+/// for every outstanding UDP probe and has a table size. 512 states at a 30-second UDP
+/// idle timeout is nothing to any real firewall; six thousand would not be.
+pub const IN_FLIGHT: usize = 512;
 
 /// Below this prefix length a range has a network and a broadcast address.
 ///

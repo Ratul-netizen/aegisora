@@ -2410,6 +2410,8 @@ dependencies = [
 name = "uops-discover"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "futures-util",
  "thiserror 2.0.20",
  "tokio",
  "uops-core",

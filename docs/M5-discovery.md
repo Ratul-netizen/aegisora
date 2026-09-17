@@ -70,8 +70,19 @@ A discovery job holds CIDRs, not "the network". The rules:
   is written, with the sentence saying to split it. An operator who means a /8 means
   something else.
 - **Addresses per job are capped at 65 536** across all its ranges, for the same reason.
-- **Concurrency is capped** at `IN_FLIGHT` probes, and the rate at `PROBES_PER_SECOND`. A
-  discovery run must not be the reason a customer's network monitoring alerts.
+- **Concurrency is capped** at `IN_FLIGHT` probes, the rate at `PROBES_PER_SECOND`, and
+  each probe at `PROBE_TIMEOUT`. A discovery run must not be the reason a customer's
+  network monitoring alerts.
+
+  The three are chosen against each other, which is less obvious than it sounds. A sweep
+  of empty addresses — which is almost all of any sweep — runs at
+  `IN_FLIGHT / PROBE_TIMEOUT` probes per second *regardless of the rate cap*. Pick them
+  independently and the smaller one binds silently while the documented one is
+  decoration: the first version of these constants used the poller's five-second timeout
+  with 64 in flight, which is 13/s, so a /16 would have taken 85 minutes while appearing
+  to be capped at 200/s. A probe therefore has its own timeout — two seconds, because a
+  probe is one small `GET` to an address that probably holds nothing, where a poll's five
+  seconds is right for a conversation with a device known to exist.
 - **Network and broadcast addresses are skipped** in any range of /30 or wider. Not for
   the two addresses: the broadcast address makes every host on the segment answer at
   once, which looks like a tool that has found a great many devices and is one being

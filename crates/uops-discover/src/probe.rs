@@ -26,6 +26,8 @@ use uops_core::identity::{IdentifierKind, ObservedIdentity};
 use uops_profile::Oid;
 use uops_snmp::transport::{Target, Transport, TransportError, Value};
 
+use crate::sweep::PROBE_TIMEOUT;
+
 /// `SNMPv2-MIB::sysObjectID`. What profile resolution matches on.
 const SYSOBJECTID: &str = "1.3.6.1.2.1.1.2";
 /// `SNMPv2-MIB::sysDescr`. A sentence, and the fallback when there is no profile.
@@ -118,14 +120,20 @@ pub async fn probe<T: Transport + ?Sized>(transport: &T, address: SocketAddr) ->
     ];
     let target = Target { address };
 
-    let varbinds = match transport.get_scalars(&target, &oids).await {
-        Ok(varbinds) => varbinds,
-        Err(TransportError::AuthFailed) => return Answer::Refused,
-        Err(TransportError::Timeout) => return Answer::Silent,
+    // The timeout is applied here rather than left to the transport's own. A poll's
+    // five seconds is right for a conversation with a device known to exist and wrong for
+    // a probe, where almost every address is empty and the wait *is* the cost of the
+    // sweep. See `PROBE_TIMEOUT` for the arithmetic that ties it to the concurrency cap.
+    let answered = tokio::time::timeout(PROBE_TIMEOUT, transport.get_scalars(&target, &oids));
+    let varbinds = match answered.await {
+        Err(_elapsed) => return Answer::Silent,
+        Ok(Ok(varbinds)) => varbinds,
+        Ok(Err(TransportError::AuthFailed)) => return Answer::Refused,
+        Ok(Err(TransportError::Timeout)) => return Answer::Silent,
         // `TooBig` from a GET of three scalars is an agent that cannot fit 60 bytes in a
         // response, which is not a size problem. Treated as an answer, because whatever
         // it is, something is there.
-        Err(TransportError::TooBig) => {
+        Ok(Err(TransportError::TooBig)) => {
             return Answer::Device(Box::new(Sighting {
                 address,
                 sys_object_id: None,
@@ -133,7 +141,7 @@ pub async fn probe<T: Transport + ?Sized>(transport: &T, address: SocketAddr) ->
                 sys_descr: None,
             }));
         }
-        Err(e) => return Answer::Failed(e.to_string()),
+        Ok(Err(e)) => return Answer::Failed(e.to_string()),
     };
 
     let at = |oid: &Oid| varbinds.iter().find(|vb| vb.oid.starts_with(oid));

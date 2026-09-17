@@ -32,9 +32,12 @@
 //! address to probe, and constructing one is the bounds check.
 
 pub mod probe;
+pub mod run;
 pub mod sweep;
 
 pub use probe::{Answer, Sighting, probe};
+pub use run::{Findings, run};
 pub use sweep::{
-    IN_FLIGHT, MAX_ADDRESSES, PROBES_PER_SECOND, Range, Sweep, SweepError, WIDEST_PREFIX,
+    IN_FLIGHT, MAX_ADDRESSES, PROBE_TIMEOUT, PROBES_PER_SECOND, Range, Sweep, SweepError,
+    WIDEST_PREFIX,
 };
