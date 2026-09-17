@@ -207,6 +207,52 @@ fn must_compile(query: &Query, scope: &TenantScope) -> Result<()> {
         .map_err(|e| CoreError::Invalid(e.to_string()))
 }
 
+/// Reject a rule whose query cannot produce the thing its condition compares.
+///
+/// Both of these are refusals at the moment somebody writes the rule, because the
+/// alternative is a rule that saves, lists and looks healthy while evaluating to nothing
+/// — and the symptom is an alert that never arrives, noticed during the incident it was
+/// written for.
+fn must_be_evaluable(query: &Query, condition: Condition) -> Result<()> {
+    match condition {
+        // A threshold compares one number. The query's own aggregate is that number —
+        // `avg(system.cpu.utilization) > 90` — and several aggregates leave no way to say
+        // which one the threshold is about.
+        //
+        // **Zero is allowed, and means the row count.** A saved search from the Log
+        // Explorer has no aggregation: it is "the rows matching this". Alerting on it
+        // means alerting on *how many* there are, which is exactly what somebody who
+        // saved "errors mentioning CRC" means by "tell me when this happens" — and it is
+        // what makes SPEC's "converts to an alert rule with no edits" literally true
+        // rather than true-after-adding-a-count. The evaluator supplies the `count()`;
+        // see `uops_alert::plan`.
+        Condition::Threshold { .. } => {
+            if query.aggregations.len() > 1 {
+                return Err(CoreError::Invalid(format!(
+                    "a threshold rule compares one number and this query produces {} —                      leave exactly one aggregation, or none to alert on the row count.",
+                    query.aggregations.len()
+                )));
+            }
+        }
+
+        // An absence rule asks which of a set of resources has gone quiet, so the set has
+        // to be nameable. `all` includes every resource that has never reported once — a
+        // decommissioned switch, a device added this morning — and the rule would fire
+        // for all of them on its first evaluation, which is the fastest way to teach an
+        // operator to ignore this product.
+        Condition::Absence { .. } => {
+            if matches!(query.resources, uops_query::ResourceSelector::All) {
+                return Err(CoreError::Invalid(
+                    "an absence rule must name the resources it watches — a kind, a site, a                      group or a tag. Every resource in the tenant includes ones that have                      never reported, and the rule would fire for all of them."
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl PgStore {
     /// Create a rule.
     ///
@@ -221,6 +267,7 @@ impl PgStore {
         new: &NewRule,
     ) -> Result<AlertRule> {
         must_compile(&new.query, scope)?;
+        must_be_evaluable(&new.query, new.condition)?;
 
         // tenant-exempt: the tenant is the first bound parameter, from the scope.
         let row = sqlx::query_as!(
@@ -332,6 +379,7 @@ impl PgStore {
         new: &NewRule,
     ) -> Result<AlertRule> {
         must_compile(&new.query, scope)?;
+        must_be_evaluable(&new.query, new.condition)?;
 
         // tenant-exempt: the tenant is a bound parameter, from the scope.
         let row = sqlx::query_as!(

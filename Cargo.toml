@@ -156,6 +156,7 @@ uops-pipeline = { path = "crates/uops-pipeline" }
 uops-collector-syslog = { path = "crates/uops-collector-syslog" }
 uops-otlp = { path = "crates/uops-otlp" }
 uops-collector-otlp = { path = "crates/uops-collector-otlp" }
+uops-alert = { path = "crates/uops-alert" }
 uops-api = { path = "crates/uops-api" }
 uops-server = { path = "crates/uops-server" }
 uops-store-ch = { path = "crates/uops-store-ch" }

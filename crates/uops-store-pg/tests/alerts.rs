@@ -8,7 +8,7 @@
 use chrono::{Duration, Utc};
 use uops_core::alert::{AlertSeverity, Comparison, Condition, Phase, dedup_key};
 use uops_core::{OrgId, ResourceId, ResourceKind, TenantId, TenantScope};
-use uops_query::{Field, Query, SignalType, TimeRange};
+use uops_query::{AggFunc, Aggregation, Field, Query, SignalType, TimeRange};
 use uops_store_pg::{Config, Evaluated, NewResource, NewRule, PgStore};
 
 async fn store() -> PgStore {
@@ -57,10 +57,19 @@ fn cpu_rule(name: &str) -> NewRule {
     NewRule {
         name: name.to_owned(),
         description: String::new(),
-        query: Query::new(
-            SignalType::Metric,
-            TimeRange::new(end - Duration::minutes(5), end),
-        ),
+        // An aggregation, because a threshold rule compares a number and the number is
+        // the query's own: `avg(value) > 90`. A rule without one is refused.
+        query: Query {
+            aggregations: vec![Aggregation {
+                func: AggFunc::Avg,
+                field: Some(Field::Value),
+                alias: "v".to_owned(),
+            }],
+            ..Query::new(
+                SignalType::Metric,
+                TimeRange::new(end - Duration::minutes(5), end),
+            )
+        },
         condition: Condition::Threshold {
             op: Comparison::Gt,
             value: 90.0,
@@ -101,15 +110,14 @@ async fn a_query_the_compiler_refuses_is_never_stored() {
     let (scope, _) = tenant(&store, "refused").await;
 
     let mut broken = cpu_rule("Broken");
-    broken.query = Query::new(
-        SignalType::Metric,
-        TimeRange::new(Utc::now() - Duration::minutes(5), Utc::now()),
-    )
-    .with_filter(uops_query::Expr::Text {
-        field: Field::Body,
-        mode: uops_query::TextMode::AnyToken,
-        terms: vec!["metrics have no body".to_owned()],
-    });
+    broken.query = Query {
+        filter: Some(uops_query::Expr::Text {
+            field: Field::Body,
+            mode: uops_query::TextMode::AnyToken,
+            terms: vec!["metrics have no body".to_owned()],
+        }),
+        ..broken.query.clone()
+    };
 
     assert!(matches!(
         store.create_rule(&scope, None, &broken).await,
@@ -404,4 +412,53 @@ async fn disabling_a_rule_keeps_what_it_believed() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn a_rule_that_could_never_produce_a_number_is_refused() {
+    // These save, list and look healthy while evaluating to nothing or to the wrong
+    // thing. The symptom is an alert that never arrives, noticed during the incident it
+    // was written for — so they are refused where somebody is still looking at the screen.
+    let store = store().await;
+    let (scope, _) = tenant(&store, "evaluable").await;
+
+    // Two aggregates leave no way to say which one the threshold is about.
+    let mut ambiguous = cpu_rule("Two numbers");
+    ambiguous.query.aggregations.push(Aggregation {
+        func: AggFunc::Max,
+        field: Some(Field::Value),
+        alias: "m".to_owned(),
+    });
+    assert!(matches!(
+        store.create_rule(&scope, None, &ambiguous).await,
+        Err(uops_core::Error::Invalid(_))
+    ));
+
+    // None, on the other hand, is a saved Log Explorer search: alert on how many rows it
+    // returns. The evaluator supplies the count.
+    let mut rows = cpu_rule("A search");
+    rows.query.aggregations.clear();
+    store
+        .create_rule(&scope, None, &rows)
+        .await
+        .expect("a search alerts on its row count");
+
+    // An absence rule over "everything", which includes every resource that has never
+    // reported once.
+    let mut everything = cpu_rule("Everything is quiet");
+    everything.condition = Condition::Absence { after_seconds: 300 };
+    everything.query.resources = uops_query::ResourceSelector::All;
+    assert!(matches!(
+        store.create_rule(&scope, None, &everything).await,
+        Err(uops_core::Error::Invalid(_))
+    ));
+
+    // Named resources, and the same rule is fine.
+    everything.query.resources = uops_query::ResourceSelector::Kind {
+        kind: ResourceKind::Device,
+    };
+    store
+        .create_rule(&scope, None, &everything)
+        .await
+        .expect("an absence rule that names what it watches");
 }

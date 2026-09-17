@@ -10,6 +10,7 @@ publish.workspace = true
 authors.workspace = true
 
 [dependencies]
+uops-alert.workspace = true
 uops-api.workspace = true
 uops-core.workspace = true
 uops-secrets.workspace = true

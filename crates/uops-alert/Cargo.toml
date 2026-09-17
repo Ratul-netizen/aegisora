@@ -1,0 +1,32 @@
+[package]
+name = "uops-alert"
+description = "The alert evaluator. Turns rules into decisions, on a schedule, without waking anybody twice."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+uops-query.workspace = true
+uops-store-ch.workspace = true
+uops-store-pg.workspace = true
+# The scheduler. Generic over its key and already carrying the jitter argument SPEC §M2
+# made -- see uops_poll::wheel. A rule is a different thing to schedule, not a different
+# way of scheduling, so this is a reuse rather than a dependency on polling.
+uops-poll.workspace = true
+
+chrono.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["time", "rt", "macros", "sync"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+sqlx.workspace = true
+
+[lints]
+workspace = true

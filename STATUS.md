@@ -82,7 +82,10 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · the alert state machine** | ✅ `ok → pending → firing → resolved`, pure — a flapping signal that would send 600 notifications sends 0 |
 | **M4 · rules and state** | ✅ migration 0014, eight routes, dedup by `(tenant, dedup_key)` — 16 tests against real `PostgreSQL` |
 | **M4 · a saved search becomes a rule with no edits** | ✅ asserted through HTTP: the rule holds the search's query byte for byte |
-| M4 · the evaluator | ⬜ one task per rule, jittered |
+| **M4 · the evaluator** | ✅ `uops-alert` — a wheel, not a task per rule; runs inside `uops-server`, verified live |
+| **M4 · a flapping signal notifies nobody** | ✅ asserted twice: pure, and end to end against real `ClickHouse` |
+| **M4 · absence detects a device going quiet** | ✅ fires once, six minutes after the last sample |
+| M4 · 1 000 rules inside one 60 s cycle | ⬜ the **schedule** is measured (no second holds more than 60 of 1 000); the end-to-end timing is not |
 | M4 · notifications (SMTP, webhook) | ⬜ |
 | M4 · dashboards | ⬜ |
 
@@ -97,7 +100,7 @@ bash scripts/db.sh migrate && bash scripts/ch.sh apply
 # about eighty tests without it — and they fail with instructions rather than passing.
 export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
 export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 885 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 910 tests, green
 cd web && npm ci && npm test                                            # 37 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```

@@ -2288,6 +2288,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
+name = "uops-alert"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uops-core",
+ "uops-poll",
+ "uops-query",
+ "uops-store-ch",
+ "uops-store-pg",
+ "uuid",
+]
+
+[[package]]
 name = "uops-api"
 version = "0.0.1"
 dependencies = [
@@ -2518,6 +2534,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tower-http",
+ "uops-alert",
  "uops-api",
  "uops-core",
  "uops-secrets",

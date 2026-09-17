@@ -25,6 +25,14 @@ pub struct Config {
     pub postgres: PgConfig,
     pub clickhouse: ChConfig,
     pub secure_cookies: bool,
+    /// Whether this process evaluates alert rules.
+    ///
+    /// On by default: a monitoring product whose alerting has to be switched on is one
+    /// that silently watches nothing until somebody notices. `UOPS_ALERTS=off` is for the
+    /// second and third replica of a horizontally scaled deployment — two evaluators over
+    /// one database do not produce two alerts, because the state write deduplicates on
+    /// `(tenant, dedup_key)`, but they do double the load on `ClickHouse` for no benefit.
+    pub alerts: bool,
     pub first_run: FirstRunNames,
     /// Where the key-encryption key comes from, if anywhere.
     ///
@@ -131,6 +139,14 @@ impl Config {
             postgres: PgConfig::from_env(),
             clickhouse: ChConfig::from_env(),
             secure_cookies: !flag("UOPS_INSECURE_COOKIES"),
+            // Off only when asked, in the same words the other negative flag uses.
+            alerts: !matches!(
+                std::env::var("UOPS_ALERTS")
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .as_str(),
+                "0" | "false" | "no" | "off"
+            ),
             kek: match (
                 std::env::var("UOPS_KEK_FILE").ok(),
                 std::env::var("UOPS_KEK_HEX").ok(),
@@ -159,11 +175,12 @@ impl Config {
     #[must_use]
     pub fn summary(&self) -> String {
         format!(
-            "bind={} postgres={} clickhouse={} secure_cookies={} credentials={}",
+            "bind={} postgres={} clickhouse={} secure_cookies={} alerts={} credentials={}",
             self.bind,
             redact(&self.postgres.url),
             redact(&self.clickhouse.url),
             self.secure_cookies,
+            self.alerts,
             match &self.kek {
                 Some(KekSource::File(p)) => format!("file {}", p.display()),
                 Some(KekSource::Env(v)) => format!("env {v}"),

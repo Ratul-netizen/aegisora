@@ -181,6 +181,9 @@ fn rule(name: &str) -> serde_json::Value {
             "signal": "metric",
             "time": { "start": start.to_rfc3339(), "end": end.to_rfc3339() },
             "resources": { "type": "all" },
+            // A threshold compares a number, and the number is the query's own
+            // aggregate. A rule without one is refused — see the test below.
+            "aggregations": [{ "func": "avg", "field": { "field": "value" }, "alias": "v" }],
             "limit": 100
         },
         "condition": {
@@ -317,6 +320,9 @@ async fn an_absence_rule_needs_no_threshold_to_be_written() {
 
     let mut absence = rule("Device silent");
     absence["condition"] = serde_json::json!({ "kind": "absence", "after_seconds": 300 });
+    // An absence rule names what it watches: "everything" includes resources that have
+    // never reported once.
+    absence["query"]["resources"] = serde_json::json!({ "type": "kind", "kind": "device" });
 
     let (status, created) = f
         .call(f.send("POST", "/api/v1/alerts/rules", &absence))
@@ -473,4 +479,37 @@ async fn an_acknowledged_alert_is_still_firing_and_still_listed() {
     // next person to look at the screen concludes the problem went away.
     let (_, after) = f.call(f.get("/api/v1/alerts")).await;
     assert_eq!(after.as_array().expect("a list").len(), 1, "{after}");
+}
+
+#[tokio::test]
+async fn a_rule_that_could_never_produce_a_number_is_refused_where_somebody_can_see_it() {
+    // The refusal carries the sentence that says what to do about it, because the
+    // alternative is an alert that never arrives and a person wondering why during an
+    // incident.
+    let f = fixture("evaluable", Role::Operator).await;
+
+    let mut ambiguous = rule("Two numbers");
+    ambiguous["query"]["aggregations"] = serde_json::json!([
+        { "func": "avg", "field": { "field": "value" }, "alias": "v" },
+        { "func": "max", "field": { "field": "value" }, "alias": "m" }
+    ]);
+    let (status, problem) = f
+        .call(f.send("POST", "/api/v1/alerts/rules", &ambiguous))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("one number"),
+        "the refusal has to say what is wrong: {problem}"
+    );
+
+    // An absence rule over "everything" includes every resource that has never reported.
+    let mut everything = rule("Everything is quiet");
+    everything["condition"] = serde_json::json!({ "kind": "absence", "after_seconds": 300 });
+    let (status, problem) = f
+        .call(f.send("POST", "/api/v1/alerts/rules", &everything))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
 }

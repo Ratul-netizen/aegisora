@@ -109,6 +109,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // Cloned before the state takes ownership: the engine holds the same pools rather
+    // than opening its own, which is what keeps a single `docker compose up` to one set
+    // of connections.
+    let store_for_alerts = store.clone();
+    let telemetry_for_alerts = telemetry.clone();
+
     let state = if config.secure_cookies {
         AppState::new(store, telemetry)
     } else {
@@ -121,6 +127,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let state = match vault {
         Some(v) => state.with_vault(v),
         None => state,
+    };
+
+    // The alert engine, in this process. It reads the same two stores the API does and
+    // writes alert state through the same repository, so there is nothing to keep in
+    // step — and an installation that runs `docker compose up` gets alerting without
+    // starting a second thing. `UOPS_ALERTS=off` is for the replicas that should not.
+    let alerts = if config.alerts {
+        let engine = uops_alert::Engine::new(store_for_alerts.clone(), telemetry_for_alerts);
+        println!("alerts: evaluating every tenant's rules");
+        Some(tokio::spawn(uops_alert::run(
+            engine,
+            store_for_alerts,
+            shutdown::signal(),
+        )))
+    } else {
+        println!("alerts: disabled by UOPS_ALERTS");
+        None
     };
 
     let mut app = router(state);
@@ -145,6 +168,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown::signal())
         .await
         .map_err(|e| format!("server stopped: {e}"))?;
+
+    // The engine is watching the same signal and is already unwinding. Waiting for it
+    // rather than dropping the handle means a rule that was mid-evaluation finishes
+    // writing its state — a phase recorded without the notification that belongs to it is
+    // the one inconsistency this process can produce on the way out.
+    if let Some(alerts) = alerts {
+        let _ = alerts.await;
+    }
 
     println!("stopped cleanly");
     Ok(())
