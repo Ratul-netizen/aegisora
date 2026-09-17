@@ -33,6 +33,7 @@ import { ApiError, api } from "./api";
 import { Layout } from "./layout";
 import { ExplorePage } from "./explore";
 import { LoginPage, OverviewPage } from "./pages";
+import { AlertsPage, ChannelsPage, RulesPage } from "./alerts";
 import { MapPage } from "./map";
 import { ResourcePage, ResourcesPage } from "./resources";
 import { ShellProvider, validateShellSearch } from "./shell";
@@ -128,9 +129,36 @@ const exploreRoute = createRoute({
   component: ExplorePage,
 });
 
+const alertsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/alerts",
+  component: AlertsPage,
+});
+
+const rulesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/alerts/rules",
+  component: RulesPage,
+});
+
+const channelsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/alerts/channels",
+  component: ChannelsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  shellRoute.addChildren([overviewRoute, mapRoute, resourcesRoute, resourceRoute, exploreRoute]),
+  shellRoute.addChildren([
+    overviewRoute,
+    mapRoute,
+    resourcesRoute,
+    resourceRoute,
+    exploreRoute,
+    alertsRoute,
+    rulesRoute,
+    channelsRoute,
+  ]),
 ]);
 
 const router = createRouter({ routeTree });

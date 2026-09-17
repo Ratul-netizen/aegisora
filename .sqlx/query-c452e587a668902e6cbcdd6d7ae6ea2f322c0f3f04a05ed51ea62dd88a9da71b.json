@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id, rule_id,\n                resource_id AS \"resource_id: ResourceId\",\n                dedup_key, state, since, last_eval, last_value,\n                acked_by    AS \"acked_by: ActorId\",\n                acked_at\n              FROM alert_state\n             WHERE tenant_id = $1 AND state IN ('pending', 'firing')\n             ORDER BY since DESC\n            ",
+  "query": "\n            SELECT\n                s.id, s.rule_id,\n                s.resource_id AS \"resource_id: ResourceId\",\n                s.dedup_key, s.state, s.since, s.last_eval, s.last_value,\n                s.acked_by    AS \"acked_by: ActorId\",\n                s.acked_at,\n                r.name        AS rule_name,\n                r.severity    AS rule_severity,\n                res.name      AS \"resource_name?\"\n              FROM alert_state s\n              JOIN alert_rule r\n                ON r.id = s.rule_id AND r.tenant_id = s.tenant_id\n              LEFT JOIN resource res\n                ON res.id = s.resource_id AND res.tenant_id = s.tenant_id\n             WHERE s.tenant_id = $1 AND s.state IN ('pending', 'firing')\n             ORDER BY s.since DESC\n            ",
   "describe": {
     "columns": [
       {
@@ -52,6 +52,21 @@
         "ordinal": 9,
         "name": "acked_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "rule_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "rule_severity",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "resource_name?",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -69,8 +84,11 @@
       false,
       true,
       true,
-      true
+      true,
+      false,
+      false,
+      false
     ]
   },
-  "hash": "bf1ec4391b312d555770d13b8351f9be4a05652fb37bd638940fd9ab644cdda3"
+  "hash": "c452e587a668902e6cbcdd6d7ae6ea2f322c0f3f04a05ed51ea62dd88a9da71b"
 }

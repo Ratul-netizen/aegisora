@@ -407,7 +407,8 @@ Nothing here is reachable before the data is. In dependency order:
 | Needs | Before it can exist |
 |---|---|
 | Log Explorer, live tail, saved searches, "all signals for this resource" | **exists** — `web/src/explore.tsx`, `tail.ts`, `searches.ts` |
-| Dashboard builder, widgets, alert and incident lists | M4 |
+| Dashboard builder, widgets | M4 |
+| Alert list, rules, channels | **exists** — `web/src/alerts.tsx`, fed by the engine in `uops-alert` |
 | 2D topology, semantic zoom, dependency highlighting | M6 — the edges exist, the layout does not |
 | Animated links, traffic on the graph | M7 flows |
 | 3D topology, time travel | after M6, and only once 2D is good |

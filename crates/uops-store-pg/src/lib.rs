@@ -63,7 +63,7 @@ pub mod searches;
 pub mod sites;
 pub mod store;
 
-pub use alerts::{AlertRule, AlertStateRow, Evaluated, NewRule};
+pub use alerts::{ActiveAlert, AlertRule, AlertStateRow, Evaluated, NewRule};
 pub use audit::{AccessEntry, AuditEntry};
 pub use auth::{
     ABSOLUTE_TIMEOUT, AuthenticatedSession, IDLE_TIMEOUT, TenantMembership, UserCredentials,

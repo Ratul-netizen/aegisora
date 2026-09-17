@@ -90,6 +90,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · the rate limit stops a storm** | ✅ SPEC's 5 000-resource rule sends 12 and records 4 988 refusals |
 | **M4 · a per-tenant daily budget** | ✅ the backstop behind the rate — a slow leak, not a storm |
 | M4 · notifications — SMTP | ⬜ needs a plain-TCP relay design; this workspace carries no TLS |
+| **M4 · alerts in the web app** | ✅ the alert list with acknowledgement, rules from a saved search, channels and the delivery log |
 | M4 · dashboards | ⬜ |
 
 ## Resume in three commands
@@ -104,7 +105,7 @@ bash scripts/db.sh migrate && bash scripts/ch.sh apply
 export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
 export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
 cargo test --workspace --all-targets && cargo test --workspace --doc   # 941 tests, green
-cd web && npm ci && npm test                                            # 37 more
+cd web && npm ci && npm test                                            # 47 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 

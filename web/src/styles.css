@@ -705,6 +705,55 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+/* --- alerts --- */
+
+/* Severity is the one thing that decides whether somebody gets out of bed, so it is the
+   one thing on the row that is not the same weight as everything else. Colour is never
+   the only carrier: the word is there too, for a screen read in daylight and for anyone
+   who does not see the difference between amber and red. */
+.severity {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.severity.critical {
+  color: var(--danger);
+}
+
+.severity.warning {
+  color: var(--warn);
+}
+
+.severity.info {
+  color: var(--text-dim);
+}
+
+/* A firing row is the one being looked for; a pending row is on the screen because it is
+   one evaluation away, and must not compete with it. */
+tbody tr.firing td {
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+tbody tr.pending td {
+  color: var(--text-dim);
+}
+
+/* A disabled rule is still in the list — that is the point of disabling rather than
+   deleting — and reads as switched off rather than missing. */
+tbody tr.disabled td {
+  opacity: 0.55;
+}
+
+td.warn,
+span.warn {
+  color: var(--warn);
+}
+
 /* --- saved searches --- */
 
 .saved {

@@ -224,7 +224,10 @@ async fn a_flapping_signal_produces_no_notifications() {
     );
     assert!(
         pg.active_alerts(&scope).await.expect("active").is_empty()
-            || pg.active_alerts(&scope).await.expect("active")[0].phase == Phase::Pending,
+            || pg.active_alerts(&scope).await.expect("active")[0]
+                .alert
+                .phase
+                == Phase::Pending,
         "a flapping signal leaves at most a pending alert, which nobody is told about"
     );
 }
@@ -357,7 +360,7 @@ async fn a_cycle_evaluates_every_tenant_and_one_failure_does_not_stop_it() {
             .await
             .expect("active")
             .iter()
-            .any(|a| a.phase == Phase::Firing),
+            .any(|a| a.alert.phase == Phase::Firing),
         "the rule this test created fired"
     );
 }

@@ -31,6 +31,10 @@ export type Field =
   | { field: "event_category" }
   | { field: "event_type" }
   | { field: "metric" }
+  // Metrics only, and not built by any control in the Explorer: an alert rule aggregates
+  // over `value`, and the rule list renders the aggregate it was given. Modelled here
+  // because the AST is one type across both, not two that drift.
+  | { field: "value" }
   | { field: "resource_id" }
   | { field: "observed_at" }
   | { field: "attr"; key: string }

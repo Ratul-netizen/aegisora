@@ -75,6 +75,21 @@ pub struct AlertStateRow {
     pub acked_at: Option<DateTime<Utc>>,
 }
 
+/// One active alert, with the two names a person needs to read it.
+///
+/// The join is here rather than in the browser because the alternative is an N+1: a
+/// screen showing forty alerts would make forty requests for forty resource names, and
+/// the names are one indexed lookup each in a query that is already running.
+#[derive(Clone, Debug)]
+pub struct ActiveAlert {
+    pub alert: AlertStateRow,
+    pub rule: String,
+    pub severity: AlertSeverity,
+    /// What a person calls the device. A resource deleted between the evaluation and the
+    /// read has none, and the id is better than an empty cell.
+    pub resource: String,
+}
+
 /// What the engine writes after deciding one series' phase.
 #[derive(Clone, Debug)]
 pub struct Evaluated {
@@ -579,20 +594,27 @@ impl PgStore {
     /// `pending` is deliberately included. Nobody has been notified about a pending alert
     /// and nobody should be — but an operator who has just been paged about one device
     /// wants to see the four that are one evaluation away from paging too.
-    pub async fn active_alerts(&self, scope: &TenantScope) -> Result<Vec<AlertStateRow>> {
-        // tenant-exempt: the tenant is the only bound parameter, from the scope.
-        let rows = sqlx::query_as!(
-            StateRow,
+    pub async fn active_alerts(&self, scope: &TenantScope) -> Result<Vec<ActiveAlert>> {
+        // tenant-exempt: the tenant is the only bound parameter, from the scope, and both
+        // joins carry it so a row cannot pick up another tenant's name.
+        let rows = sqlx::query!(
             r#"
             SELECT
-                id, rule_id,
-                resource_id AS "resource_id: ResourceId",
-                dedup_key, state, since, last_eval, last_value,
-                acked_by    AS "acked_by: ActorId",
-                acked_at
-              FROM alert_state
-             WHERE tenant_id = $1 AND state IN ('pending', 'firing')
-             ORDER BY since DESC
+                s.id, s.rule_id,
+                s.resource_id AS "resource_id: ResourceId",
+                s.dedup_key, s.state, s.since, s.last_eval, s.last_value,
+                s.acked_by    AS "acked_by: ActorId",
+                s.acked_at,
+                r.name        AS rule_name,
+                r.severity    AS rule_severity,
+                res.name      AS "resource_name?"
+              FROM alert_state s
+              JOIN alert_rule r
+                ON r.id = s.rule_id AND r.tenant_id = s.tenant_id
+              LEFT JOIN resource res
+                ON res.id = s.resource_id AND res.tenant_id = s.tenant_id
+             WHERE s.tenant_id = $1 AND s.state IN ('pending', 'firing')
+             ORDER BY s.since DESC
             "#,
             scope.tenant_id() as uops_core::TenantId,
         )
@@ -600,7 +622,27 @@ impl PgStore {
         .await
         .map_err(|e| map("alert_state", "active".to_owned(), e))?;
 
-        rows.into_iter().map(StateRow::parse).collect()
+        rows.into_iter()
+            .map(|r| {
+                Ok(ActiveAlert {
+                    rule: r.rule_name,
+                    severity: severity_from(&r.rule_severity)?,
+                    resource: r.resource_name.unwrap_or_else(|| r.resource_id.to_string()),
+                    alert: AlertStateRow {
+                        id: r.id,
+                        rule_id: r.rule_id,
+                        resource_id: r.resource_id,
+                        dedup_key: r.dedup_key,
+                        phase: phase_from(&r.state)?,
+                        since: r.since,
+                        last_eval: r.last_eval,
+                        last_value: r.last_value,
+                        acked_by: r.acked_by,
+                        acked_at: r.acked_at,
+                    },
+                })
+            })
+            .collect()
     }
 
     /// Acknowledge an alert.

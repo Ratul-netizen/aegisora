@@ -299,7 +299,7 @@ async fn the_active_list_is_what_is_wrong_now() {
     assert!(
         active
             .iter()
-            .all(|a| a.phase.is_active() && a.phase != Phase::Resolved)
+            .all(|a| a.alert.phase.is_active() && a.alert.phase != Phase::Resolved)
     );
 }
 

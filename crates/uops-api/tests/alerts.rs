@@ -458,6 +458,11 @@ async fn an_acknowledged_alert_is_still_firing_and_still_listed() {
     assert_eq!(listed.len(), 1, "{alerts}");
     assert_eq!(listed[0]["state"], "firing");
     assert_eq!(listed[0]["last_value"], 97.5);
+    // The names are joined server-side: a screen showing forty alerts must not make
+    // forty requests to find out what forty devices are called.
+    assert_eq!(listed[0]["rule"], "CPU hot", "{alerts}");
+    assert_eq!(listed[0]["resource"], "rtr-01", "{alerts}");
+    assert_eq!(listed[0]["severity"], "critical", "{alerts}");
     assert!(listed[0].get("acked_at").is_none(), "{alerts}");
 
     let alert_id = listed[0]["id"].as_str().expect("an id").to_owned();
@@ -473,6 +478,9 @@ async fn an_acknowledged_alert_is_still_firing_and_still_listed() {
         acked["state"], "firing",
         "an ack silences, it does not resolve"
     );
+    // The same shape the list has, so a client can drop it back into the row it came from.
+    assert_eq!(acked["rule"], "CPU hot", "{acked}");
+    assert_eq!(acked["resource"], "rtr-01", "{acked}");
     assert!(acked["acked_at"].is_string(), "{acked}");
 
     // And it is still in the list. An acknowledgement that hid the alert would mean the

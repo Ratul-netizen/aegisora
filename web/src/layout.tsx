@@ -136,6 +136,9 @@ export function Layout() {
         <Link to="/explore" search={keepSearch} activeProps={{ className: "active" }}>
           Explore
         </Link>
+        <Link to="/alerts" search={keepSearch} activeProps={{ className: "active" }}>
+          Alerts
+        </Link>
       </nav>
 
       <main className="content">

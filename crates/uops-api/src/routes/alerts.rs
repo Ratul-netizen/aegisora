@@ -73,7 +73,12 @@ fn rule_view(r: uops_store_pg::AlertRule) -> RuleView {
 pub struct AlertView {
     pub id: uuid::Uuid,
     pub rule_id: uuid::Uuid,
+    /// The rule's name and the resource's, joined server-side. A screen showing forty
+    /// alerts would otherwise make forty requests to name forty devices.
+    pub rule: String,
+    pub severity: AlertSeverity,
     pub resource_id: ResourceId,
+    pub resource: String,
     /// Rule, resource and labels. In the API because it is in the database and in the
     /// support ticket; there is nothing to gain by hiding it.
     pub dedup_key: String,
@@ -87,11 +92,40 @@ pub struct AlertView {
     pub acked_at: Option<DateTime<Utc>>,
 }
 
-fn alert_view(a: uops_store_pg::AlertStateRow) -> AlertView {
+fn alert_view(a: uops_store_pg::ActiveAlert) -> AlertView {
+    AlertView {
+        id: a.alert.id,
+        rule_id: a.alert.rule_id,
+        rule: a.rule,
+        severity: a.severity,
+        resource_id: a.alert.resource_id,
+        resource: a.resource,
+        dedup_key: a.alert.dedup_key,
+        state: a.alert.phase,
+        since: a.alert.since,
+        last_eval: a.alert.last_eval,
+        last_value: a.alert.last_value,
+        acked_at: a.alert.acked_at,
+    }
+}
+
+/// The same view for one alert that was just acknowledged.
+///
+/// `acknowledge_alert` returns the row it wrote and not the join, so the two names come
+/// from the caller — which already has the rule, because it is the one being acked.
+fn acked_view(
+    a: uops_store_pg::AlertStateRow,
+    rule: String,
+    severity: AlertSeverity,
+    resource: String,
+) -> AlertView {
     AlertView {
         id: a.id,
         rule_id: a.rule_id,
+        rule,
+        severity,
         resource_id: a.resource_id,
+        resource,
         dedup_key: a.dedup_key,
         state: a.phase,
         since: a.since,
@@ -350,6 +384,19 @@ pub async fn acknowledge(
         .acknowledge_alert(caller.scope(), id, caller.user_id(), Utc::now())
         .await?;
 
+    // Two lookups the caller already caused: the rule it belongs to and the device it is
+    // about, so the response is the same shape the list is and a client can drop it
+    // straight back into the row it came from.
+    let rule = state
+        .store
+        .alert_rule(caller.scope(), alert.rule_id)
+        .await?;
+    let resource = state
+        .store
+        .resource(caller.scope(), alert.resource_id)
+        .await
+        .map_or_else(|_| alert.resource_id.to_string(), |r| r.name);
+
     caller.audit().wrote(
         "alerts.ack",
         format!("alert:{id}"),
@@ -360,5 +407,5 @@ pub async fn acknowledge(
         })),
     );
 
-    Ok(Json(alert_view(alert)))
+    Ok(Json(acked_view(alert, rule.name, rule.severity, resource)))
 }
