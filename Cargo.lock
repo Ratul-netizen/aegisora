@@ -2407,6 +2407,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "uops-discover"
+version = "0.0.1"
+dependencies = [
+ "thiserror 2.0.20",
+ "tokio",
+ "uops-core",
+ "uops-profile",
+ "uops-snmp",
+]
+
+[[package]]
 name = "uops-identity"
 version = "0.0.1"
 dependencies = [

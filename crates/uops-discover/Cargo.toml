@@ -1,0 +1,27 @@
+[package]
+name = "uops-discover"
+description = "Finding devices. A bounded sweep, one SNMP question, and what the answer identifies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[dependencies]
+uops-core.workspace = true
+uops-snmp.workspace = true
+# For `Oid`, which is where `sysObjectID` lands and what profile resolution matches on.
+# Discovery does not resolve profiles itself -- `uops_profile::resolve` already does, and
+# calling it needs the candidate set, which is the store's business rather than this
+# crate's.
+uops-profile.workspace = true
+
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

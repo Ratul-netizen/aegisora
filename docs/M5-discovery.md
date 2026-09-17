@@ -72,7 +72,11 @@ A discovery job holds CIDRs, not "the network". The rules:
 - **Addresses per job are capped at 65 536** across all its ranges, for the same reason.
 - **Concurrency is capped** at `IN_FLIGHT` probes, and the rate at `PROBES_PER_SECOND`. A
   discovery run must not be the reason a customer's network monitoring alerts.
-- **Network and broadcast addresses are skipped** in any range of /31 or wider.
+- **Network and broadcast addresses are skipped** in any range of /30 or wider. Not for
+  the two addresses: the broadcast address makes every host on the segment answer at
+  once, which looks like a tool that has found a great many devices and is one being
+  shouted at by the same device several hundred times. A /31 is exempt (RFC 3021 — both
+  addresses of a point-to-point link are usable) and a /32 is one host.
 
 The caps are constants in one place, and the schema enforces the first two — a limit that
 lives only in the application is one a second caller does not have.
@@ -85,14 +89,26 @@ turned up"*, which is what `create_provisional` and the review queue exist for.
 
 So each probe response becomes an `ObservedIdentity` carrying what it proved:
 
-| From the probe | Identifier | Tier |
+| Identifier | Tier | Available |
 |---|---|---|
-| `snmpEngineID` (v3) | `SnmpEngineId` | 1 — unique per agent |
-| `entPhysicalSerialNum` | `Serial` | 1 |
-| `sysName` | `Hostname` | 2 |
-| the address probed | `MgmtIp` | 2 |
+| `MgmtIp` — the address probed | 3 | the probe |
+| `Hostname` — `sysName` | 4 | the probe |
+| `Serial` — `entPhysicalSerialNum` | 1 | the first poll |
+| `SnmpEngineId` — `snmpEngineID` (v3) | 1 | the first poll |
 
-and goes through `uops_identity::classify`. Above `AUTO_MERGE_THRESHOLD` it merges into the
+The last column is the one that decides the design. **A probe proves nothing globally
+unique.** A serial is a table column and needs an index to `GET`; an engine ID belongs to
+the v3 session rather than to the MIB. Reading either costs a second conversation with
+every address in the range, most of which are empty — so both wait for the first poll,
+which is a conversation with something already known to exist, and *upgrade* the
+resolution when they arrive.
+
+That is not a limitation to work around; it is why the review queue exists. An address
+and a hostname are tier 3 and tier 4, so a sweep lands most results below
+`AUTO_MERGE_THRESHOLD` by construction, and a device is identified precisely when it
+becomes worth polling.
+
+Each sighting goes through `uops_identity::classify`. Above `AUTO_MERGE_THRESHOLD` it merges into the
 existing resource. Below `REVIEW_FLOOR` it creates a new one. Between them it becomes a
 review-queue entry and **not** a resource — which is the whole point of that queue, and
 the case a sweep produces constantly: the same hostname in two sites, a device that
