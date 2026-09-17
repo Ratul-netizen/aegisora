@@ -885,6 +885,166 @@ SELECT pg_temp.check(
     (SELECT count(*) FROM dashboard WHERE name = 'Core routers') = 2,
     'a dashboard name belongs to a tenant, not to the installation');
 
+-- ---------------------------------------------------------------- discovery
+--
+-- The properties migration 0017 claims: a sweep is bounded by the schema and not only by
+-- the application, a run's counters cannot describe something that did not happen, and a
+-- candidate is a thing rather than a sighting.
+
+-- §2.3. A /8 is 16 million addresses, and an operator who types one means "everything",
+-- which is not a range.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_job (tenant_id, name, ranges, credential_refs)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'the internet',
+            ARRAY['10.0.0.0/8']::cidr[],
+            ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[])
+$$, '23514');
+
+-- And ten legal /16s are refused for the same reason one illegal /12 is: the cap is on
+-- the job, not on the prettiest range in it.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_job (tenant_id, name, ranges, credential_refs)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'ten sixteens',
+            (SELECT array_agg(('10.' || n || '.0.0/16')::cidr)
+               FROM generate_series(1, 10) AS n),
+            ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[])
+$$, '23514');
+
+-- A job with no credential does not probe quietly and report an empty estate; it is
+-- refused. §2.2 — supplied, never guessed, and the empty list is not a licence to guess.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_job (tenant_id, name, ranges, credential_refs)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'no credentials',
+            ARRAY['192.168.1.0/24']::cidr[], ARRAY[]::uuid[])
+$$, '23514');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_job (tenant_id, name, ranges, credential_refs)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'nowhere',
+            ARRAY[]::cidr[],
+            ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[])
+$$, '23514');
+
+-- IPv6 is not swept. The address-count arithmetic means nothing on a /64, and a /64 is
+-- the smallest thing anybody assigns.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_job (tenant_id, name, ranges, credential_refs)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'v6',
+            ARRAY['2001:db8::/64']::cidr[],
+            ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[])
+$$, '23514');
+
+-- A sweep every minute is traffic a security team will ask about, teaching nothing: the
+-- estate does not change that often.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_job (tenant_id, name, ranges, credential_refs, schedule)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'relentless',
+            ARRAY['192.168.1.0/24']::cidr[],
+            ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[], interval '1 minute')
+$$, '23514');
+
+INSERT INTO discovery_job (id, tenant_id, name, ranges, credential_refs, schedule) VALUES
+    ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-00000000000a',
+     'Branch offices', ARRAY['192.168.1.0/24', '192.168.2.0/24']::cidr[],
+     ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[], interval '1 day');
+
+SELECT pg_temp.check(
+    (SELECT discovery_address_count(ranges) FROM discovery_job
+      WHERE id = '00000000-0000-0000-0000-0000000000e1') = 512,
+    'two /24s are 512 addresses');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_job (tenant_id, name, ranges, credential_refs)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'Branch offices',
+            ARRAY['10.1.0.0/24']::cidr[],
+            ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[])
+$$, '23505');
+
+-- A run belongs to a job in its own tenant. The composite key is what makes guessing the
+-- uuid useless rather than merely unlikely.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_run (tenant_id, job_id, ranges, trigger)
+    VALUES ('00000000-0000-0000-0000-00000000000b',
+            '00000000-0000-0000-0000-0000000000e1',
+            ARRAY['192.168.1.0/24']::cidr[], 'schedule')
+$$, '23503');
+
+-- A run that is over has an end, and one that is not does not. This pair is what makes
+-- "which runs are stuck" answerable without a heuristic about age.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_run (tenant_id, ranges, trigger, status)
+    VALUES ('00000000-0000-0000-0000-00000000000a', ARRAY['192.168.1.0/24']::cidr[],
+            'manual', 'succeeded')
+$$, '23514');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_run (tenant_id, ranges, trigger, status, finished_at)
+    VALUES ('00000000-0000-0000-0000-00000000000a', ARRAY['192.168.1.0/24']::cidr[],
+            'manual', 'failed', now())
+$$, '23514');
+
+-- 300 devices answering a sweep of 254 addresses is a counter incremented on the wrong
+-- path, and it is the kind of number that makes an operator distrust the whole screen.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_run (tenant_id, ranges, trigger, probed, answered)
+    VALUES ('00000000-0000-0000-0000-00000000000a', ARRAY['192.168.1.0/24']::cidr[],
+            'manual', 254, 300)
+$$, '23514');
+
+INSERT INTO discovery_run (id, tenant_id, job_id, ranges, trigger, probed, answered) VALUES
+    ('00000000-0000-0000-0000-0000000000e2', '00000000-0000-0000-0000-00000000000a',
+     '00000000-0000-0000-0000-0000000000e1', ARRAY['192.168.1.0/24']::cidr[],
+     'schedule', 254, 9);
+
+-- A candidate is a thing that exists. One with neither an address nor a chassis ID is an
+-- empty row, and its fingerprint would silently collide with every other empty row.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_candidate (tenant_id, source)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'sweep')
+$$, '23514');
+
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_candidate (tenant_id, source, address, state)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'sweep', '192.168.1.9', 'promoted')
+$$, '23514');
+
+-- §2.5: a port and a neighbour are things a neighbour table reports. A sweep has neither,
+-- and a row claiming otherwise is a bug in whichever writer produced it.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_candidate (tenant_id, source, address, port_id)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'sweep', '192.168.1.9', 'Gi0/1')
+$$, '23514');
+
+INSERT INTO discovery_candidate
+    (tenant_id, last_run_id, source, address, sys_descr, reason)
+VALUES
+    ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-0000000000e2',
+     'sweep', '192.168.1.9', 'HP LaserJet', 'no monitoring profile matches this device');
+
+-- One row per thing, not per sighting. The second nightly sweep updates rather than
+-- adding a second printer.
+SELECT pg_temp.must_fail($$
+    INSERT INTO discovery_candidate (tenant_id, source, address)
+    VALUES ('00000000-0000-0000-0000-00000000000a', 'sweep', '192.168.1.9')
+$$, '23505');
+
+-- The same address seen by a neighbour table is a different sighting of possibly the same
+-- device, and deciding that is identity resolution's job rather than a unique index's.
+INSERT INTO discovery_candidate (tenant_id, source, address, chassis_id, port_id)
+VALUES ('00000000-0000-0000-0000-00000000000a', 'lldp', '192.168.1.9',
+        '00:1b:21:3c:4d:5e', 'GigabitEthernet0/1');
+SELECT pg_temp.check(
+    (SELECT count(*) FROM discovery_candidate WHERE address = '192.168.1.9') = 2,
+    'a sweep sighting and an LLDP sighting are two candidates, not one');
+
+-- Deleting a job must not delete the record that it once scanned somebody's network.
+-- §2.7 is the whole reason `discovery_run` exists separately.
+DELETE FROM discovery_job WHERE id = '00000000-0000-0000-0000-0000000000e1';
+SELECT pg_temp.check(
+    (SELECT job_id IS NULL FROM discovery_run
+      WHERE id = '00000000-0000-0000-0000-0000000000e2'),
+    'deleting a discovery job keeps the runs that recorded what it scanned');
+
 -- Every foreign key has an index on its referencing side.
 --
 -- PostgreSQL indexes the referenced side automatically and the referencing side never,
@@ -909,6 +1069,32 @@ SELECT pg_temp.check(
            )
     ),
     'every foreign key needs an index on the referencing side');
+
+-- No ON DELETE SET NULL may try to null a NOT NULL column.
+--
+-- A composite foreign key nulls *every* column in the key, not the one that pointed at
+-- the deleted row. Since migration 0002 nearly every intra-tenant reference here is
+-- `(thing_id, tenant_id)`, so the default behaviour sets `tenant_id` to NULL too — and
+-- `tenant_id` is NOT NULL everywhere by design. The delete then fails with a not-null
+-- violation on a table the operator was not looking at, and only when somebody finally
+-- deletes a parent row in production.
+--
+-- Migration 0017 was written this way and this test is what found it. The fix is the
+-- column list — `ON DELETE SET NULL (job_id)` — which PostgreSQL 15 added and which
+-- PLAN's floor of 16 therefore allows. This guard is the reason the next one cannot be
+-- written the old way.
+SELECT pg_temp.check(
+    NOT EXISTS (
+        SELECT 1
+          FROM pg_constraint c
+          JOIN pg_attribute a
+            ON a.attrelid = c.conrelid
+           AND a.attnum = ANY (coalesce(c.confdelsetcols, c.conkey))
+         WHERE c.contype = 'f'
+           AND c.confdeltype = 'n'
+           AND a.attnotnull
+    ),
+    'ON DELETE SET NULL must name its columns rather than nulling a NOT NULL one');
 
 ROLLBACK;
 
