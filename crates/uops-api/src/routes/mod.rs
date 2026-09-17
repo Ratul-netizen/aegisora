@@ -12,6 +12,7 @@ pub mod auth;
 pub mod channels;
 pub mod credentials;
 pub mod dashboards;
+pub mod discovery;
 pub mod groups;
 pub mod health;
 pub mod maintenance;
@@ -131,6 +132,30 @@ pub fn router(state: AppState) -> Router {
             get(dashboards::get)
                 .put(dashboards::update)
                 .delete(dashboards::delete),
+        )
+        // Finding devices -- M5. Reading is Viewer; writing a job or dismissing a
+        // candidate is Operator, because a discovery job is an instruction to send
+        // packets across somebody's network and the ranges describe their estate.
+        //
+        // There is no `POST /discovery/jobs/{id}/run` yet: a sweep takes minutes, so it
+        // cannot be the body of a request, and the runner that will own it arrives with
+        // the scheduler.
+        .route(
+            "/api/v1/discovery/jobs",
+            get(discovery::list_jobs).post(discovery::create_job),
+        )
+        .route(
+            "/api/v1/discovery/jobs/{id}",
+            get(discovery::get_job).delete(discovery::delete_job),
+        )
+        .route("/api/v1/discovery/runs", get(discovery::list_runs))
+        .route(
+            "/api/v1/discovery/candidates",
+            get(discovery::list_candidates),
+        )
+        .route(
+            "/api/v1/discovery/candidates/{id}/ignore",
+            post(discovery::ignore_candidate),
         )
         // Where a page goes. Reading is Viewer; writing is Operator, the same as an
         // alert rule, because changing a channel changes who gets woken up.

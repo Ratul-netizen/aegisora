@@ -2318,6 +2318,7 @@ dependencies = [
  "tower",
  "tower-http",
  "uops-core",
+ "uops-discover",
  "uops-identity",
  "uops-notify",
  "uops-query",

@@ -236,6 +236,15 @@ mod tests {
         // SPEC's acceptance criterion is that 1 000 rules fit inside one 60-second cycle.
         // What makes that achievable is that they are spread across it: the busiest
         // second must hold a small fraction of the fleet, not all of it.
+        // Measured over 50 trials: the busiest second holds about 17 on average and 36 at
+        // its worst, against an even spread of 16.7. Sixty is therefore roughly six
+        // standard deviations out — headroom chosen after measuring rather than guessed.
+        //
+        // It was not, before. `Wheel::insert` folded offset 0 onto offset 1, giving the
+        // next tick twice every other tick's share; the busiest second held ~33 and
+        // touched 44, and this assertion failed about once in several hundred runs. The
+        // flake was the symptom; the spike was the bug, and it was in the poller's
+        // scheduler too.
         let worst = per_second.iter().copied().max().unwrap_or(0);
         assert!(
             worst < 60,

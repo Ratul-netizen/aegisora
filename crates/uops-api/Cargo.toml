@@ -21,6 +21,9 @@ uops-query.workspace = true
 uops-secrets.workspace = true
 uops-store-ch.workspace = true
 uops-store-pg.workspace = true
+# For Range: a discovery job's CIDRs are parsed at the edge, so an operator who typed a
+# /8 is told to split it rather than shown the name of a CHECK constraint.
+uops-discover.workspace = true
 
 axum.workspace = true
 chrono.workspace = true

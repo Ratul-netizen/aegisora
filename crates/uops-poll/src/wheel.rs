@@ -126,9 +126,19 @@ impl<K: Clone> Wheel<K> {
             seed,
         };
 
-        // Anywhere in the interval, not just near now.
-        let offset = mix(seed, 0) % u64::from(ticks).max(1);
-        let due = self.tick + offset.max(1);
+        // Anywhere in the interval, not just near now — and uniformly.
+        //
+        // This used to be `(mix % ticks).max(1)`, which folds offset 0 onto offset 1 and
+        // so gives the very next tick twice the share of every other one. On a fleet that
+        // reloads its schedule every minute that is a visible spike at a predictable
+        // moment, which is the exact thing the wheel exists to prevent. Measured on 1 000
+        // rules at a 60-second interval, it put ~33 in the busiest second where an even
+        // spread is ~17.
+        //
+        // `+ 1` instead, so the offset is 1..=ticks: still never zero, and every tick
+        // gets the same share.
+        let offset = mix(seed, 0) % u64::from(ticks).max(1) + 1;
+        let due = self.tick + offset;
         self.place(entry, due);
         Ok(())
     }

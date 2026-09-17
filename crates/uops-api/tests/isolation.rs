@@ -316,6 +316,61 @@ const CASES: &[RouteCase] = &[
         expectation: Expectation::Unscoped,
         body: None,
     },
+    // Discovery -- M5. Every one of these is Scoped, and the second attack is the one
+    // that matters here: a discovery job names a customer's networks, and a run records
+    // that somebody scanned them. Leaking either across a tenant boundary would hand one
+    // customer of an MSP another customer's network map.
+    RouteCase {
+        path: "/api/v1/discovery/jobs",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/discovery/jobs",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(
+            r#"{"name":"intruder","ranges":["10.99.0.0/24"],"credential_refs":["00000000-0000-0000-0000-000000000001"]}"#,
+        ),
+    },
+    RouteCase {
+        path: "/api/v1/discovery/jobs/{id}",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/discovery/jobs/{id}",
+        probe: None,
+        method: "DELETE",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/discovery/runs",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/discovery/candidates",
+        probe: None,
+        method: "GET",
+        expectation: Expectation::Scoped,
+        body: None,
+    },
+    RouteCase {
+        path: "/api/v1/discovery/candidates/{id}/ignore",
+        probe: None,
+        method: "POST",
+        expectation: Expectation::Scoped,
+        body: Some(r#"{"reason":"intruder"}"#),
+    },
     RouteCase {
         path: "/api/v1/dashboards",
         probe: None,

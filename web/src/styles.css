@@ -218,12 +218,35 @@ select {
 
 @media (max-width: 720px) {
   .shell {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr), not 1fr.
+       `1fr` is `minmax(auto, 1fr)`, and `auto` floors the track at its content's
+       *min-content* width — so one wide child, here the header's range buttons, makes the
+       column wider than the screen and the whole document scrolls sideways. Every page
+       did, by the same 237px, which is what that row measures. `minmax(0, …)` lets the
+       track shrink and hands the overflow to whichever child is meant to scroll. */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "brand"
       "header"
       "nav"
       "content";
+  }
+
+  /* And the children have to be allowed to be narrower than their contents too, for the
+     same reason: a grid item's default `min-width: auto` is min-content. */
+  .brand,
+  .header,
+  .nav,
+  .content {
+    min-width: 0;
+  }
+
+  /* The range buttons are the widest thing in the app and the one row that cannot be
+     made to fit. Wrapping beats a sideways scroll on a phone: an operator can reach the
+     second line, and cannot reach what is off the right-hand edge. */
+  .header {
+    flex-wrap: wrap;
+    row-gap: 8px;
   }
 
   .brand,
@@ -412,6 +435,20 @@ td.mono {
   text-overflow: ellipsis;
 }
 
+/* A cell whose content is a sentence rather than a value.
+   The rule above is right for a table of addresses, counts and timestamps, and wrong for
+   one column on the discovery candidate list: the reason a candidate is still there is
+   the entire content of that screen, and an ellipsis in the middle of "add the right
+   credential to the job and run it again" hides the instruction. Wraps, and is bounded so
+   it cannot push the actions off the right-hand side. */
+.scroll-x td.reason {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  max-width: 32rem;
+  min-width: 18rem;
+}
+
 .warnings {
   margin: 0 0 12px;
   padding: 10px 12px 10px 28px;
@@ -542,13 +579,38 @@ h2 {
   border-bottom: 1px solid var(--border);
 }
 
-.map-page .unplaced .dot {
+/* A status dot.
+   Lifted out of `.map-page .unplaced`, where it was first written, because the discovery
+   run list wants the same thing and a second copy under another selector is how two dots
+   end up different sizes. The map sets its own colour inline from a computed scale; the
+   modifiers below are for the four states everything else uses.
+
+   Never the only indicator of anything: colour alone fails for the ~8% of men with a
+   colour vision deficiency, so every row carrying one also says the state in words. */
+.dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   margin-right: 8px;
   vertical-align: baseline;
+  background: var(--unknown);
+}
+
+.dot.ok {
+  background: var(--ok);
+}
+
+.dot.warn {
+  background: var(--warn);
+}
+
+.dot.crit {
+  background: var(--danger);
+}
+
+.dot.unknown {
+  background: var(--unknown);
 }
 
 /* --- the Log Explorer ------------------------------------------------------------
@@ -1111,6 +1173,13 @@ tbody tr.pending td {
    deleting — and reads as switched off rather than missing. */
 tbody tr.disabled td {
   opacity: 0.55;
+}
+
+/* A row with something an operator can actually fix. On the candidate list this is the
+   device that refused the credentials: unlike the rest of that screen it has a known
+   cause and a known remedy, so it is worth being the row the eye lands on. */
+tbody tr.warn td {
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
 }
 
 td.warn,

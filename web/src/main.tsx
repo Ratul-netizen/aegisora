@@ -36,6 +36,11 @@ import { OverviewPage } from "./overview";
 import { LoginPage } from "./pages";
 import { AlertsPage, ChannelsPage, RulesPage } from "./alerts";
 import { DashboardPage, DashboardsPage } from "./dashboard";
+import {
+  DiscoveryCandidatesPage,
+  DiscoveryPage,
+  DiscoveryRunsPage,
+} from "./discoverypages";
 import { MapPage } from "./map";
 import { ResourcePage, ResourcesPage } from "./resources";
 import { ShellProvider, validateShellSearch } from "./shell";
@@ -149,6 +154,24 @@ const channelsRoute = createRoute({
   component: ChannelsPage,
 });
 
+const discoveryRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/discovery",
+  component: DiscoveryPage,
+});
+
+const discoveryRunsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/discovery/runs",
+  component: DiscoveryRunsPage,
+});
+
+const discoveryCandidatesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/discovery/candidates",
+  component: DiscoveryCandidatesPage,
+});
+
 const dashboardsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/dashboards",
@@ -177,6 +200,9 @@ const routeTree = rootRoute.addChildren([
     alertsRoute,
     rulesRoute,
     channelsRoute,
+    discoveryRoute,
+    discoveryRunsRoute,
+    discoveryCandidatesRoute,
     dashboardsRoute,
     dashboardRoute,
   ]),
