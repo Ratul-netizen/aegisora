@@ -37,9 +37,9 @@ pub mod run;
 pub mod sweep;
 
 pub use neighbour::{Neighbour, Neighbours, Protocol, neighbours};
-pub use probe::{Answer, Sighting, probe};
-pub use run::{Findings, run};
+pub use probe::{Answer, Sighting, probe, probe_each};
+pub use run::{Findings, run, run_with};
 pub use sweep::{
-    IN_FLIGHT, MAX_ADDRESSES, PROBE_TIMEOUT, PROBES_PER_SECOND, Range, Sweep, SweepError,
-    WIDEST_PREFIX,
+    IN_FLIGHT, MAX_ADDRESSES, MAX_CREDENTIALS, PROBE_TIMEOUT, PROBES_PER_SECOND, Range, Sweep,
+    SweepError, WIDEST_PREFIX,
 };

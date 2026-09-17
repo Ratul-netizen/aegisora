@@ -59,6 +59,19 @@ pub const PROBES_PER_SECOND: u32 = 200;
 /// it holds whatever the caller configured.
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// The most credentials one job may name.
+///
+/// A bound on time, not on taste. Every credential is tried against every address that
+/// has not answered — `probe_each` explains why it must be — so a job's sweep takes as
+/// long as its credential list is long: one credential over a /16 is about five and a
+/// half minutes, four is twenty-two, and ten is most of an hour spent mostly on empty
+/// addresses.
+///
+/// Four covers what estates actually have: the old community string, the new one, and an
+/// `SNMPv3` user, with one spare. An operator who needs more has two populations of
+/// equipment and wants two jobs, which also lets them be scheduled apart.
+pub const MAX_CREDENTIALS: usize = 4;
+
 /// Probes in flight at once.
 ///
 /// A backstop, not the primary limit. It is sized from the other two:

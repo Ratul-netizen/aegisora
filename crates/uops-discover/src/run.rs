@@ -10,11 +10,14 @@
 //!
 //! [`IN_FLIGHT`] is the second limit and answers a different question. The rate cap is
 //! about the estate; the concurrency cap is about the path to it, which is usually a
-//! firewall holding connection state for every outstanding UDP probe and with a table
-//! size. Sixty-four is comfortable for every one of them; six thousand is not.
+//! firewall holding state for every outstanding UDP probe and with a table size. It is
+//! sized so the *rate* is what binds — see its own documentation, where getting that
+//! wrong once is written down.
 //!
-//! The two together mean a /16 takes about five and a half minutes. That is the number
-//! [`MAX_ADDRESSES`] was chosen against.
+//! Together they mean a /16 takes about five and a half minutes **per credential**. A job
+//! naming four takes twenty-two, because every credential is tried against every address
+//! that has not answered and most addresses never do. `probe_each` explains why that is
+//! not optional, and [`MAX_CREDENTIALS`](crate::MAX_CREDENTIALS) is the bound on it.
 //!
 //! # Why nothing here fails
 //!
@@ -88,14 +91,34 @@ pub async fn run<T: Transport + ?Sized + Sync>(
     sweep: &Sweep,
     port: u16,
 ) -> Findings {
+    run_with(&[transport], sweep, port).await
+}
+
+/// Probe every address in `sweep`, trying each credential in turn.
+///
+/// One transport per credential, in the order the job names them — see
+/// [`probe_each`](crate::probe::probe_each) for why every credential is tried against
+/// every address that has not answered, and what that costs.
+///
+/// The rate cap counts *probes*, not addresses. Four credentials over a /24 is a thousand
+/// packets, and the customer's network sees a thousand packets: pacing by address would
+/// quietly send four times what was agreed.
+pub async fn run_with<T: Transport + ?Sized + Sync>(
+    transports: &[&T],
+    sweep: &Sweep,
+    port: u16,
+) -> Findings {
     let pace = Pace::new(PROBES_PER_SECOND);
 
     let answers = stream::iter(sweep.targets(port))
         .map(|address| {
             let pace = &pace;
             async move {
-                pace.wait_for_a_turn().await;
-                (address, probe(transport, address).await)
+                // One turn per credential, claimed as each probe is about to be sent
+                // rather than all at once: a turn held while an earlier credential times
+                // out is a turn nothing else can use.
+                let (answer, _) = probe_each_paced(transports, address, pace).await;
+                (address, answer)
             }
         })
         .buffer_unordered(IN_FLIGHT)
@@ -123,6 +146,38 @@ pub async fn run<T: Transport + ?Sized + Sync>(
     findings.refused.sort_unstable();
     findings.failed.sort_by_key(|(address, _)| *address);
     findings
+}
+
+/// [`probe_each`](crate::probe::probe_each), with a turn claimed before each attempt.
+///
+/// Not `probe_each` itself, because the pace belongs to the run and this crate's probe
+/// layer has no opinion about rate. The loop is duplicated rather than threading a
+/// callback through it — six lines against a generic parameter on a public function.
+async fn probe_each_paced<T: Transport + ?Sized>(
+    transports: &[&T],
+    address: SocketAddr,
+    pace: &Pace,
+) -> (Answer, Option<usize>) {
+    let mut refused_by_any = false;
+
+    for (index, transport) in transports.iter().enumerate() {
+        pace.wait_for_a_turn().await;
+        match probe(*transport, address).await {
+            Answer::Device(mut sighting) => {
+                sighting.credential = Some(index);
+                return (Answer::Device(sighting), Some(index));
+            }
+            Answer::Refused => refused_by_any = true,
+            Answer::Silent => {}
+            Answer::Failed(why) => return (Answer::Failed(why), None),
+        }
+    }
+
+    if refused_by_any {
+        (Answer::Refused, None)
+    } else {
+        (Answer::Silent, None)
+    }
 }
 
 /// A global pace for a run.

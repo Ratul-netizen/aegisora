@@ -52,7 +52,7 @@ pub const SYSDESCR_KEY: &str = "snmp.sysdescr";
 
 /// What a sweep's results should be attributed to.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SweepContext {
+pub struct SweepContext<'a> {
     /// The run these findings belong to, so every candidate says which sweep last saw it.
     pub run_id: Option<uuid::Uuid>,
     /// Where the job says these devices are.
@@ -60,12 +60,20 @@ pub struct SweepContext {
     /// Applied with `COALESCE`, so rediscovering a device never moves it between sites —
     /// an operator who corrected a site assignment must not have it undone tonight.
     pub site_id: Option<SiteId>,
-    /// The credential that answered.
+    /// The job's credentials, in the order it names them.
     ///
-    /// Also `COALESCE`d, for the same reason. `None` until the multi-credential probe
-    /// loop exists; a device with no credential is created and simply not polled, which
-    /// is the honest state for one nothing has proved it can talk to.
-    pub credential: Option<CredentialRef>,
+    /// A sighting carries the *index* of the one that answered it, because
+    /// `uops-discover` never holds a `CredentialRef` — it holds transports. This is where
+    /// the position becomes a reference again.
+    ///
+    /// Per device rather than per sweep, which matters on any estate mid-migration: the
+    /// switches on the new `SNMPv3` user and the ones still on the old community string are
+    /// found by one job and must not all be recorded against whichever credential
+    /// happened to be first.
+    ///
+    /// Written with `COALESCE`, so a credential an operator fixed by hand this afternoon
+    /// survives tonight's sweep.
+    pub credentials: &'a [CredentialRef],
 }
 
 impl PgStore {
@@ -87,7 +95,7 @@ impl PgStore {
         scope: &TenantScope,
         resolver: &Resolver<S>,
         findings: &Findings,
-        context: SweepContext,
+        context: SweepContext<'_>,
     ) -> uops_core::Result<RunCounts> {
         let mut counts = RunCounts {
             probed: i32::try_from(findings.probed).unwrap_or(i32::MAX),
@@ -185,7 +193,7 @@ impl PgStore {
         scope: &TenantScope,
         resource: ResourceId,
         sighting: &uops_discover::Sighting,
-        context: SweepContext,
+        context: SweepContext<'_>,
     ) -> uops_core::Result<()> {
         let mut attributes = serde_json::Map::new();
         if let Some(oid) = &sighting.sys_object_id {
@@ -215,7 +223,11 @@ impl PgStore {
             sighting.sys_name.as_deref(),
             attributes,
             context.site_id as Option<SiteId>,
-            context.credential as Option<CredentialRef>,
+            // The one that answered *this* device, not the job's first.
+            sighting
+                .credential
+                .and_then(|n| context.credentials.get(n).copied())
+                as Option<CredentialRef>,
         )
         .execute(self.pool())
         .await

@@ -97,6 +97,33 @@ async fn resource_count(store: &PgStore, scope: &TenantScope) -> i64 {
         .expect("count")
 }
 
+/// A credential row, because `resource.credential_ref` is a foreign key.
+///
+/// The ciphertext is nonsense and never decrypted: these tests are about which reference
+/// lands on which device, not about the sealing. Writing it through `uops-secrets` would
+/// need a KEK and would test M0.4 all over again.
+async fn credential(store: &PgStore, scope: &TenantScope, name: &str) -> uops_core::CredentialRef {
+    let id = uops_core::CredentialRef::new();
+    let blob: Vec<u8> = vec![0u8; 12];
+    sqlx::query(
+        "INSERT INTO credential
+             (id, tenant_id, name, kind, kek_id, wrapped_dek, dek_nonce, ciphertext, nonce,
+              backend_id)
+         VALUES ($1, $2, $3, 'snmp_community', 'test', $4, $5, $6, $7, 'rustcrypto')",
+    )
+    .bind(id.into_uuid())
+    .bind(scope.tenant_id().into_uuid())
+    .bind(name)
+    .bind(&blob)
+    .bind(&blob)
+    .bind(&blob)
+    .bind(&blob)
+    .execute(store.pool())
+    .await
+    .expect("credential");
+    id
+}
+
 #[tokio::test]
 async fn a_sweep_creates_one_resource_per_agent() {
     // §4's first acceptance criterion. Eight devices scattered through a /24 of
@@ -471,4 +498,76 @@ async fn the_counters_a_sweep_reports_are_the_ones_a_run_will_accept() {
     let candidates = store.discovery_candidates(&scope, 10).await.expect("list");
     assert_eq!(candidates.len(), 2);
     assert!(candidates.iter().all(|c| c.last_run_id == Some(started.id)));
+}
+
+#[tokio::test]
+async fn each_device_records_the_credential_that_actually_answered_it() {
+    // An estate mid-migration: some switches on the new SNMPv3 user, some still on the
+    // old community string, found by one job. Recording them all against whichever
+    // credential happened to be first would leave half the fleet unpollable.
+    let store = store().await;
+    let scope = tenant(&store, "creds").await;
+    let resolver = Resolver::new(store.clone());
+
+    let old = credential(&store, &scope, "old community").await;
+    let new = credential(&store, &scope, "new v3 user").await;
+
+    let mut fleet = Fleet::new();
+    fleet.insert(at("10.30.0.1"), device("sw-old", CATALYST));
+    fleet.insert(at("10.30.0.2"), device("sw-new", CATALYST));
+
+    let mut findings = run(&fleet, &sweep_of("10.30.0.0/29"), 161).await;
+    // What `run_with` would have produced against two transports: the first device
+    // answered the first credential, the second answered the second.
+    findings.devices[0].credential = Some(0);
+    findings.devices[1].credential = Some(1);
+
+    store
+        .record_sweep(
+            &scope,
+            &resolver,
+            &findings,
+            SweepContext {
+                credentials: &[old, new],
+                ..SweepContext::default()
+            },
+        )
+        .await
+        .expect("record");
+
+    let devices = store.pollable_devices(&scope, 10).await.expect("pollable");
+    let by_address: std::collections::HashMap<&str, Option<uops_core::CredentialRef>> = devices
+        .iter()
+        .map(|d| (d.address.as_str(), d.credential))
+        .collect();
+
+    assert_eq!(by_address["10.30.0.1"], Some(old));
+    assert_eq!(by_address["10.30.0.2"], Some(new));
+}
+
+#[tokio::test]
+async fn a_device_that_answered_no_named_credential_gets_none() {
+    // The single-transport path, which every test above uses: nothing named the
+    // credential, so nothing is recorded against the device. A resource with no
+    // credential is created and simply not polled, which is the honest state for one
+    // nothing has proved it can talk to.
+    let store = store().await;
+    let scope = tenant(&store, "nocred").await;
+    let resolver = Resolver::new(store.clone());
+
+    let mut fleet = Fleet::new();
+    fleet.insert(at("10.31.0.1"), device("sw-01", CATALYST));
+
+    let findings = run(&fleet, &sweep_of("10.31.0.0/29"), 161).await;
+    // Some(0) is honest: the one transport is the one that answered. What makes it
+    // nothing is that the context names no credentials -- see `Sighting::credential`.
+    assert_eq!(findings.devices[0].credential, Some(0));
+
+    store
+        .record_sweep(&scope, &resolver, &findings, SweepContext::default())
+        .await
+        .expect("record");
+
+    let devices = store.pollable_devices(&scope, 10).await.expect("pollable");
+    assert_eq!(devices[0].credential, None);
 }

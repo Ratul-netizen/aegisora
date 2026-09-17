@@ -46,6 +46,22 @@ pub const SOURCE: &str = "discovery";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sighting {
     pub address: SocketAddr,
+    /// Which of the job's credentials this device answered.
+    ///
+    /// An index rather than the credential itself: this crate never holds credential
+    /// material, and the store is what turns the position back into a `CredentialRef` to
+    /// write on the resource. `None` when the caller probed with a single unnamed
+    /// transport, which is what every test and the single-credential path do.
+    ///
+    /// It is the whole reason a discovered device is pollable: a resource with no
+    /// credential is one nothing has proved it can talk to.
+    ///
+    /// Always `Some` from a sweep, including the single-transport case — index 0 is an
+    /// honest answer there, because the one transport *is* the one that answered. What
+    /// turns it into nothing is an empty credential list on the store side, which is the
+    /// right place for that decision: this crate does not know whether its transports
+    /// came from named credentials or from a test.
+    pub credential: Option<usize>,
     /// `None` when the agent answered but had nothing at this OID, which some embedded
     /// stacks do. It is still a device; it is one nothing can classify.
     pub sys_object_id: Option<Oid>,
@@ -136,6 +152,7 @@ pub async fn probe<T: Transport + ?Sized>(transport: &T, address: SocketAddr) ->
         Ok(Err(TransportError::TooBig)) => {
             return Answer::Device(Box::new(Sighting {
                 address,
+                credential: None,
                 sys_object_id: None,
                 sys_name: None,
                 sys_descr: None,
@@ -148,6 +165,9 @@ pub async fn probe<T: Transport + ?Sized>(transport: &T, address: SocketAddr) ->
 
     Answer::Device(Box::new(Sighting {
         address,
+        // Filled by `probe_each`, which is the only caller that knows which credential
+        // it handed over.
+        credential: None,
         sys_object_id: at(&oids[0]).and_then(|vb| match &vb.value {
             Value::ObjectId(oid) => Some(oid.clone()),
             _ => None,
@@ -170,4 +190,61 @@ fn text(value: &Value) -> Option<String> {
     };
     let text = String::from_utf8_lossy(bytes).trim().to_owned();
     (!text.is_empty()).then_some(text)
+}
+
+/// Probe one address with each credential in turn, stopping at the first that answers.
+///
+/// # Why a silent address is retried and not skipped
+///
+/// The obvious optimisation is to try the next credential only after a *refusal*, and it
+/// would miss most of the estate. `SNMPv2c` has no way to say "wrong community": RFC 3416
+/// agents drop a request they cannot authenticate, so a wrong community string is
+/// indistinguishable from an empty address. [`Answer::Refused`] is very nearly an `SNMPv3`
+/// phenomenon — a `usmStats` report — and an installation still running v2c would find
+/// nothing at all under the optimisation.
+///
+/// So every credential is tried against every address that has not answered. That is the
+/// design, and this is its cost:
+///
+/// > **A sweep takes as long as its credential list is long.** One credential over a /16
+/// > is about five and a half minutes; four is twenty-two.
+///
+/// Which is why [`MAX_CREDENTIALS`] exists, why the list is ordered most-likely-first,
+/// and why the job form shows the multiplication rather than hiding it.
+///
+/// Returns the answer and the index of the credential that produced it — `None` when
+/// nothing answered, so there is nothing to record against the device.
+pub async fn probe_each<T: Transport + ?Sized>(
+    transports: &[&T],
+    address: SocketAddr,
+) -> (Answer, Option<usize>) {
+    let mut refused_by_any = false;
+
+    for (index, transport) in transports.iter().enumerate() {
+        match probe(*transport, address).await {
+            Answer::Device(mut sighting) => {
+                sighting.credential = Some(index);
+                return (Answer::Device(sighting), Some(index));
+            }
+
+            // An agent is there and this credential is not its. Worth recording even if a
+            // later one works, because it is the difference between "nothing here" and
+            // "something here we cannot talk to".
+            Answer::Refused => refused_by_any = true,
+
+            // Silence. Might be an empty address, might be the wrong community — see
+            // above — so the next credential still gets a turn.
+            Answer::Silent => {}
+
+            // No route, no socket. Another credential travels the same path and will fail
+            // the same way, so trying three more is three more timeouts for nothing.
+            Answer::Failed(why) => return (Answer::Failed(why), None),
+        }
+    }
+
+    if refused_by_any {
+        (Answer::Refused, None)
+    } else {
+        (Answer::Silent, None)
+    }
 }

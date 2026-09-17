@@ -275,3 +275,119 @@ fn the_three_caps_agree_with_each_other() {
          about 330"
     );
 }
+
+/// A transport that answers only to one community string, the way a real agent does.
+///
+/// The important half is the *silence*: `SNMPv2c` has no way to say "wrong community",
+/// so an agent drops what it cannot authenticate. A sweep that treated silence as "no
+/// device here" would find nothing on any estate whose first credential is not the right
+/// one — which is most of them, since the list is ordered by guesswork.
+#[derive(Debug)]
+struct Picky {
+    /// Which transport index the device will actually answer.
+    accepts: usize,
+    me: usize,
+    /// Set when this transport was asked anything at all.
+    asked: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl Transport for Picky {
+    async fn get_bulk(
+        &self,
+        _target: &Target,
+        _after: &Oid,
+        _max: Repetitions,
+    ) -> Result<Vec<VarBind>, TransportError> {
+        Err(TransportError::Timeout)
+    }
+
+    async fn get_scalars(
+        &self,
+        _target: &Target,
+        oids: &[Oid],
+    ) -> Result<Vec<VarBind>, TransportError> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        if self.me != self.accepts {
+            // Silence, not a refusal. This is the whole point.
+            return Err(TransportError::Timeout);
+        }
+        Ok(vec![VarBind {
+            oid: oids[1].clone(),
+            value: Value::Bytes(b"picky-sw".to_vec()),
+        }])
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sweep_tries_every_credential_because_a_wrong_one_is_silent() {
+    // The device answers only the third credential. A loop that gave up on silence would
+    // report an empty network, which is the failure mode that makes an operator believe
+    // discovery does not work.
+    let transports: Vec<Picky> = (0..3)
+        .map(|me| Picky {
+            accepts: 2,
+            me,
+            asked: AtomicUsize::new(0),
+        })
+        .collect();
+    let refs: Vec<&Picky> = transports.iter().collect();
+
+    let findings = uops_discover::run_with(&refs, &sweep_of("10.0.0.0/30"), 161).await;
+
+    assert_eq!(findings.devices.len(), 2, "both hosts in a /30 answered");
+    assert_eq!(
+        findings.devices[0].credential,
+        Some(2),
+        "and the sweep recorded which credential worked, which is what makes the device \
+         pollable afterwards"
+    );
+    // The first two were tried against every address and answered nothing.
+    assert_eq!(transports[0].asked.load(Ordering::SeqCst), 2);
+    assert_eq!(transports[1].asked.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_credential_that_works_stops_the_loop() {
+    // The cost of the loop is why MAX_CREDENTIALS exists, so not paying it when the first
+    // credential answers is the one optimisation available.
+    let transports: Vec<Picky> = (0..3)
+        .map(|me| Picky {
+            accepts: 0,
+            me,
+            asked: AtomicUsize::new(0),
+        })
+        .collect();
+    let refs: Vec<&Picky> = transports.iter().collect();
+
+    let findings = uops_discover::run_with(&refs, &sweep_of("10.0.0.0/30"), 161).await;
+
+    assert_eq!(findings.devices.len(), 2);
+    assert_eq!(findings.devices[0].credential, Some(0));
+    assert_eq!(
+        transports[2].asked.load(Ordering::SeqCst),
+        0,
+        "the third credential was never needed and never sent"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_rate_cap_counts_probes_rather_than_addresses() {
+    // Four credentials over a /24 is a thousand packets, and the customer's network sees
+    // a thousand packets. Pacing by address would quietly send four times what was agreed
+    // with them — which is exactly the promise the rate cap exists to keep.
+    let transport = Arc::new(Counting::default());
+    let refs: Vec<&Counting> = vec![transport.as_ref(); 3];
+
+    let started = tokio::time::Instant::now();
+    uops_discover::run_with(&refs, &sweep_of("10.0.0.0/26"), 161).await;
+    let elapsed = started.elapsed();
+
+    // 62 hosts × 3 credentials, none of which answer.
+    assert_eq!(transport.total.load(Ordering::SeqCst), 186);
+    let floor = Duration::from_secs(1) / PROBES_PER_SECOND * 185;
+    assert!(
+        elapsed >= floor,
+        "186 probes took {elapsed:?}, faster than {PROBES_PER_SECOND}/s allows ({floor:?})"
+    );
+}

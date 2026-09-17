@@ -72,7 +72,7 @@ impl PgStore {
         scope: &TenantScope,
         seen_from: ResourceId,
         neighbours: &[Neighbour],
-        context: SweepContext,
+        context: SweepContext<'_>,
     ) -> uops_core::Result<NeighbourOutcome> {
         let mut outcome = NeighbourOutcome::default();
 

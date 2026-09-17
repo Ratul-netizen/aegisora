@@ -480,6 +480,17 @@ impl PgStore {
         // expanding the ranges -- this is a yes-or-no question, not a plan.
         Sweep::check(&new.ranges).map_err(|e| CoreError::Invalid(e.to_string()))?;
 
+        if new.credential_refs.len() > uops_discover::MAX_CREDENTIALS {
+            // The schema says this too. Said here as a sentence, because the cost is not
+            // obvious: every credential is tried against every address that has not
+            // answered -- a wrong SNMPv2c community is silence, not a refusal -- so the
+            // list's length multiplies the sweep's duration.
+            return Err(CoreError::Invalid(format!(
+                "a discovery job may name at most {} credentials — every one of them is                  tried against every address that does not answer, so a longer list is a                  longer sweep rather than a better one. Split this into two jobs.",
+                uops_discover::MAX_CREDENTIALS
+            )));
+        }
+
         if new.credential_refs.is_empty() {
             // The schema says this too. Said here as a sentence, because "violates
             // discovery_job_has_a_credential" does not tell an operator that a job with
