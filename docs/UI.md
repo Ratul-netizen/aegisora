@@ -387,6 +387,12 @@ forms. It looks impressive for a day and hurts readability forever.
 
 ## 13. Before any of this is written
 
+> **Part 1 of that specification now exists: [`UI-SPEC.md`](./UI-SPEC.md)** — tokens,
+> colour semantics, typography, density and grid, the widget contract, live update,
+> animation, accessibility, and the Operations Overview. It covers what the first screen
+> needs and names what it defers. The rest of the list below is written when each piece is
+> the next thing built.
+
 A **UI/UX specification** covering: navigation · design system · colour and token system
 · typography · default dashboard · dashboard builder · widget specification · 2D topology
 · 3D topology · resource detail · investigation workspace · logs · metrics ·

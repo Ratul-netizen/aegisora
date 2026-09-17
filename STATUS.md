@@ -94,6 +94,8 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · dashboards** | ✅ five panel types, panels from saved searches, twelve-column grid |
 | **M4 · 20 panels over 30 days, p95 < 3 s** | ✅ **measured — 0.42 s**, answered by `metrics_5m`, [`docs/benchmarks/dashboard-load.md`](./docs/benchmarks/dashboard-load.md) |
 | **M4 — all 6 acceptance criteria met** | ✅ |
+| **UI/UX specification, part 1** | ✅ [`docs/UI-SPEC.md`](./docs/UI-SPEC.md) — the gate `UI.md` §13 sets, for the foundation and the first screen |
+| UI · the Operations Overview | ⬜ specified, not built |
 
 ## Resume in three commands
 
