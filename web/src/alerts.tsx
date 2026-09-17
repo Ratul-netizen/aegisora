@@ -487,7 +487,10 @@ export function ChannelsPage() {
   const { tenant } = useShell();
   const client = useQueryClient();
   const [name, setName] = useState("");
+  const [kind, setKind] = useState<"webhook" | "email">("webhook");
   const [url, setUrl] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
 
   const channels = useQuery({
@@ -513,12 +516,27 @@ export function ChannelsPage() {
     mutationFn: () =>
       createChannel(tenant.tenant_id, {
         name: name.trim(),
-        kind: "webhook",
-        config: { url: url.trim() },
+        kind,
+        // A webhook is a url; a mail channel is a relay, a sender and recipients. The
+        // server validates both with the transport's own parser, so a channel that could
+        // never deliver is refused here rather than at 4am.
+        config:
+          kind === "webhook"
+            ? { url: url.trim() }
+            : {
+                host: url.trim(),
+                from: from.trim(),
+                to: to
+                  .split(",")
+                  .map((address) => address.trim())
+                  .filter(Boolean),
+              },
       }),
     onSuccess: async () => {
       setName("");
       setUrl("");
+      setFrom("");
+      setTo("");
       await refresh();
     },
     onError: (error) => setProblem(message(error)),
@@ -556,27 +574,72 @@ export function ChannelsPage() {
               onChange={(e) => setName(e.target.value)}
             />
           </label>
+          <label>
+            Kind
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as "webhook" | "email")}
+            >
+              <option value="webhook">Webhook</option>
+              <option value="email">Email</option>
+            </select>
+          </label>
+
           <label className="grow">
-            URL
+            {kind === "webhook" ? "URL" : "Relay host"}
             <input
               type="text"
               value={url}
-              placeholder="http://hooks.internal/alerts"
+              placeholder={
+                kind === "webhook" ? "http://hooks.internal/alerts" : "smtp.internal"
+              }
               onChange={(e) => setUrl(e.target.value)}
             />
           </label>
+
+          {kind === "email" && (
+            <>
+              <label>
+                From
+                <input
+                  type="text"
+                  value={from}
+                  placeholder="veyronis@example.com"
+                  onChange={(e) => setFrom(e.target.value)}
+                />
+              </label>
+              <label className="grow">
+                To
+                <input
+                  type="text"
+                  value={to}
+                  placeholder="ops@example.com, oncall@example.com"
+                  onChange={(e) => setTo(e.target.value)}
+                />
+              </label>
+            </>
+          )}
+
           <button
             type="submit"
             className="primary"
-            disabled={name.trim() === "" || url.trim() === "" || create.isPending}
+            disabled={
+              name.trim() === "" ||
+              url.trim() === "" ||
+              (kind === "email" && (from.trim() === "" || to.trim() === "")) ||
+              create.isPending
+            }
           >
-            {create.isPending ? "Adding…" : "Add webhook"}
+            {create.isPending ? "Adding…" : "Add channel"}
           </button>
-          {/* The server refuses https with a sentence explaining the proxy; this says it
-              before somebody types one. */}
+
+          {/* Both limitations come from the same decision, and both are refused by the
+              server with a sentence. Saying them here is what stops somebody typing one
+              in the first place. */}
           <span className="dim">
-            http:// only — this server terminates TLS at a proxy, so point an https
-            endpoint at that.
+            {kind === "webhook"
+              ? "http:// only — this server terminates TLS at a proxy, so point an https endpoint at that."
+              : "A relay on your network that accepts mail from this host. Authenticated submission needs TLS, which this server does not carry — put a submission proxy in front of a provider that requires it."}
           </span>
           {problem && (
             <span className="problem-inline" role="alert">
@@ -604,7 +667,9 @@ export function ChannelsPage() {
               <tr key={channel.id}>
                 <td>{channel.name}</td>
                 <td>{channel.kind}</td>
-                <td className="mono">{String(channel.config["url"] ?? "—")}</td>
+                <td className="mono">
+                  {String(channel.config["url"] ?? channel.config["host"] ?? "—")}
+                </td>
                 <td>{channel.max_per_minute}/min</td>
                 <td>
                   {mayWrite(tenant.role) && (

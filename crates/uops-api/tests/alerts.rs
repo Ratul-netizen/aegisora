@@ -521,3 +521,60 @@ async fn a_rule_that_could_never_produce_a_number_is_refused_where_somebody_can_
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
 }
+
+#[tokio::test]
+async fn an_email_channel_is_accepted_and_a_useless_one_is_refused() {
+    // The transport's own parser runs at the API, so a channel that could never deliver is
+    // refused while somebody is still looking at the form.
+    let f = fixture("mail", Role::Operator).await;
+
+    let (status, created) = f
+        .call(f.send(
+            "POST",
+            "/api/v1/channels",
+            &serde_json::json!({
+                "name": "ops mail",
+                "kind": "email",
+                "config": {
+                    "host": "smtp.internal",
+                    "from": "veyronis@example.com",
+                    "to": ["ops@example.com"]
+                }
+            }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    // A relay and nobody to tell is a channel that does nothing.
+    let (status, problem) = f
+        .call(f.send(
+            "POST",
+            "/api/v1/channels",
+            &serde_json::json!({
+                "name": "nobody",
+                "kind": "email",
+                "config": { "host": "smtp.internal", "from": "veyronis@example.com" }
+            }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+
+    // And the header injection that a mail transport has to refuse.
+    let (status, problem) = f
+        .call(f.send(
+            "POST",
+            "/api/v1/channels",
+            &serde_json::json!({
+                "name": "injected",
+                "kind": "email",
+                "config": {
+                    "host": "smtp.internal",
+                    "from": "veyronis@example.com",
+                    "to": ["ops@example.com
+            Bcc: attacker@example.com"]
+                }
+            }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+}

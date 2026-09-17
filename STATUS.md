@@ -89,7 +89,7 @@ Counts are tests that actually run, per crate, from `cargo test --all-targets`.
 | **M4 · notifications — webhooks** | ✅ `uops-notify`, delivered from the engine, verified against a real socket |
 | **M4 · the rate limit stops a storm** | ✅ SPEC's 5 000-resource rule sends 12 and records 4 988 refusals |
 | **M4 · a per-tenant daily budget** | ✅ the backstop behind the rate — a slow leak, not a storm |
-| M4 · notifications — SMTP | ⬜ needs a plain-TCP relay design; this workspace carries no TLS |
+| **M4 · notifications — SMTP** | ✅ a smarthost on the deployment's own network. **Authenticated submission is refused by design** — `AUTH PLAIN` without TLS sends a password in clear; put a submission proxy in front of a provider that needs one |
 | **M4 · alerts in the web app** | ✅ the alert list with acknowledgement, rules from a saved search, channels and the delivery log |
 | **M4 · dashboards** | ✅ five panel types, panels from saved searches, twelve-column grid |
 | **M4 · 20 panels over 30 days, p95 < 3 s** | ✅ **measured — 0.42 s**, answered by `metrics_5m`, [`docs/benchmarks/dashboard-load.md`](./docs/benchmarks/dashboard-load.md) |
@@ -106,7 +106,7 @@ bash scripts/db.sh migrate && bash scripts/ch.sh apply
 # about eighty tests without it — and they fail with instructions rather than passing.
 export DATABASE_URL=postgres://uops:uops@localhost:5432/uops
 export CLICKHOUSE_USER=uops CLICKHOUSE_PASSWORD=uops
-cargo test --workspace --all-targets && cargo test --workspace --doc   # 948 tests, green
+cargo test --workspace --all-targets && cargo test --workspace --doc   # 962 tests, green
 cd web && npm ci && npm test                                            # 59 more
 cargo clippy --workspace --all-targets -- -D warnings
 ```

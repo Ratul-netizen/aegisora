@@ -15,19 +15,26 @@
 //! the deliveries, because *"why did nobody get paged"* is a question somebody asks at a
 //! bad moment and an unanswerable one is worse than the outage.
 //!
-//! # Only webhooks, for now
+//! # Two transports, and what the no-TLS decision means for each
 //!
-//! Email is the other half of SPEC's v0.1 and is not here yet. It is not a small
-//! addition: this workspace carries no TLS by deliberate decision — see the root
-//! `Cargo.toml` — so SMTP submission has to be a plain connection to a relay on the
-//! customer's own network, with header injection handled by hand. That is a design to
-//! write down rather than to slip in beside a webhook, and a webhook is what an
-//! on-premise deployment already has an endpoint for.
+//! This workspace carries no TLS by deliberate decision — see the root `Cargo.toml`. For
+//! a **webhook** that means an `https://` endpoint goes through the egress proxy the
+//! deployment already runs, and an https URL is refused when the channel is written.
+//!
+//! For **email** it means something stronger: authenticated submission is not supported at
+//! all, because `AUTH PLAIN` over an unencrypted connection sends a password in clear and
+//! no amount of documentation makes that safe. What is supported is the shape an
+//! on-premise mail setup already has — a **smarthost** that accepts mail from the hosts on
+//! its own network. A deployment that must reach an authenticated provider puts a
+//! submission proxy in front, which is the same answer syslog-over-TLS got. See
+//! [`smtp`].
 
 pub mod notification;
 pub mod notifier;
+pub mod smtp;
 pub mod webhook;
 
 pub use notification::Notification;
 pub use notifier::{Delivered, Notifier};
+pub use smtp::Smtp;
 pub use webhook::Webhook;

@@ -16,6 +16,7 @@ use uops_core::{ResourceId, TenantScope};
 use uops_store_pg::{Attempt, Outcome, PgStore};
 
 use crate::notification::Notification;
+use crate::smtp::Smtp;
 use crate::webhook::Webhook;
 
 /// What happened to one notification on one channel.
@@ -99,10 +100,10 @@ impl Notifier {
                     Ok(hook) => hook.deliver(notification).await,
                     Err(e) => Err(e),
                 },
-                // Declared in the schema, not built yet. Said plainly rather than
-                // swallowed: a channel that accepts alerts and delivers none is the worst
-                // thing this subsystem can be.
-                "email" => Err("email channels are not implemented yet".to_owned()),
+                "email" => match Smtp::from_config(&channel.config) {
+                    Ok(mail) => mail.deliver(notification).await,
+                    Err(e) => Err(e),
+                },
                 other => Err(format!("unknown channel kind {other}")),
             };
 

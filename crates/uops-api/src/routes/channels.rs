@@ -20,7 +20,7 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uops_core::Role;
-use uops_notify::Webhook;
+use uops_notify::{Smtp, Webhook};
 use uops_store_pg::NewChannel;
 
 use crate::csrf::CsrfChecked;
@@ -102,15 +102,15 @@ fn validate(request: &ChannelRequest) -> Result<(), ApiError> {
         "webhook" => Webhook::from_config(&request.config)
             .map(|_| ())
             .map_err(ApiError::BadRequest),
-        // In the schema and not built yet. Accepting one would be accepting alerts that
-        // are never delivered; saying so is the honest answer until it is.
-        "email" => Err(ApiError::BadRequest(
-            "email channels are not implemented yet — a webhook is what this build \
-             delivers to"
-                .to_owned(),
-        )),
+        // A smarthost on the deployment's own network. Authenticated submission is not
+        // supported and will not be — `AUTH PLAIN` over an unencrypted connection sends a
+        // password in clear, and this workspace carries no TLS by decision. See
+        // `uops_notify::smtp`.
+        "email" => Smtp::from_config(&request.config)
+            .map(|_| ())
+            .map_err(ApiError::BadRequest),
         other => Err(ApiError::BadRequest(format!(
-            "unknown channel kind {other}: this build has webhook"
+            "unknown channel kind {other}: this build has webhook and email"
         ))),
     }
 }
